@@ -5,43 +5,49 @@ dotenv.config();
 
 export const handleCashfreeWebhook = async (req, res) => {
   try {
-    const secret = process.env.CASHFREE_WEBHOOK_SECRET; // use .env
+    const secret = process.env.CASHFREE_WEBHOOK_SECRET;
     const receivedSignature = req.headers['x-webhook-signature'];
-    const payload = JSON.parse(req.body.toString());
-    console.log('Received Webhook:', payload);
 
-    // 🔐 Step 1: Generate signature from payload
+    // 🔸 Use raw body for signature verification
+    const rawBody = req.body; // This is a Buffer (because of express.raw middleware)
+
+    // 🔐 Step 1: Generate HMAC-SHA256 signature
     const generatedSignature = crypto
       .createHmac('sha256', secret)
-      .update(payload)
+      .update(rawBody)
       .digest('base64');
+
     console.log('Generated Signature:', generatedSignature);
     console.log('Received Signature:', receivedSignature);
+
     // 🔎 Step 2: Compare signatures
     if (receivedSignature !== generatedSignature) {
       console.log('⚠️ Webhook signature mismatch');
       return res.status(400).send('Invalid signature');
     }
 
-    // ✅ Step 3: Signature verified. Process data
-    const eventData = req.body;
+    // ✅ Step 3: Parse payload safely
+    const payload = JSON.parse(rawBody.toString());
+    console.log('Received Webhook:', payload);
 
-    if (eventData.event === 'PAYMENT_SUCCESS_WEBHOOK') {
-      const orderId = eventData.data.order.order_id;
-      const paymentId = eventData.data.payment.payment_id;
+    // 📦 Step 4: Handle event
+    if (payload.event === 'PAYMENT_SUCCESS_WEBHOOK') {
+      const orderId = payload.data.order.order_id;
+      const paymentId = payload.data.payment.payment_id;
+      const amount = payload.data.order.order_amount;
+      const currency = payload.data.order.order_currency;
 
-      // 👉 Update DB (mark as paid, send mail, etc.)
       console.log(`✅ Payment success for Order ${orderId}`);
-      await PaymentDetails.create({
 
+      await PaymentDetails.create({
         orderId,
         paymentId,
         status: 'PAID',
-        amount: eventData.data.order.amount,
-        currency: eventData.data.order.currency,
+        amount,
+        currency,
       });
 
-      // await Order.updateOne({ orderId }, { status: 'PAID', paymentId });
+      // Optionally: send confirmation email, update order table, etc.
     }
 
     res.status(200).send('Webhook received');
