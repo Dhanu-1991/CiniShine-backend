@@ -7,8 +7,9 @@ export const handleCashfreeWebhook = async (req, res) => {
   try {
     const secret = process.env.CASHFREE_WEBHOOK_SECRET; // use .env
     const receivedSignature = req.headers['x-webhook-signature'];
-    const payload = req.body; // Must match raw body
-    
+    const payload = JSON.parse(req.body.toString());
+    console.log('Received Webhook:', payload);
+
     // 🔐 Step 1: Generate signature from payload
     const generatedSignature = crypto
       .createHmac('sha256', secret)

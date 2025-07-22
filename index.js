@@ -20,9 +20,16 @@ app.use(cors(corsOptions));
 
 // Allow all origins temporarily
 app.use(cors({ origin: true, credentials: true }));
+app.use((req, res, next) => {
+  if (req.originalUrl === "/api/v1/payments/payment-webhook") {
+    next(); // skip bodyParser.json for this route
+  } else {
+    express.json()(req, res, next); // apply only for other routes
+  }
+});
 
 // Middlewares
-app.use(express.json());
+// app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
