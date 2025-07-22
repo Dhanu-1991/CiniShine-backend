@@ -15,7 +15,7 @@ export const handleCashfreeWebhook = async (req, res) => {
 
     const generatedSignature = crypto
       .createHmac('sha256', secret)
-      .update(rawBodyString)
+      .update(rawBody)
       .digest('base64');
 
     console.log('Generated Signature:', generatedSignature);
