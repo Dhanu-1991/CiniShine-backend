@@ -7,14 +7,15 @@ export const handleCashfreeWebhook = async (req, res) => {
   try {
     const secret = process.env.CASHFREE_WEBHOOK_SECRET; // use .env
     const receivedSignature = req.headers['x-webhook-signature'];
-    const payload = req.body.toString(); // Must match raw body
-
+    const payload = req.body; // Must match raw body
+    
     // 🔐 Step 1: Generate signature from payload
     const generatedSignature = crypto
       .createHmac('sha256', secret)
       .update(payload)
       .digest('base64');
-
+    console.log('Generated Signature:', generatedSignature);
+    console.log('Received Signature:', receivedSignature);
     // 🔎 Step 2: Compare signatures
     if (receivedSignature !== generatedSignature) {
       console.log('⚠️ Webhook signature mismatch');

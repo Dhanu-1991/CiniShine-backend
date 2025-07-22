@@ -5,6 +5,6 @@ import {handleCashfreeWebhook} from "../../controllers/payment-gateway-controlle
 const router = express.Router();
 router.post("/payment", payment);
 router.post("/payment-verify", paymentVerify);
-router.post("/payment-webhook", express.raw({ type: 'application/json' }), handleCashfreeWebhook); // ✅ proper webhook handler
+// router.post("/payment-webhook", express.raw({ type: 'application/json' }), handleCashfreeWebhook); // ✅ proper webhook handler
 
 export default router;
