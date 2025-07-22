@@ -18,6 +18,8 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+// Allow all origins temporarily
+app.use(cors({ origin: true, credentials: true }));
 
 // Middlewares
 app.use(express.json());
