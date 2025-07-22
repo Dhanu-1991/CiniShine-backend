@@ -12,7 +12,7 @@ const cashfree = new Cashfree(
 
 const paymentVerify = async (req, res) => {
   const { orderId } = req.body;
-
+  console.log("Payment verification called with orderId:", orderId);
   try {
     const response = await cashfree.PGOrderFetchPayments(orderId);
     console.log("Verification result:", response.data);
