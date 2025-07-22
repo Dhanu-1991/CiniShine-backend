@@ -1,7 +1,7 @@
 // backend/controllers/payment-gateway-controllers/payment-verify.js
 import dotenv from "dotenv";
 dotenv.config();
-import PaymentDetails from "../../models/payement.details.model";
+import PaymentDetails from "../../models/payment.details.model";
 
 const paymentVerify = async (req, res) => {
   const { orderId } = req.body;

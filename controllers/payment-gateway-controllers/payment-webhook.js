@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import PaymentDetails from '../../models/payement.details.model';
+import PaymentDetails from '../../models/payment.details.model';
 dotenv.config();
 
 export const handleCashfreeWebhook = async (req, res) => {
@@ -31,7 +31,7 @@ export const handleCashfreeWebhook = async (req, res) => {
       // 👉 Update DB (mark as paid, send mail, etc.)
       console.log(`✅ Payment success for Order ${orderId}`);
       await PaymentDetails.create({
-        
+
         orderId,
         paymentId,
         status: 'PAID',
