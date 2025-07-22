@@ -12,6 +12,7 @@ export const handleCashfreeWebhook = async (req, res) => {
     // Use raw body directly for signature verification
     const rawBody = req.body; // Buffer
     const rawBodyString = rawBody.toString('utf8');
+    console.log("✅ Is raw body a Buffer:", Buffer.isBuffer(req.body));
 
     const generatedSignature = crypto
       .createHmac('sha256', secret)
