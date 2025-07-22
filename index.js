@@ -9,7 +9,6 @@ import authRouter from "./routes/authRoutes/authRouter.js";
 import errorHandlingMiddleware from "./middlewares/errorHandlingMiddleware.js";
 import router from "./routes/paymentRoutes/cashfree.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
-import { OriginationUrlInstance } from "twilio/lib/rest/trunking/v1/trunk/originationUrl.js";
 const app = express();
 
 const corsOptions = {
@@ -21,7 +20,9 @@ app.use(cors(corsOptions));
 // Allow all origins temporarily
 app.use(cors({ origin: true, credentials: true }));
 app.use("/api/v1/payments/payment-webhook", express.raw({ type: 'application/json' }), handleCashfreeWebhook);
+app.use(express.json());
 // Routes
+
 app.use("/api/v1/payments", router);
 app.use("/api/v1/auth/authRoutes", authRouter);
 
