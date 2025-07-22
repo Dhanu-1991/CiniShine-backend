@@ -11,12 +11,12 @@ import router from "./routes/paymentRoutes/cashfree.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
 const app = express();
 
-// const corsOptions = {
-//   origin: "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
-//   credentials: true,
-// };
+const corsOptions = {
+  origin: "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
+  credentials: true,
+};
 
-// app.use(cors(corsOptions));
+app.use(cors(corsOptions));
 
 // Allow all origins temporarily
 app.use(cors({ origin: true, credentials: true }));
