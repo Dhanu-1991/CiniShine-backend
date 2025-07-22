@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import PaymentDetails from '../../models/payment.details.model';
+import PaymentDetails from '../../models/payment.details.model.js';
 dotenv.config();
 
 export const handleCashfreeWebhook = async (req, res) => {
