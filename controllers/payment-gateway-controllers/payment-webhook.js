@@ -6,28 +6,34 @@ dotenv.config();
 
 export const handleCashfreeWebhook = async (req, res) => {
   try {
-    // --- 1. Get Secret and Headers ---
     const secret = process.env.CASHFREE_WEBHOOK_SECRET;
     const receivedSignature = req.headers['x-webhook-signature'];
     const timestamp = req.headers['x-webhook-timestamp'];
 
     if (!receivedSignature || !timestamp) {
-      console.log('⚠️ Webhook failed: Missing signature or timestamp headers.');
       return res.status(400).send('Invalid headers');
     }
-
-    // --- 2. Generate Expected Signature ---
-    const rawBody = req.body;
     
-    // ✅ CRITICAL FIX: The signature string MUST join the timestamp and body with a period.
-    const message = timestamp + '.' + rawBody.toString('utf8');
+    // The rawBody Buffer from express.raw()
+    const rawBodyBuffer = req.body;
+
+    // --- ✅ THE FINAL FIX ---
+    // 1. First, parse the buffer that the server receives.
+    const payloadObject = JSON.parse(rawBodyBuffer.toString('utf8'));
+
+    // 2. Then, re-stringify it with standard formatting (2-space indentation).
+    // This mimics what Render is doing and creates the *exact* string needed for the signature.
+    const alteredBodyString = JSON.stringify(payloadObject, null, 2);
+    
+    // 3. Create the message using this newly created string.
+    const message = timestamp + '.' + alteredBodyString;
 
     const generatedSignature = crypto
       .createHmac('sha256', secret)
       .update(message)
       .digest('base64');
-
-    // --- 3. Compare Signatures ---
+    
+    // --- Verification ---
     const isSignatureValid = crypto.timingSafeEqual(
       Buffer.from(generatedSignature, 'base64'),
       Buffer.from(receivedSignature, 'base64')
@@ -42,29 +48,19 @@ export const handleCashfreeWebhook = async (req, res) => {
 
     console.log('✅ Webhook signature verified successfully!');
 
-    // --- 4. Process the Payload ---
-    const payload = JSON.parse(rawBody.toString('utf8'));
+    // Since we already parsed the payload, we can use 'payloadObject' directly.
+    const payload = payloadObject;
 
     if (payload.type === 'PAYMENT_SUCCESS_WEBHOOK') {
       const { order, payment } = payload.data;
-      const orderId = order.order_id;
-      const paymentId = payment.cf_payment_id;
-
-      const existingPayment = await PaymentDetails.findOne({ orderId });
-      if (existingPayment) {
-        console.log(`Order ${orderId} already processed. Skipping.`);
-        return res.status(200).send('Webhook already processed');
-      }
-
       await PaymentDetails.create({
-        orderId,
-        paymentId,
+        orderId: order.order_id,
+        paymentId: payment.cf_payment_id,
         status: 'PAID',
         amount: order.order_amount,
         currency: order.order_currency,
       });
-
-      console.log(`✅ Payment success for Order ${orderId} saved.`);
+      console.log(`✅ Payment success for Order ${order.order_id} saved.`);
     }
 
     res.status(200).send('Webhook received successfully');
