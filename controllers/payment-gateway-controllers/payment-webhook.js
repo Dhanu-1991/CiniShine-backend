@@ -1,64 +1,62 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import PaymentDetails from '../../models/payment.details.model.js';
+// We are removing the database model for this test to ensure it has no side effects.
+// import PaymentDetails from '../../models/payment.details.model.js'; 
 
 dotenv.config();
 
 export const handleCashfreeWebhook = async (req, res) => {
+  console.log('--- STARTING WEBHOOK DIAGNOSTIC ---');
   try {
     const secret = process.env.CASHFREE_WEBHOOK_SECRET;
     const receivedSignature = req.headers['x-webhook-signature'];
     const timestamp = req.headers['x-webhook-timestamp'];
 
-    if (!receivedSignature || !timestamp) {
-      return res.status(400).send('Invalid headers');
+    if (!secret || !receivedSignature || !timestamp) {
+      console.log('❌ Critical Error: Missing secret key or webhook headers.');
+      return res.status(400).send('Invalid headers or missing secret');
+    }
+    
+    // Use the rawBody from our custom middleware in index.js
+    const rawBodyBuffer = req.rawBody;
+
+    if (!rawBodyBuffer || rawBodyBuffer.length === 0) {
+      console.log('❌ Critical Error: Raw body is empty. The getRawBody middleware might have failed.');
+      return res.status(400).send('Empty request body');
     }
 
-    // Use the rawBody from our custom middleware. It's a Buffer.
-    // We convert it to a string for the signature calculation.
-    const rawBodyString = req.rawBody.toString('utf8');
-
-    // Create the message with the pristine, unaltered body string.
+    const rawBodyString = rawBodyBuffer.toString('utf8');
     const message = timestamp + '.' + rawBodyString;
 
     const generatedSignature = crypto
       .createHmac('sha256', secret)
       .update(message)
       .digest('base64');
+
+    // --- DETAILED LOGGING ---
+    console.log(`\n[1] SECRET KEY (first 5 chars): ${secret.substring(0, 5)}...`);
+    console.log(`[2] TIMESTAMP: ${timestamp}`);
+    console.log(`[3] RECEIVED SIGNATURE: ${receivedSignature}`);
+    console.log(`[4] GENERATED SIGNATURE: ${generatedSignature}`);
+    console.log(`[5] BODY BUFFER LENGTH: ${rawBodyBuffer.length} bytes`);
     
-    // Perform the final, correct comparison
-    const isSignatureValid = crypto.timingSafeEqual(
-      Buffer.from(generatedSignature, 'base64'),
-      Buffer.from(receivedSignature, 'base64')
-    );
+    // Log the body as a HEX string to see all invisible characters
+    console.log(`[6] BODY AS HEX STRING: \n${rawBodyBuffer.toString('hex')}`);
     
-    if (!isSignatureValid) {
-      console.log('⚠️ Webhook signature mismatch.');
-      console.log('Generated:', generatedSignature);
-      console.log('Received: ', receivedSignature);
-      return res.status(400).send('Invalid signature');
+    console.log('\n--- ENDING WEBHOOK DIAGNOSTIC ---');
+
+
+    if (generatedSignature !== receivedSignature) {
+        // We already know it mismatches, just sending a response.
+        return res.status(400).send('Signature mismatch confirmed.');
     }
 
-    console.log('✅ Webhook signature verified successfully!');
-
-    // Parse the trusted raw body to get the JSON object
-    const payload = JSON.parse(rawBodyString);
-
-    if (payload.type === 'PAYMENT_SUCCESS_WEBHOOK') {
-      const { order, payment } = payload.data;
-      await PaymentDetails.create({
-        orderId: order.order_id,
-        paymentId: payment.cf_payment_id,
-        status: 'PAID',
-        amount: order.order_amount,
-        currency: order.order_currency,
-      });
-      console.log(`✅ Payment success for Order ${order.order_id} saved.`);
-    }
-
+    // If it ever succeeds, we log it.
+    console.log('✅ SIGNATURE MATCHED! (This is unexpected)');
     res.status(200).send('Webhook received successfully');
+
   } catch (err) {
-    console.error('❌ Webhook processing error:', err.message);
+    console.error('❌ FATAL ERROR in webhook handler:', err.message);
     res.status(500).send('Server Error');
   }
 };
