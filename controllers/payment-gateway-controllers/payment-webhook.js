@@ -9,9 +9,9 @@ export const handleCashfreeWebhook = async (req, res) => {
     // --- 1. Get Secret and Headers ---
     // Make sure to use the correct Cashfree-specific headers.
     const secret = process.env.CASHFREE_WEBHOOK_SECRET;
-    const receivedSignature = req.headers['x-cf-webhook-signature'];
-    const timestamp = req.headers['x-cf-webhook-timestamp']; // ✅ FIXED: Get the timestamp
-
+    // ✅ FIXED code
+     const receivedSignature = req.headers['x-webhook-signature'];
+     const timestamp = req.headers['x-webhook-timestamp'];
     if (!receivedSignature || !timestamp) {
       console.log('⚠️ Webhook failed: Missing signature or timestamp headers.');
       return res.status(400).send('Invalid headers');
