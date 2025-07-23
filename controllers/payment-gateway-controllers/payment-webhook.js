@@ -13,27 +13,20 @@ export const handleCashfreeWebhook = async (req, res) => {
     if (!receivedSignature || !timestamp) {
       return res.status(400).send('Invalid headers');
     }
-    
-    // The rawBody Buffer from express.raw()
-    const rawBodyBuffer = req.body;
 
-    // --- ✅ THE FINAL FIX ---
-    // 1. First, parse the buffer that the server receives.
-    const payloadObject = JSON.parse(rawBodyBuffer.toString('utf8'));
+    // Use the rawBody from our custom middleware. It's a Buffer.
+    // We convert it to a string for the signature calculation.
+    const rawBodyString = req.rawBody.toString('utf8');
 
-    // 2. Then, re-stringify it with standard formatting (2-space indentation).
-    // This mimics what Render is doing and creates the *exact* string needed for the signature.
-    const alteredBodyString = JSON.stringify(payloadObject, null, 2);
-    
-    // 3. Create the message using this newly created string.
-    const message = timestamp + '.' + alteredBodyString;
+    // Create the message with the pristine, unaltered body string.
+    const message = timestamp + '.' + rawBodyString;
 
     const generatedSignature = crypto
       .createHmac('sha256', secret)
       .update(message)
       .digest('base64');
     
-    // --- Verification ---
+    // Perform the final, correct comparison
     const isSignatureValid = crypto.timingSafeEqual(
       Buffer.from(generatedSignature, 'base64'),
       Buffer.from(receivedSignature, 'base64')
@@ -48,8 +41,8 @@ export const handleCashfreeWebhook = async (req, res) => {
 
     console.log('✅ Webhook signature verified successfully!');
 
-    // Since we already parsed the payload, we can use 'payloadObject' directly.
-    const payload = payloadObject;
+    // Parse the trusted raw body to get the JSON object
+    const payload = JSON.parse(rawBodyString);
 
     if (payload.type === 'PAYMENT_SUCCESS_WEBHOOK') {
       const { order, payment } = payload.data;

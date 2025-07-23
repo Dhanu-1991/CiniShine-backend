@@ -18,18 +18,30 @@ const corsOptions = {
   credentials: true,
 };
 
-// ✅ CORS setup
 app.use(cors(corsOptions));
 
-// ✅ Webhook route with raw body BEFORE any json middleware
+// ✅ Step 1: Define a middleware to get the TRUE raw body
+const getRawBody = (req, res, next) => {
+  const chunks = [];
+  req.on('data', (chunk) => {
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    // Attach the raw body buffer to the request object
+    req.rawBody = Buffer.concat(chunks);
+    next();
+  });
+};
+
+// ✅ Step 2: Use the custom middleware ONLY for the webhook route
 app.post(
   "/api/v1/payments/payment-webhook",
-  express.raw({ type: "application/json" }),
+  getRawBody, // Use our custom raw body capturer
   handleCashfreeWebhook
 );
 
-// ✅ JSON/body middleware AFTER webhook
-app.use(express.json());
+// ✅ Step 3: All other middlewares come AFTER the webhook route
+app.use(express.json()); // For all other routes
 app.use(cookieParser());
 
 // ✅ Other routes
