@@ -1,3 +1,4 @@
+// index.js
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
@@ -13,40 +14,37 @@ import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers
 
 const app = express();
 
-// CORS settings
 const corsOptions = {
   origin: "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
   credentials: true,
 };
 app.use(cors(corsOptions));
 
-// ✅ Custom middleware to capture raw body for webhook signature verification
+// Raw-body capture (for webhook signature)
 const getRawBody = (req, res, next) => {
   const chunks = [];
-  req.on('data', (chunk) => {
-    chunks.push(chunk);
-  });
-  req.on('end', () => {
+  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("end", () => {
     req.rawBody = Buffer.concat(chunks);
     next();
   });
 };
 
-// ✅ Webhook route comes BEFORE express.json()
-app.post("/api/v1/payments/payment-webhook", getRawBody, handleCashfreeWebhook);
+// 1️⃣ Webhook route uses only `getRawBody`
+app.post(
+  "/api/v1/payments/payment-webhook",
+  getRawBody,
+  handleCashfreeWebhook
+);
 
-// Standard middleware (after webhook)
+// 2️⃣ All other routes get normal JSON/body parsing
 app.use(express.json());
 app.use(cookieParser());
 
-// Application routes
 app.use("/api/v1/payments", router);
 app.use("/api/v1/auth/authRoutes", authRouter);
-
-// Global error handler
 app.use(errorHandlingMiddleware);
 
-// MongoDB connection and server start
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
