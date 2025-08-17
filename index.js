@@ -11,11 +11,16 @@ import authRouter from "./routes/authRoutes/authRouter.js";
 import errorHandlingMiddleware from "./middlewares/errorHandlingMiddleware.js";
 import router from "./routes/paymentRoutes/cashfree.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
+import contactRouter from "./routes/contactRoutes/contactRouter.js";
 
 const app = express();
 
 const corsOptions = {
-  origin: "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
+  origin: [
+    "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
+    "http://localhost:5173", // Add your local development URL here
+    "http://127.0.0.1:5173", // Add 127.0.0.1 as a common localhost address
+  ],
   credentials: true,
 };
 app.use(cors(corsOptions));
@@ -41,6 +46,7 @@ app.post(
 app.use(express.json());
 app.use(cookieParser());
 
+app.use("/api/v1/contact", contactRouter);
 app.use("/api/v1/payments", router);
 app.use("/api/v1/auth/authRoutes", authRouter);
 app.use(errorHandlingMiddleware);
