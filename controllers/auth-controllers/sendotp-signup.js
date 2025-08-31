@@ -26,10 +26,10 @@ const sendOtp_signup = async (req, res) => {
       return res.status(400).json({ message: 'Invalid email address' });
     }
   }
-  // Generate OTP
+  // Generates a random 6-digit OTP
+const otp = Math.floor(100000 + Math.random() * 900000).toString();
+saveOtp(contact, otp);
 
-  const otp = Math.floor(1000 + Math.random() * 9000).toString();
-  saveOtp(contact, otp);
 
   try {
     // Send OTP
