@@ -12,6 +12,7 @@ import errorHandlingMiddleware from "./middlewares/errorHandlingMiddleware.js";
 import router from "./routes/paymentRoutes/cashfree.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
 import contactRouter from "./routes/contactRoutes/contactRouter.js";
+import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
 
 const app = express();
 
@@ -49,6 +50,7 @@ app.use(cookieParser());
 app.use("/api/v1/contact", contactRouter);
 app.use("/api/v1/payments", router);
 app.use("/api/v1/auth/authRoutes", authRouter);
+app.use("/api/data/selected-roles", selectedRolesRouter);
 app.use(errorHandlingMiddleware);
 
 mongoose
