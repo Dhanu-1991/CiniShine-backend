@@ -20,7 +20,8 @@ const corsOptions = {
   origin: [
     "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
     "http://localhost:5173", // Add your local development URL here
-    "http://127.0.0.1:5173", // Add 127.0.0.1 as a common localhost address
+    "http://127.0.0.1:5173",
+    "https://cini-shine-frontend-liart.vercel.app" // Add 127.0.0.1 as a common localhost address
   ],
   credentials: true,
 };
