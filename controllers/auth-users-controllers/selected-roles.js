@@ -56,13 +56,25 @@ export const selectedRoles = async (req, res) => {
       achievementsPDF: achievementsPdfUrl,
     });
 
-    await application.save();
-    console.log("✅ Application saved:", application);
+    const savedApplication = await application.save();
+
+    // --- Update user with application id, roles, and fullName ---
+    await User.findByIdAndUpdate(
+      tokenResponse.userId,
+      {
+        selectedRolesId: savedApplication._id,
+        roles: savedApplication.roles,
+        fullName: personalInfo.fullName, // <-- update fullName from application
+      },
+      { new: true }
+    );
+
+    console.log("✅ Application saved:", savedApplication);
 
     return res.status(200).json({
       success: true,
       message: "Application submitted successfully",
-      application,
+      application: savedApplication,
     });
   } catch (error) {
     console.error("❌ Error submitting application:", error);

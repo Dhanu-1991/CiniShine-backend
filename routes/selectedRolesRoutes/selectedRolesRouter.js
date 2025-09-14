@@ -2,6 +2,7 @@ import express from "express";
 import multer from "multer";
 import { storage } from "../../config/cloudinary.js";
 import { selectedRoles } from "../../controllers/auth-users-controllers/selected-roles.js";
+import { getRoles } from "../../controllers/auth-users-controllers/getRoles.js";
 
 const router = express.Router();
 
@@ -16,5 +17,6 @@ router.post(
   ]),
   selectedRoles
 );
+router.get("/roles", getRoles);
 
 export default router;
