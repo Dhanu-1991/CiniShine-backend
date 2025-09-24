@@ -14,7 +14,7 @@ export const getRoles = async (req, res) => {
             return res.status(tokenResponse.status).json({ message: tokenResponse.message });
         }
 
-        console.log("✅ Token verified successfully");
+        console.log("✅ Token verified successfully on get roles");
 
         // --- Get user fullName and roles ---
         const user = await User.findById(tokenResponse.userId).select("fullName roles");

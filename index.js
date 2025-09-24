@@ -4,6 +4,7 @@ import cors from "cors";
 import mongoose from "mongoose";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
+import getVideoRouter from "./routes/videoRoutes/getVideo.js";
 
 dotenv.config();
 
@@ -53,6 +54,7 @@ app.use("/api/v1/payments", router);
 app.use("/api/v1/auth/authRoutes", authRouter);
 app.use("/api/data/selected-roles", selectedRolesRouter);
 app.use("/api/v1/auth/user", selectedRolesRouter);
+app.use("/api/v2", getVideoRouter);
 app.use(errorHandlingMiddleware);
 
 mongoose
