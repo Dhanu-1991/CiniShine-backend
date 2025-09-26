@@ -1,24 +1,33 @@
+// controllers/video-controllers/videoController.js
 import Video from "../../models/video.model.js";
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import pkg from "@aws-sdk/s3-request-presigner";
-const { getSignedUrl } = pkg;
-import 'dotenv/config';
 import mongoose from 'mongoose';
+import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+// import redis from "ioredis";
+
+import Redis from 'ioredis';
+
+const redisClient = new Redis(process.env.REDIS_URL, {
+    retryStrategy: times => Math.min(times * 50, 2000)
+});
+
 
 const s3Client = new S3Client({
-    region: process.env.AWS_REGION, // e.g., 'us-east-1'
+    region: process.env.AWS_REGION,
     credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     },
 });
 
-
+// const redisClient = redis.createClient({
+//     url: process.env.REDIS_URL,
+// });
+redisClient.connect().catch(console.error);
 
 // Helper to get signed thumbnail URL
 async function getSignedUrlForThumbnail(thumbnailKey) {
     if (!thumbnailKey) return null;
-    const s3Client = new S3Client({ region: process.env.AWS_REGION });
     const command = new GetObjectCommand({
         Bucket: process.env.S3_BUCKET,
         Key: thumbnailKey,
@@ -26,7 +35,7 @@ async function getSignedUrlForThumbnail(thumbnailKey) {
     return await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 }
 
-// Get HLS master playlist URL with signed URL
+// Get HLS master playlist URL
 export const getVideo = async (req, res) => {
     try {
         const video = await Video.findById(req.params.id);
@@ -42,7 +51,6 @@ export const getVideo = async (req, res) => {
             });
         }
 
-        // Generate signed URL for the master playlist
         const command = new GetObjectCommand({
             Bucket: process.env.S3_BUCKET,
             Key: video.hlsMasterKey,
@@ -62,7 +70,7 @@ export const getVideo = async (req, res) => {
     }
 };
 
-// Get video status with processing time estimation
+// Get video status
 export const getVideoStatus = async (req, res) => {
     try {
         const video = await Video.findById(req.params.id);
@@ -73,7 +81,6 @@ export const getVideoStatus = async (req, res) => {
 
         let estimatedTimeRemaining = null;
         if (video.status === 'processing' && video.processingStart) {
-            // Simple estimation: assume 1 minute per minute of video
             const processingTimeSoFar = Date.now() - video.processingStart.getTime();
             estimatedTimeRemaining = Math.max(0, Math.round((video.duration * 1000 - processingTimeSoFar) / 1000));
         }
@@ -91,42 +98,34 @@ export const getVideoStatus = async (req, res) => {
     }
 };
 
+// Initialize upload - get presigned URL
 export const uploadInit = async (req, res) => {
     try {
-        console.log("🔔 uploadInit called with body:", req.body);
         const { fileName, fileType } = req.body;
-
-        // Use authenticated user ID instead of client-provided string
         const userId = req.user?.id;
-        console.log("🔔 Authenticated user ID:", userId);
 
         if (!userId) {
             return res.status(401).json({ error: "User not authenticated" });
         }
 
         const fileId = new mongoose.Types.ObjectId();
-        console.log("🔔 Generated fileId:", fileId);
         const key = `uploads/${userId}/${fileId}_${fileName}`;
-        console.log("🔔 Generated S3 key:", key);
 
-        
         const video = await Video.create({
             _id: fileId,
             title: fileName,
             originalKey: key,
-            userId, // ✅ valid ObjectId
+            userId,
         });
-        console.log("🔔 Video document created:", video);
 
         const command = new PutObjectCommand({
             Bucket: process.env.S3_BUCKET,
             Key: key,
             ContentType: fileType,
         });
-        console.log("putObjectCommand created:", command);
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-        console.log("🔔 Generated upload URL:", uploadUrl);
+
         res.json({ uploadUrl, fileId });
     } catch (error) {
         console.error("Error generating presigned URL:", error);
@@ -134,18 +133,26 @@ export const uploadInit = async (req, res) => {
     }
 };
 
-
+// Complete upload - trigger processing
 export const uploadComplete = async (req, res) => {
     try {
         const { fileId, fileSize } = req.body;
 
+        // Validate fileId
+        if (!mongoose.Types.ObjectId.isValid(fileId)) {
+            return res.status(400).json({ error: 'Invalid file ID' });
+        }
+
+        // Update video status and add to processing queue
         await Video.findByIdAndUpdate(fileId, {
             status: 'processing',
             'sizes.original': fileSize,
+            processingStart: new Date()
         });
 
         // Add to processing queue
-        await redisClient.lPush('video-processing-queue', fileId.toString());
+        await redisClient.lpush('video-processing-queue', fileId.toString());
+        console.log(`Video ${fileId} added to processing queue`);
 
         res.json({ success: true, message: 'Video queued for processing' });
     } catch (error) {

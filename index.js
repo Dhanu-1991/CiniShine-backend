@@ -4,7 +4,6 @@ import cors from "cors";
 import mongoose from "mongoose";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
-import getVideoRouter from "./routes/videoRoutes/getVideo.js";
 
 dotenv.config();
 
@@ -14,15 +13,16 @@ import router from "./routes/paymentRoutes/cashfree.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
 import contactRouter from "./routes/contactRoutes/contactRouter.js";
 import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
+import videoRouter from "./routes/videoRoutes/videoRouter.js"; // Updated import
 
 const app = express();
 
 const corsOptions = {
   origin: [
     "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
-    "http://localhost:5173", // Add your local development URL here
+    "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://frontend-six-black-29.vercel.app" // Add 127.0.0.1 as a common localhost address
+    "https://frontend-six-black-29.vercel.app"
   ],
   credentials: true,
 };
@@ -38,14 +38,14 @@ const getRawBody = (req, res, next) => {
   });
 };
 
-// 1️⃣ Webhook route uses only `getRawBody`
+// Webhook route
 app.post(
   "/api/v1/payments/payment-webhook",
   getRawBody,
   handleCashfreeWebhook
 );
 
-// 2️⃣ All other routes get normal JSON/body parsing
+// All other routes get normal JSON/body parsing
 app.use(express.json());
 app.use(cookieParser());
 
@@ -54,12 +54,13 @@ app.use("/api/v1/payments", router);
 app.use("/api/v1/auth/authRoutes", authRouter);
 app.use("/api/data/selected-roles", selectedRolesRouter);
 app.use("/api/v1/auth/user", selectedRolesRouter);
-app.use("/api/v2", getVideoRouter);
+app.use("/api/v2", videoRouter); // Updated route
 app.use(errorHandlingMiddleware);
 
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
+    console.log("✅ MongoDB connected successfully");
     app.listen(process.env.PORT, () =>
       console.log(`✅ Server running on port ${process.env.PORT}`)
     );
