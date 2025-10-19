@@ -38,37 +38,142 @@ async function getSignedUrlForThumbnail(thumbnailKey) {
 // Get HLS master playlist URL
 export const getVideo = async (req, res) => {
     try {
-        const video = await Video.findById(req.params.id);
+        const { videoId } = req.params;
 
+        const video = await Video.findById(videoId).populate('userId', 'userName fullName');
         if (!video) {
             return res.status(404).json({ error: 'Video not found' });
         }
 
-        if (video.status !== 'completed') {
-            return res.status(202).json({
-                status: video.status,
-                message: 'Video is still processing'
-            });
-        }
+        // Generate signed URL for master playlist
+        const masterPlaylistUrl = await getSignedUrl(
+            s3Client,
+            new GetObjectCommand({
+                Bucket: process.env.S3_BUCKET,
+                Key: video.hlsMasterKey,
+            }),
+            { expiresIn: 3600 } // 1 hour
+        );
 
-        const command = new GetObjectCommand({
-            Bucket: process.env.S3_BUCKET,
-            Key: video.hlsMasterKey,
-        });
+        // Generate signed URL for thumbnail
+        const thumbnailUrl = await getSignedUrl(
+            s3Client,
+            new GetObjectCommand({
+                Bucket: process.env.S3_BUCKET,
+                Key: video.thumbnailKey,
+            }),
+            { expiresIn: 3600 }
+        );
 
-        const signedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        // Prepare renditions data
+        const renditions = video.renditions.map(rendition => ({
+            _id: rendition._id,
+            name: rendition.name,
+            resolution: rendition.resolution,
+            bitrate: rendition.bitrate,
+            codecs: rendition.codecs
+        }));
 
         res.json({
-            masterUrl: signedUrl,
+            _id: video._id,
+            title: video.title,
+            description: video.description,
             duration: video.duration,
-            thumbnail: await getSignedUrlForThumbnail(video.thumbnailKey),
-            renditions: video.renditions
+            hlsMasterUrl: masterPlaylistUrl,
+            thumbnailUrl,
+            renditions,
+            status: video.status,
+            createdAt: video.createdAt,
+            user: video.userId
         });
+
     } catch (error) {
-        console.error('Error getting video:', error);
-        res.status(500).json({ error: 'Failed to retrieve video' });
+        console.error('Error fetching video data:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
-};
+}
+
+export const getMyContent = async (req, res) => {
+    try {
+        const userId = req.user; // Assuming you have auth middleware
+
+        console.log("🔍 Fetching videos for user ID:", userId);
+        console.log("User ID type:", typeof userId);
+
+        // Convert userId to ObjectId for proper querying
+        let userObjectId;
+        if (mongoose.Types.ObjectId.isValid(userId)) {
+            userObjectId = new mongoose.Types.ObjectId(userId);
+            console.log("Converted to ObjectId:", userObjectId);
+        } else {
+            userObjectId = userId;
+            console.log("Using raw userId (not ObjectId)");
+        }
+
+        const videos = await Video.find({ userId: userObjectId })
+            .sort({ createdAt: -1 })
+            .select('title description duration status thumbnailKey renditions createdAt tags');
+
+        console.log("✅ Number of videos found:", videos.length);
+
+        if (videos.length === 0) {
+            console.log("❌ No videos found for user:", userId);
+            // Let's debug why no videos are found
+            const allVideos = await Video.find({}).select('userId title').limit(5);
+            console.log("Sample videos in DB:", allVideos);
+            return res.json([]);
+        }
+
+        console.log("📹 Videos found:", videos.map(v => ({
+            id: v._id,
+            title: v.title,
+            userId: v.userId,
+            status: v.status
+        })));
+
+        // Generate signed URLs for thumbnails
+        const videosWithUrls = await Promise.all(
+            videos.map(async (video) => {
+                let thumbnailUrl = null;
+                if (video.thumbnailKey) {
+                    try {
+                        thumbnailUrl = await getSignedUrl(
+                            s3Client,
+                            new GetObjectCommand({
+                                Bucket: process.env.S3_BUCKET,
+                                Key: video.thumbnailKey,
+                            }),
+                            { expiresIn: 3600 }
+                        );
+                        console.log(`✅ Generated thumbnail URL for video: ${video._id}`);
+                    } catch (s3Error) {
+                        console.error('❌ Error generating thumbnail URL for video:', video._id, s3Error);
+                        thumbnailUrl = null;
+                    }
+                }
+
+                return {
+                    _id: video._id,
+                    title: video.title,
+                    description: video.description,
+                    duration: video.duration,
+                    status: video.status,
+                    thumbnailUrl,
+                    tags: video.tags,
+                    createdAt: video.createdAt,
+                    renditions: video.renditions || [],
+                    adaptiveStreaming: video.status === 'completed'
+                };
+            })
+        );
+
+        console.log("🎯 Final response with", videosWithUrls.length, "videos");
+        res.json(videosWithUrls);
+    } catch (error) {
+        console.error('💥 Error fetching user videos:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+}
 
 // Get video status
 export const getVideoStatus = async (req, res) => {
