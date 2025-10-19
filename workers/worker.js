@@ -52,19 +52,6 @@ redisClient.on('connect', () => console.log('✅ Redis connected successfully'))
 redisClient.on('error', (err) => console.error('❌ Redis error:', err));
 redisClient.on('close', () => console.log('🔌 Redis connection closed'));
 
-// Connect to MongoDB with enhanced error handling
-mongoose.connect(process.env.MONGO_URI, {
-  maxPoolSize: 15,
-  serverSelectionTimeoutMS: 10000,
-  socketTimeoutMS: 45000,
-  bufferCommands: false,
-}).then(() => {
-  console.log('✅ MongoDB connected successfully');
-}).catch(err => {
-  console.error('❌ MongoDB connection error:', err);
-  process.exit(1);
-});
-
 // Define all possible renditions (from lowest to highest)
 const ALL_RENDITIONS = [
   { resolution: '256x144', bitrate: 200000, audioBitrate: '64k', name: '144p', width: 256, height: 144 },
@@ -501,27 +488,23 @@ async function processVideo(fileId) {
       'max-age=300'
     );
 
-    // Upload each rendition's files
-    for (let i = 0; i < renditionsToGenerate.length; i++) {
-      const streamDir = path.join(outputDir, `stream_${i}`);
-      if (!fs.existsSync(streamDir)) {
-        console.log(`   ⚠️ Stream directory not found: ${streamDir}`);
-        continue;
-      }
+    // Dynamically upload all stream_* directories produced by FFmpeg
+    const hlsDir = outputDir;
+    const renditionDirs = fs.readdirSync(hlsDir).filter(f => f.startsWith("stream_") && fs.statSync(path.join(hlsDir, f)).isDirectory());
 
-      console.log(`   Uploading rendition ${i + 1}/${renditionsToGenerate.length}: ${renditionsToGenerate[i].name}`);
-
-      const files = fs.readdirSync(streamDir);
+    for (const dir of renditionDirs) {
+      const fullDir = path.join(hlsDir, dir);
+      console.log(`   Uploading rendition: ${dir}`);
+      const files = fs.readdirSync(fullDir);
       for (const file of files) {
-        const filePath = path.join(streamDir, file);
-        const fileKey = `hls/${video.userId}/${fileId}/stream_${i}/${file}`;
+        const filePath = path.join(fullDir, file);
+        const fileKey = `hls/${video.userId}/${fileId}/${dir}/${file}`;
         const contentType = file.endsWith('.m3u8')
           ? 'application/vnd.apple.mpegurl'
           : 'video/MP2T';
         const cacheControl = file.endsWith('.ts')
-          ? 'max-age=2592000'  // 30 days for segments
-          : 'max-age=300';     // 5 minutes for playlists
-
+          ? 'max-age=2592000'
+          : 'max-age=300';
         await uploadToS3(filePath, fileKey, contentType, cacheControl);
       }
     }
@@ -726,9 +709,34 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Start the worker
-if (process.argv[1].endsWith('worker.js')) {
-  processVideoWorker().catch(console.error);
+// ====== Replace the previous standalone worker start with an awaited start sequence ======
+
+async function startWorker() {
+  try {
+    console.log('🔗 Connecting to MongoDB...');
+    await mongoose.connect(process.env.MONGO_URI, {
+      maxPoolSize: 15,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+      bufferCommands: false, // keep your chosen setting
+    });
+    console.log('✅ MongoDB connected successfully');
+
+    // Now that MongoDB is ready, start processing jobs
+    await processVideoWorker();
+  } catch (err) {
+    console.error('❌ MongoDB connection or worker startup failed:', err);
+    process.exit(1);
+  }
+}
+
+// Start the worker only when this file is executed directly
+if (process.argv[1] && process.argv[1].endsWith('worker.js')) {
+  startWorker().catch((err) => {
+    console.error('❌ Fatal worker error:', err);
+    process.exit(1);
+  });
 }
 
 export { processVideo, processVideoWorker };
+//dhjdgdn

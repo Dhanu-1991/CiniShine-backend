@@ -123,8 +123,9 @@ export const uploadInit = async (req, res) => {
             Key: key,
             ContentType: fileType,
         });
-
+        console.log("Generating presigned URL for:", key);
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        console.log("Generated presigned URL:", uploadUrl);
 
         res.json({ uploadUrl, fileId });
     } catch (error) {
