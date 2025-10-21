@@ -150,7 +150,11 @@ export const getHLSMasterPlaylist = async (req, res) => {
         console.log('📄 Master playlist fetched, size:', masterContent.length, 'bytes');
 
         // Build absolute backend base (so HLS.js won't resolve against blob:)
-        const backendBase = `${req.protocol}://${req.get('host')}`; // e.g. http://localhost:5000
+        // Prefer X-Forwarded-Proto (set by proxies/load-balancers) or req.secure.
+        // Falls back to req.protocol if neither is available.
+        const protoHeader = req.headers['x-forwarded-proto'];
+        const protocol = protoHeader ? String(protoHeader).split(',')[0].trim() : (req.secure ? 'https' : req.protocol);
+        const backendBase = `${protocol}://${req.get('host')}`; // e.g. https://example.com
 
         // Rebuild master playlist: convert variant URIs to absolute backend variant endpoints
         const lines = masterContent.split(/\r?\n/);
