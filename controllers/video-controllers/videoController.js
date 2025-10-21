@@ -1,16 +1,13 @@
 // controllers/video-controllers/videoController.js
 import Video from "../../models/video.model.js";
 import mongoose from 'mongoose';
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-// import redis from "ioredis";
-
 import Redis from 'ioredis';
 
 const redisClient = new Redis(process.env.REDIS_URL, {
     retryStrategy: times => Math.min(times * 50, 2000)
 });
-
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -20,28 +17,32 @@ const s3Client = new S3Client({
     },
 });
 
-// const redisClient = redis.createClient({
-//     url: process.env.REDIS_URL,
-// });
-redisClient.connect().catch(console.error);
+// Helper to find HLS files in S3
+async function findHLSFiles(videoId, userId) {
+    try {
+        const prefix = `hls/${userId}/${videoId}/`;
+        const command = new ListObjectsV2Command({
+            Bucket: process.env.S3_BUCKET,
+            Prefix: prefix,
+        });
 
-// Helper to get signed thumbnail URL
-async function getSignedUrlForThumbnail(thumbnailKey) {
-    if (!thumbnailKey) return null;
-    const command = new GetObjectCommand({
-        Bucket: process.env.S3_BUCKET,
-        Key: thumbnailKey,
-    });
-    return await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        const response = await s3Client.send(command);
+        return response.Contents || [];
+    } catch (error) {
+        console.error('Error finding HLS files:', error);
+        return [];
+    }
 }
 
 // Get HLS master playlist URL
 export const getVideo = async (req, res) => {
     try {
-        const { videoId } = req.params;
+        const videoId = req.params.id ?? req.params.videoId;
+        console.log('Fetching video with ID:', videoId);
 
-        const video = await Video.findById(videoId).populate('userId', 'userName fullName');
+        const video = await Video.findById(videoId).populate('userId', 'userName');
         if (!video) {
+            console.error('Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
         }
 
@@ -52,7 +53,7 @@ export const getVideo = async (req, res) => {
                 Bucket: process.env.S3_BUCKET,
                 Key: video.hlsMasterKey,
             }),
-            { expiresIn: 3600 } // 1 hour
+            { expiresIn: 3600 }
         );
 
         // Generate signed URL for thumbnail
@@ -93,6 +94,304 @@ export const getVideo = async (req, res) => {
     }
 }
 
+export const getHLSMasterPlaylist = async (req, res) => {
+    try {
+        const videoId = req.params.id;
+        console.log('🎬 Serving master playlist for video:', videoId);
+
+        // Validate video ID
+        if (!mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ error: 'Invalid video ID' });
+        }
+
+        const video = await Video.findById(videoId);
+        if (!video) {
+            console.error('❌ Video not found for ID:', videoId);
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // Check if video is ready for streaming
+        if (video.status !== 'completed') {
+            return res.status(423).json({
+                error: 'Video is still processing',
+                status: video.status
+            });
+        }
+
+        // Check user access
+        const userId = req.user.id;
+        if (video.userId.toString() !== userId && video.visibility === 'private') {
+            return res.status(403).json({ error: 'Access denied to this video' });
+        }
+
+        // FIX: Handle missing hlsMasterKey gracefully
+        if (!video.hlsMasterKey) {
+            console.error('❌ No HLS master key found for video:', videoId);
+
+            // Try to find the master playlist in S3
+            const hlsFiles = await findHLSFiles(videoId, video.userId);
+            const masterFile = hlsFiles.find(file => file.Key.includes('master.m3u8'));
+
+            if (!masterFile) {
+                return res.status(404).json({ error: 'Master playlist not found' });
+            }
+
+            video.hlsMasterKey = masterFile.Key;
+            await video.save();
+        }
+
+        console.log('📡 Generating signed URL for master playlist:', video.hlsMasterKey);
+
+        // Generate signed URL for master playlist from S3
+        const signedUrl = await getSignedUrl(
+            s3Client,
+            new GetObjectCommand({
+                Bucket: process.env.S3_BUCKET,
+                Key: video.hlsMasterKey,
+            }),
+            { expiresIn: 3600 }
+        );
+
+        console.log('🔗 Signed URL generated, fetching master playlist...');
+
+        // Fetch the master playlist content from S3
+        const response = await fetch(signedUrl);
+        if (!response.ok) {
+            throw new Error(`S3 responded with status: ${response.status}`);
+        }
+
+        let masterContent = await response.text();
+        console.log('📄 Master playlist fetched, size:', masterContent.length, 'bytes');
+
+        // FIX: More robust URL replacement
+        masterContent = masterContent.replace(
+            /(\b[\w\-]+\.m3u8\b)/g,
+            (match, variantFile) => {
+                // Ensure we're only replacing actual variant filenames, not comments
+                if (match.startsWith('#')) return match;
+
+                const backendUrl = `/api/v2/video/${videoId}/variants/${variantFile}`;
+                console.log(`🔄 Replacing variant: ${variantFile} → ${backendUrl}`);
+                return backendUrl;
+            }
+        );
+
+        // Set proper headers for HLS
+        res.set({
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Content-Disposition': 'inline',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Credentials': 'true'
+        });
+
+        console.log('✅ Master playlist served successfully for video:', videoId);
+        res.send(masterContent);
+
+    } catch (error) {
+        console.error('💥 Error serving master playlist:', error);
+
+        if (error.name === 'NoSuchKey') {
+            return res.status(404).json({ error: 'Master playlist not found in storage' });
+        }
+
+        if (error.name === 'NetworkError' || error.code === 'ENOTFOUND') {
+            return res.status(502).json({ error: 'Storage service unavailable' });
+        }
+
+        res.status(500).json({
+            error: 'Failed to load video stream',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+export const getHLSVariantPlaylist = async (req, res) => {
+    try {
+        const videoId = req.params.id;
+        const variantFile = req.params.variantFile;
+
+        console.log('🎬 Serving variant playlist:', variantFile, 'for video:', videoId);
+
+        // Validate inputs
+        if (!mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ error: 'Invalid video ID' });
+        }
+
+        if (!variantFile || !variantFile.endsWith('.m3u8')) {
+            return res.status(400).json({ error: 'Invalid variant file name' });
+        }
+
+        const video = await Video.findById(videoId);
+        if (!video) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // Check video status
+        if (video.status !== 'completed') {
+            return res.status(423).json({ error: 'Video is still processing' });
+        }
+
+        // Check user access
+        const userId = req.user.id;
+        if (video.userId.toString() !== userId && video.visibility === 'private') {
+            return res.status(403).json({ error: 'Access denied to this video' });
+        }
+
+        // FIX: Use the actual hlsMasterKey to determine the folder structure
+        const basePath = video.hlsMasterKey ?
+            video.hlsMasterKey.substring(0, video.hlsMasterKey.lastIndexOf('/') + 1) :
+            `hls/${video.userId}/${videoId}/`;
+
+        const variantKey = `${basePath}${variantFile}`;
+        console.log('📡 Variant S3 key:', variantKey);
+
+        // Generate signed URL for variant playlist
+        const signedUrl = await getSignedUrl(
+            s3Client,
+            new GetObjectCommand({
+                Bucket: process.env.S3_BUCKET,
+                Key: variantKey,
+            }),
+            { expiresIn: 3600 }
+        );
+
+        console.log('🔗 Signed URL generated for variant, fetching content...');
+
+        const response = await fetch(signedUrl);
+        if (!response.ok) {
+            if (response.status === 404) {
+                throw new Error(`Variant playlist not found: ${variantKey}`);
+            }
+            throw new Error(`S3 responded with status: ${response.status}`);
+        }
+
+        let variantContent = await response.text();
+        console.log('📄 Variant playlist fetched, size:', variantContent.length, 'bytes');
+
+        // FIX: More robust segment URL replacement
+        variantContent = variantContent.replace(
+            /(\b[\w\-]+\.ts\b)/g,
+            (match, segmentFile) => {
+                if (match.startsWith('#')) return match;
+
+                const backendUrl = `/api/v2/video/${videoId}/segments/${segmentFile}`;
+                console.log(`🔄 Replacing segment: ${segmentFile} → ${backendUrl}`);
+                return backendUrl;
+            }
+        );
+
+        // Set proper headers
+        res.set({
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Content-Disposition': 'inline',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+            'Access-Control-Allow-Origin': req.headers.origin || '*',
+            'Access-Control-Allow-Credentials': 'true'
+        });
+
+        console.log('✅ Variant playlist served successfully:', variantFile);
+        res.send(variantContent);
+
+    } catch (error) {
+        console.error('💥 Error serving variant playlist:', error);
+
+        if (error.name === 'NoSuchKey') {
+            return res.status(404).json({ error: 'Variant playlist not found in storage' });
+        }
+
+        if (error.message.includes('not found')) {
+            return res.status(404).json({ error: 'Variant playlist not found' });
+        }
+
+        if (error.name === 'NetworkError' || error.code === 'ENOTFOUND') {
+            return res.status(502).json({ error: 'Storage service unavailable' });
+        }
+
+        res.status(500).json({
+            error: 'Failed to load video variant',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+export const getHLSSegment = async (req, res) => {
+    try {
+        const videoId = req.params.id;
+        const segmentFile = req.params.segmentFile;
+
+        console.log('🎬 Serving segment:', segmentFile, 'for video:', videoId);
+
+        // Validate inputs
+        if (!mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ error: 'Invalid video ID' });
+        }
+
+        if (!segmentFile || !segmentFile.endsWith('.ts')) {
+            return res.status(400).json({ error: 'Invalid segment file name' });
+        }
+
+        const video = await Video.findById(videoId);
+        if (!video) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // Check video status
+        if (video.status !== 'completed') {
+            return res.status(423).json({ error: 'Video is still processing' });
+        }
+
+        // Check user access
+        const userId = req.user.id;
+        if (video.userId.toString() !== userId && video.visibility === 'private') {
+            return res.status(403).json({ error: 'Access denied to this video' });
+        }
+
+        // FIX: Use the actual hlsMasterKey to determine the folder structure
+        const basePath = video.hlsMasterKey ?
+            video.hlsMasterKey.substring(0, video.hlsMasterKey.lastIndexOf('/') + 1) :
+            `hls/${video.userId}/${videoId}/`;
+
+        const segmentKey = `${basePath}${segmentFile}`;
+        console.log('📡 Segment S3 key:', segmentKey);
+
+        // Generate signed URL for segment
+        const signedUrl = await getSignedUrl(
+            s3Client,
+            new GetObjectCommand({
+                Bucket: process.env.S3_BUCKET,
+                Key: segmentKey,
+            }),
+            { expiresIn: 7200 }
+        );
+
+        console.log('🔗 Redirecting to signed segment URL:', signedUrl.substring(0, 100) + '...');
+
+        // FIX: Use proxy instead of redirect for better HLS.js compatibility
+        // For now, keep redirect but consider switching to proxy if issues persist
+        res.redirect(307, signedUrl);
+
+    } catch (error) {
+        console.error('💥 Error serving segment:', error);
+
+        if (error.name === 'NoSuchKey') {
+            return res.status(404).json({ error: 'Video segment not found in storage' });
+        }
+
+        if (error.name === 'NetworkError' || error.code === 'ENOTFOUND') {
+            return res.status(502).json({ error: 'Storage service unavailable' });
+        }
+
+        res.status(500).json({
+            error: 'Failed to load video segment',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
 export const getMyContent = async (req, res) => {
     try {
         const userId = req.user; // Assuming you have auth middleware
