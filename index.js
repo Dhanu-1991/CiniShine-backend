@@ -17,6 +17,8 @@ import videoRouter from "./routes/videoRoutes/videoRouter.js"; // Updated import
 
 const app = express();
 
+app.set('trust proxy', 1);
+
 const corsOptions = {
   origin: [
     "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",

@@ -37,6 +37,21 @@ async function findHLSFiles(videoId, userId) {
     }
 }
 
+// Helper function to get correct protocol (handles proxies/load balancers)
+function getProtocol(req) {
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    if (forwardedProto) {
+        return forwardedProto.split(',')[0].trim();
+    }
+    if (req.secure) {
+        return 'https';
+    }
+    if (req.headers['x-forwarded-ssl'] === 'on') {
+        return 'https';
+    }
+    return req.protocol;
+}
+
 // Get video metadata
 export const getVideo = async (req, res) => {
     try {
@@ -153,7 +168,7 @@ export const getHLSMasterPlaylist = async (req, res) => {
         // Prefer X-Forwarded-Proto (set by proxies/load-balancers) or req.secure.
         // Falls back to req.protocol if neither is available.
         const protoHeader = req.headers['x-forwarded-proto'];
-        const protocol = protoHeader ? String(protoHeader).split(',')[0].trim() : (req.secure ? 'https' : req.protocol);
+        const protocol = getProtocol(req);
         const backendBase = `${protocol}://${req.get('host')}`; // e.g. https://example.com
 
         // Rebuild master playlist: convert variant URIs to absolute backend variant endpoints
@@ -317,7 +332,8 @@ export const getHLSVariantPlaylist = async (req, res) => {
         }
 
         // Rewrite nested playlist & segment URIs to absolute backend endpoints
-        const backendBase = `${req.protocol}://${req.get('host')}`;
+        const protocol = getProtocol(req);
+        const backendBase = `${protocol}://${req.get('host')}`;
         const qualityParam = quality && quality !== 'auto' ? `?quality=${encodeURIComponent(quality)}` : '';
 
         variantContent = variantContent.replace(
