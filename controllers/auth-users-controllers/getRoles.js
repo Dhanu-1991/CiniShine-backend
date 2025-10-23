@@ -1,24 +1,27 @@
 import User from "../../models/user.model.js";
-import { tokenVerifier } from "../auth-controllers/tokenverifier.js";
+// import { tokenVerifier } from "../auth-controllers/tokenverifier.js";
 
 export const getRoles = async (req, res) => {
     try {
-        // --- Verify Token ---
-        const tokenResponse = await tokenVerifier(req);
+        // // --- Verify Token ---
+        // const tokenResponse = await tokenVerifier(req);
 
-        if (!tokenResponse || typeof tokenResponse.status !== "number") {
-            return res.status(401).json({ message: "Invalid token response" });
-        }
+        // if (!tokenResponse || typeof tokenResponse.status !== "number") {
+        //     return res.status(401).json({ message: "Invalid token response" });
+        // }
 
-        if (tokenResponse.status !== 200) {
-            return res.status(tokenResponse.status).json({ message: tokenResponse.message });
-        }
+        // if (tokenResponse.status !== 200) {
+        //     return res.status(tokenResponse.status).json({ message: tokenResponse.message });
+        // }
 
-        console.log("✅ Token verified successfully on get roles");
+        // console.log("✅ Token verified successfully on get roles");
+        let userId = req.user?.id;
+        console.log("User ID from token in get roles:", userId);
 
         // --- Get user fullName and roles ---
-        const user = await User.findById(tokenResponse.userId)
+        const user = await User.findById(userId)
             .select("fullName roles selectedRolesId");
+        console.log("User found:", user);
 
         if (!user) {
             return res.status(404).json({ message: "User not found" });

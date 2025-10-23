@@ -3,6 +3,7 @@ import multer from "multer";
 import { storage } from "../../config/cloudinary.js";
 import { selectedRoles } from "../../controllers/auth-users-controllers/selected-roles.js";
 import { getRoles } from "../../controllers/auth-users-controllers/getRoles.js";
+import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 
 const router = express.Router();
 
@@ -17,6 +18,6 @@ router.post(
   ]),
   selectedRoles
 );
-router.get("/roles", getRoles);
+router.get("/roles", universalTokenVerifier,getRoles);
 
 export default router;

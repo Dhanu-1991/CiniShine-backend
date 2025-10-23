@@ -1,7 +1,7 @@
 // UniversalTokenVerifier.js
 import jwt from "jsonwebtoken";
 
-export const universalTokenVerifier = async (req,res,next) => {
+export const universalTokenVerifier = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
     if (!token) {
@@ -14,8 +14,13 @@ export const universalTokenVerifier = async (req,res,next) => {
     req.user = { id: decoded.userId };
     console.log("✅ Token verified successfully:", decoded);
     next();
-  } catch (err) {
-    console.error("❌ Token verification failed:", err);
-    return res.status(401).json({ message: "Invalid or expired token" });
+  } catch (error) {
+    if (error.name === "TokenExpiredError") {
+      console.log("Token has expired.");
+      return res.status(401).json({ message: "Token expired" });
+    }
+
+    // ✅ Return on unexpected error
+    return res.status(500).json({ message: "Internal server error" });
   }
 };
