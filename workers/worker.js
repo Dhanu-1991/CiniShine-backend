@@ -27,16 +27,14 @@ console.log("🌍 Platform:", process.platform);
 console.log("🔍 FFprobe path:", ffprobePath);
 console.log("🔍 FFprobe exists:", fs.existsSync(ffprobePath));
 
-// Configure S3 client with enhanced error handling
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION,
-  maxAttempts: 5,
-  requestTimeout: 30000,
-  credentials: {
+const s3Config = { region: process.env.AWS_REGION, maxAttempts: 5, requestTimeout: 30000 };
+if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+  s3Config.credentials = {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
+  };
+}
+const s3Client = new S3Client(s3Config);
 
 // Configure Redis with robust connection handling
 const redisClient = new Redis(process.env.REDIS_URL, {

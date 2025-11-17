@@ -91,6 +91,18 @@ export const getVideo = async (req, res) => {
             codecs: rendition.codecs
         }));
 
+        console.log("_id : ", video._id,
+            "title : ", video.title,
+            "description : ", video.description,
+            "duration : ", video.duration,
+            "hlsMasterUrl : ", `/api/v2/video/${videoId}/master.m3u8`,
+            "thumbnailUrl : ", thumbnailUrl,
+            "renditions : ", renditions,
+            "status : ", video.status,
+            "createdAt : ", video.createdAt,
+            "user : ", video.userId
+        );
+
         res.json({
             _id: video._id,
             title: video.title,
@@ -622,12 +634,18 @@ export const uploadComplete = async (req, res) => {
             processingStart: new Date()
         });
 
-        await redisClient.lpush('video-processing-queue', fileId.toString());
-        console.log(`✅ Video ${fileId} added to processing queue`);
+        // 🔥 CLEAR THE QUEUE COMPLETELY
+        await redisClient.del('video-processing-queue');
 
-        res.json({ success: true, message: 'Video queued for processing' });
+        // 🔥 PUSH ONLY THIS FILE INTO THE QUEUE
+        await redisClient.lpush('video-processing-queue', fileId.toString());
+
+        console.log(`🔁 Queue reset — only video ${fileId} is now in queue`);
+
+        res.json({ success: true, message: 'Queue reset and video added' });
     } catch (error) {
         console.error('Error completing upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
     }
 };
+
