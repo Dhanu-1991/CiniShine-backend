@@ -32,7 +32,7 @@ router.get('/video/:id/segments/:segmentFile', universalTokenVerifier, getHLSSeg
 router.get("/video/:id/view", universalTokenVerifier, updateViewCount);
 
 // Status route (specific with /status suffix)
-router.get("/video/:id/status", universalTokenVerifier, getsVideoStatus);
+router.get("/video/:id/status", universalTokenVerifier, getVideoStatus);
 
 // General video route (MUST BE LAST - catches all /video/:id)
 router.get("/video/:id", universalTokenVerifier, getVideo);
