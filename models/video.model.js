@@ -6,6 +6,7 @@ const Video = mongoose.model('Video', new mongoose.Schema({
   originalKey: String,
   hlsMasterKey: String,
   thumbnailKey: String,
+  viewCount: { type: Number, default: 0 },
   status: { 
     type: String, 
     enum: ['uploading', 'processing', 'completed', 'failed'], 
