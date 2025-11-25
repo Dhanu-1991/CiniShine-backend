@@ -7,9 +7,9 @@ import {
   getMyContent,
   getHLSMasterPlaylist,
   getHLSVariantPlaylist,
-  getHLSSegment
+  getHLSSegment,
+  recordView
 } from "../../controllers/video-controllers/videoController.js";
-import { updateViewCount } from "../../controllers/video-controllers/videoParameters.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 
 const router = express.Router();
@@ -29,7 +29,8 @@ router.get('/video/:id/variants/:variantFile', universalTokenVerifier, getHLSVar
 router.get('/video/:userId/:videoId/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
 router.get('/video/:id/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
 
-router.get("/video/:id/view", universalTokenVerifier, updateViewCount);
+// View tracking route (POST not GET)
+router.post("/video/:id/view", universalTokenVerifier, recordView);
 
 // Status route (specific with /status suffix)
 router.get("/video/:id/status", universalTokenVerifier, getVideoStatus);

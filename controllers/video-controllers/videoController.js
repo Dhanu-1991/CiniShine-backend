@@ -3,15 +3,11 @@ import Video from "../../models/video.model.js";
 import mongoose from 'mongoose';
 import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import Redis from 'ioredis';
 import stream from 'stream';
 import { promisify } from 'util';
+import { updateViews } from "./videoParameters.js";
 
 const pipeline = promisify(stream.pipeline);
-
-const redisClient = new Redis(process.env.REDIS_URL, {
-    retryStrategy: times => Math.min(times * 50, 2000)
-});
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -100,7 +96,8 @@ export const getVideo = async (req, res) => {
             "renditions : ", renditions,
             "status : ", video.status,
             "createdAt : ", video.createdAt,
-            "user : ", video.userId
+            "user : ", video.userId,
+            "views : ", video.views,
         );
 
         res.json({
@@ -114,7 +111,8 @@ export const getVideo = async (req, res) => {
             renditions,
             status: video.status,
             createdAt: video.createdAt,
-            user: video.userId
+            user: video.userId,
+            views: video.views,
         });
 
     } catch (error) {
@@ -633,19 +631,46 @@ export const uploadComplete = async (req, res) => {
             'sizes.original': fileSize,
             processingStart: new Date()
         });
-
-        // 🔥 CLEAR THE QUEUE COMPLETELY
-        await redisClient.del('video-processing-queue');
-
-        // 🔥 PUSH ONLY THIS FILE INTO THE QUEUE
-        await redisClient.lpush('video-processing-queue', fileId.toString());
-
-        console.log(`🔁 Queue reset — only video ${fileId} is now in queue`);
-
         res.json({ success: true, message: 'Queue reset and video added' });
     } catch (error) {
         console.error('Error completing upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
+    }
+};
+
+export const recordView = async (req, res) => {
+    try {
+        const { id: videoId } = req.params;
+
+        if (!videoId) {
+            return res.status(400).json({ error: "Video ID required" });
+        }
+
+        console.log(`📊 Recording view for video: ${videoId}`);
+
+        // Fetch updated video to return new view count
+        const updatedVideo = await updateViews(videoId);
+
+        if (!updatedVideo) {
+            return res.status(404).json({ error: "Video not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "View recorded successfully",
+            views: updatedVideo.viewCount || 0,
+            video: {
+                _id: updatedVideo._id,
+                title: updatedVideo.title,
+                views: updatedVideo.views || 0
+            }
+        });
+    } catch (error) {
+        console.error("❌ Error recording view:", error);
+        return res.status(500).json({
+            error: "Failed to record view",
+            message: error.message
+        });
     }
 };
 

@@ -24,6 +24,8 @@ const corsOptions = {
     "https://cini-shine-fullstack-hru4-git-main-dhanu-1991s-projects.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
     "https://frontend-six-black-29.vercel.app"
   ],
   credentials: true,
