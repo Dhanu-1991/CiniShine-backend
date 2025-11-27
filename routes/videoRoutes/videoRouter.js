@@ -8,7 +8,8 @@ import {
   getHLSMasterPlaylist,
   getHLSVariantPlaylist,
   getHLSSegment,
-  recordView
+  recordView,
+  getGeneralContent,
 } from "../../controllers/video-controllers/videoController.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 
@@ -22,12 +23,20 @@ router.post("/video/upload/init", universalTokenVerifier, uploadInit);
 
 // User content route (specific path)
 router.get("/video/user/my-content", universalTokenVerifier, getMyContent);
+router.get("/video/general/content", getGeneralContent);
 
-// HLS streaming routes (specific with multiple path segments)
+// HLS streaming routes (MUST come before general :id routes)
+// Master playlist route
 router.get('/video/:id/master.m3u8', universalTokenVerifier, getHLSMasterPlaylist);
+
+// Variant playlist route (for quality-specific playlists like 144p, 360p, etc.)
 router.get('/video/:id/variants/:variantFile', universalTokenVerifier, getHLSVariantPlaylist);
-router.get('/video/:userId/:videoId/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
+
+// Segment routes (for .ts, .m4s, .mp4, .aac files)
 router.get('/video/:id/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
+
+// Legacy segment route (if you have old URLs with userId in path)
+// router.get('/video/:userId/:videoId/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
 
 // View tracking route (POST not GET)
 router.post("/video/:id/view", universalTokenVerifier, recordView);

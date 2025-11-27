@@ -673,4 +673,54 @@ export const recordView = async (req, res) => {
         });
     }
 };
+export const getGeneralContent = async (req, res) => {
+    try {
+        console.log("🔍 Fetching latest 100 videos");
 
+        const videos = await Video.find()
+            .sort({ createdAt: -1 }) // newest first
+            .limit(100) // max 100 videos
+            .select('title description duration status thumbnailKey renditions createdAt tags');
+
+        console.log("✅ Videos found:", videos.length);
+
+        const videosWithUrls = await Promise.all(
+            videos.map(async (video) => {
+                let thumbnailUrl = null;
+                if (video.thumbnailKey) {
+                    try {
+                        thumbnailUrl = await getSignedUrl(
+                            s3Client,
+                            new GetObjectCommand({
+                                Bucket: process.env.S3_BUCKET,
+                                Key: video.thumbnailKey,
+                            }),
+                            { expiresIn: 3600 }
+                        );
+                    } catch (s3Error) {
+                        console.error('❌ Thumbnail error for video:', video._id);
+                        thumbnailUrl = null;
+                    }
+                }
+
+                return {
+                    _id: video._id,
+                    title: video.title,
+                    description: video.description,
+                    duration: video.duration,
+                    status: video.status,
+                    thumbnailUrl,
+                    tags: video.tags,
+                    createdAt: video.createdAt,
+                    renditions: video.renditions || [],
+                    adaptiveStreaming: video.status === 'completed'
+                };
+            })
+        );
+
+        res.json(videosWithUrls);
+    } catch (error) {
+        console.error('💥 Error fetching videos:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
