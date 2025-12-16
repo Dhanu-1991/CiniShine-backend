@@ -5,9 +5,9 @@ set -e
 # Keeps SQS + systemd framework. Applies safer FFmpeg profile, better logging,
 # progress output, and temp-dir selection to avoid 0-byte master playlist issues.
 
-REGION="eu-north-1"
-BUCKET_NAME="cinishine"
-QUEUE_URL="https://sqs.eu-north-1.amazonaws.com/107597587874/video-processing-queue"
+REGION="us-east-1"
+BUCKET_NAME="cini-shine"
+QUEUE_URL="https://sqs.us-east-1.amazonaws.com/107597587874/video-processing-queue"
 SSM_PREFIX="/cinishine"
 ASG_NAME="cinishine-worker-asg"
 INSTANCE_ID=""

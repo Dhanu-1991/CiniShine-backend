@@ -610,7 +610,6 @@ export const uploadInit = async (req, res) => {
             Bucket: process.env.S3_BUCKET,
             Key: key,
             ContentType: fileType,
-            ACL: "bucket-owner-full-control",
         });
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
@@ -623,7 +622,7 @@ export const uploadInit = async (req, res) => {
 
 export const getUserPreferences = async (req, res) => {
     try {
-        
+
         let raw = req.user;
 
         // If middleware assigned something like req.user = { id: '...' } keep that flow
@@ -696,80 +695,80 @@ export const getUserPreferences = async (req, res) => {
 };
 
 export const updateUserPreferences = async (req, res) => {
-  try {
-    let raw = req.user;
+    try {
+        let raw = req.user;
 
-    // extract userId robustly (same approach as getUserPreferences)
-    if (raw && typeof raw === "object") {
-      raw = raw.id ?? raw._id ?? raw.userId ?? raw;
-    }
-
-    let userId = null;
-    if (typeof raw === "string") {
-      const simpleMatch = raw.match(/^[a-fA-F0-9]{24}$/);
-      if (simpleMatch) {
-        userId = simpleMatch[0];
-      } else {
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed && (parsed.id || parsed._id || parsed.userId)) {
-            userId = parsed.id ?? parsed._id ?? parsed.userId;
-          }
-        } catch (e) {
-          // ignore
+        // extract userId robustly (same approach as getUserPreferences)
+        if (raw && typeof raw === "object") {
+            raw = raw.id ?? raw._id ?? raw.userId ?? raw;
         }
+
+        let userId = null;
+        if (typeof raw === "string") {
+            const simpleMatch = raw.match(/^[a-fA-F0-9]{24}$/);
+            if (simpleMatch) {
+                userId = simpleMatch[0];
+            } else {
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && (parsed.id || parsed._id || parsed.userId)) {
+                        userId = parsed.id ?? parsed._id ?? parsed.userId;
+                    }
+                } catch (e) {
+                    // ignore
+                }
+                if (!userId) {
+                    const regex = /[a-fA-F0-9]{24}/;
+                    const m = raw.match(regex);
+                    if (m) userId = m[0];
+                }
+            }
+        } else if (typeof raw === "number") {
+            userId = String(raw);
+        }
+
         if (!userId) {
-          const regex = /[a-fA-F0-9]{24}/;
-          const m = raw.match(regex);
-          if (m) userId = m[0];
+            console.warn("updateUserPreferences: could not extract userId from req.user:", req.user);
+            return res.status(400).json({ error: "User id not available" });
         }
-      }
-    } else if (typeof raw === "number") {
-      userId = String(raw);
+
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ error: "Invalid user id" });
+        }
+
+        const allowedKeys = [
+            "preferredRendition",
+            "preferredQuality",
+            "autoQuality",
+            "stableVolume",
+            "playbackSpeed",
+            "captionsEnabled"
+        ];
+
+        const incoming = req.body || {};
+        const safePrefs = {};
+        for (const k of allowedKeys) {
+            if (Object.prototype.hasOwnProperty.call(incoming, k)) {
+                safePrefs[k] = incoming[k];
+            }
+        }
+
+        if (Object.keys(safePrefs).length === 0) {
+            return res.status(400).json({ error: "No valid preference keys provided" });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        // persist under user.preferences (merge)
+        user.preferences = { ...(user.preferences || {}), ...safePrefs };
+        await user.save();
+
+        return res.json({ preferences: user.preferences });
+    } catch (err) {
+        console.error("Error in updateUserPreferences:", err);
+        return res.status(500).json({ error: "Failed to update user preferences" });
     }
-
-    if (!userId) {
-      console.warn("updateUserPreferences: could not extract userId from req.user:", req.user);
-      return res.status(400).json({ error: "User id not available" });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ error: "Invalid user id" });
-    }
-
-    const allowedKeys = [
-      "preferredRendition",
-      "preferredQuality",
-      "autoQuality",
-      "stableVolume",
-      "playbackSpeed",
-      "captionsEnabled"
-    ];
-
-    const incoming = req.body || {};
-    const safePrefs = {};
-    for (const k of allowedKeys) {
-      if (Object.prototype.hasOwnProperty.call(incoming, k)) {
-        safePrefs[k] = incoming[k];
-      }
-    }
-
-    if (Object.keys(safePrefs).length === 0) {
-      return res.status(400).json({ error: "No valid preference keys provided" });
-    }
-
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ error: "User not found" });
-
-    // persist under user.preferences (merge)
-    user.preferences = { ...(user.preferences || {}), ...safePrefs };
-    await user.save();
-
-    return res.json({ preferences: user.preferences });
-  } catch (err) {
-    console.error("Error in updateUserPreferences:", err);
-    return res.status(500).json({ error: "Failed to update user preferences" });
-  }
 };
 
 export const uploadComplete = async (req, res) => {
