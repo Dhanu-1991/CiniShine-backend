@@ -27,6 +27,12 @@ const userSchema = new mongoose.Schema({
         ref: "SelectedRole",
         required: false,
     },
+    
+  prefferedRendition: {
+    type:String,
+    default: `Auto`
+  }
+  ,
     roles: {
       type: [String],
       enum: ["Actor", "Writer", "Director", "Singer", "Producer", "Cinematographer", "Editor"],

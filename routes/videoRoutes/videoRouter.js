@@ -10,6 +10,8 @@ import {
   getHLSSegment,
   recordView,
   getGeneralContent,
+  getUserPreferences,
+  updateUserPreferences
 } from "../../controllers/video-controllers/videoController.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 
@@ -23,6 +25,12 @@ router.post("/video/upload/init", universalTokenVerifier, uploadInit);
 
 // User content route (specific path)
 router.get("/video/user/my-content", universalTokenVerifier, getMyContent);
+
+router.get("/user/preferences", universalTokenVerifier, getUserPreferences);
+
+// NEW: update user preferences
+router.put("/user/preferences", universalTokenVerifier, updateUserPreferences);
+
 router.get("/video/general/content", getGeneralContent);
 
 // HLS streaming routes (MUST come before general :id routes)

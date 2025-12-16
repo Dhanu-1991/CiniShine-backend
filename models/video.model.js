@@ -29,7 +29,7 @@ const Video = mongoose.model('Video', new mongoose.Schema({
   viewHistory: [{
     lastViewedAt: {
       type: Date
-      // removed default: Date.now — only set when view is actually recorded
+      
     },
     ipAddress: String,
     userAgent: String

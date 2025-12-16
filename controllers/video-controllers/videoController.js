@@ -1,5 +1,6 @@
 // controllers/video-controllers/videoController.js
 import Video from "../../models/video.model.js";
+import User from "../../models/user.model.js";
 import mongoose from 'mongoose';
 import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -547,7 +548,8 @@ export const getMyContent = async (req, res) => {
                     tags: video.tags,
                     createdAt: video.createdAt,
                     renditions: video.renditions || [],
-                    adaptiveStreaming: video.status === 'completed'
+                    adaptiveStreaming: video.status === 'completed',
+                    prefferedRendition: video.prefferedRendition || 'Auto'
                 };
             })
         );
@@ -608,6 +610,7 @@ export const uploadInit = async (req, res) => {
             Bucket: process.env.S3_BUCKET,
             Key: key,
             ContentType: fileType,
+            ACL: "bucket-owner-full-control",
         });
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
@@ -616,6 +619,157 @@ export const uploadInit = async (req, res) => {
         console.error("Error generating presigned URL:", error);
         res.status(500).json({ error: "Failed to generate upload URL" });
     }
+};
+
+export const getUserPreferences = async (req, res) => {
+    try {
+        
+        let raw = req.user;
+
+        // If middleware assigned something like req.user = { id: '...' } keep that flow
+        if (raw && typeof raw === "object") {
+            // try common fields
+            raw = raw.id ?? raw._id ?? raw.userId ?? raw;
+        }
+
+        // If it's still not a string, stringify for regex / parsing attempts
+        let userId = null;
+        if (typeof raw === "string") {
+            // 1) If string is a clean ObjectId (24 hex chars)
+            const simpleMatch = raw.match(/^[a-fA-F0-9]{24}$/);
+            if (simpleMatch) {
+                userId = simpleMatch[0];
+            } else {
+                // 2) Try JSON.parse (handles valid JSON like '{"id":"..."}')
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && (parsed.id || parsed._id || parsed.userId)) {
+                        userId = parsed.id ?? parsed._id ?? parsed.userId;
+                    }
+                } catch (e) {
+                    // ignore parse error - continue to regex fallback
+                }
+
+                // 3) Regex fallback: find any 24-hex substring inside the string
+                if (!userId) {
+                    const regex = /[a-fA-F0-9]{24}/;
+                    const m = raw.match(regex);
+                    if (m) userId = m[0];
+                }
+            }
+        } else if (typeof raw === "number") {
+            // unlikely, but handle numeric id scenario
+            userId = String(raw);
+        }
+
+        // If still not found, return default
+        if (!userId) {
+            console.warn("getUserPreferences: could not extract userId from req.user:", req.user);
+            return res.json({ preferredRendition: "Auto" });
+        }
+
+        // Validate ObjectId
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            console.warn("getUserPreferences: invalid ObjectId extracted:", userId);
+            return res.status(400).json({ error: "Invalid user id" });
+        }
+
+        // Query Video: select both correct and misspelled fields to be safe
+        const latest = await Video.findOne({ userId })
+            .sort({ createdAt: -1 })
+            .select("preferredRendition prefferedRendition")
+            .lean()
+            .exec();
+
+        console.log("Latest preferred rendition (safe lookup):", latest);
+
+        if (latest) {
+            const pref = latest.preferredRendition ?? latest.prefferedRendition ?? "Auto";
+            return res.json({ preferredRendition: pref });
+        }
+
+        return res.json({ preferredRendition: "Auto" });
+    } catch (err) {
+        console.error("Error in getUserPreferences:", err);
+        return res.status(500).json({ error: "Failed to get user preferences" });
+    }
+};
+
+export const updateUserPreferences = async (req, res) => {
+  try {
+    let raw = req.user;
+
+    // extract userId robustly (same approach as getUserPreferences)
+    if (raw && typeof raw === "object") {
+      raw = raw.id ?? raw._id ?? raw.userId ?? raw;
+    }
+
+    let userId = null;
+    if (typeof raw === "string") {
+      const simpleMatch = raw.match(/^[a-fA-F0-9]{24}$/);
+      if (simpleMatch) {
+        userId = simpleMatch[0];
+      } else {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && (parsed.id || parsed._id || parsed.userId)) {
+            userId = parsed.id ?? parsed._id ?? parsed.userId;
+          }
+        } catch (e) {
+          // ignore
+        }
+        if (!userId) {
+          const regex = /[a-fA-F0-9]{24}/;
+          const m = raw.match(regex);
+          if (m) userId = m[0];
+        }
+      }
+    } else if (typeof raw === "number") {
+      userId = String(raw);
+    }
+
+    if (!userId) {
+      console.warn("updateUserPreferences: could not extract userId from req.user:", req.user);
+      return res.status(400).json({ error: "User id not available" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+
+    const allowedKeys = [
+      "preferredRendition",
+      "preferredQuality",
+      "autoQuality",
+      "stableVolume",
+      "playbackSpeed",
+      "captionsEnabled"
+    ];
+
+    const incoming = req.body || {};
+    const safePrefs = {};
+    for (const k of allowedKeys) {
+      if (Object.prototype.hasOwnProperty.call(incoming, k)) {
+        safePrefs[k] = incoming[k];
+      }
+    }
+
+    if (Object.keys(safePrefs).length === 0) {
+      return res.status(400).json({ error: "No valid preference keys provided" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // persist under user.preferences (merge)
+    user.preferences = { ...(user.preferences || {}), ...safePrefs };
+    await user.save();
+
+    return res.json({ preferences: user.preferences });
+  } catch (err) {
+    console.error("Error in updateUserPreferences:", err);
+    return res.status(500).json({ error: "Failed to update user preferences" });
+  }
 };
 
 export const uploadComplete = async (req, res) => {
