@@ -1,26 +1,23 @@
-import nodemailer from 'nodemailer';
+//import nodemailer from 'nodemailer';
+import { Resend } from "resend";
 // import twilio from 'twilio';
 import dotenv from 'dotenv';
+
 dotenv.config();
- export async function sendOtpToEmail(email, otp) {
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
 
-  const mailOptions = {
-    from: `"CiniShine" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: 'Your OTP Code',
-    text: `Your OTP is ${otp}`,
-  };
+// Initialize Resend
+const resend = new Resend(process.env.RESEND_API_KEY);
 
+export async function sendOtpToEmail(email, otp) {
   try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent:', info);
+    await resend.emails.send({
+      from: `"CiniShine" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Your OTP Code',
+      html: `<h2>Your OTP is <b>${otp}</b></h2>`,
+    });
+
+    console.log('Email sent via Resend');
     return true;
   } catch (error) {
     console.error('Error sending email:', error);
