@@ -7,6 +7,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import stream from 'stream';
 import { promisify } from 'util';
 import { updateViews } from "./videoParameters.js";
+import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.js";
 
 const pipeline = promisify(stream.pipeline);
 
@@ -557,6 +558,131 @@ export const getMyContent = async (req, res) => {
         res.json(videosWithUrls);
     } catch (error) {
         console.error('💥 Error fetching user videos:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+}
+
+export const getContent = async (req, res) => {
+    try {
+        console.log('🔍 Fetching recommended content for user');
+        const userId = req.user?.id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        // Get current user
+        const user = await User.findById(userId);
+        console.log("user found : ", user);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Get user's own videos to exclude from recommendations
+        const userVideos = await Video.find({ userId }).select('_id');
+
+        // Get all completed videos with user info
+        const allVideos = await Video.find({ status: 'completed' })
+            .populate('userId', 'roles userName')
+            .sort({ createdAt: -1 }); // Get recent videos first
+        console.log("allVideos found : ", allVideos.length);
+        // Get personalized recommendations
+        const recommendedVideos = await recommendationEngine.getRecommendations(
+            user,
+            allVideos,
+            userVideos,
+            { limit: 100, excludeOwn: false } // Get more for better pagination, include own videos
+        );
+        console.log("recommendedVideos found : ", recommendedVideos.length);
+        // Apply pagination to recommendations
+        const paginatedVideos = recommendedVideos.slice(skip, skip + limit);
+
+        // Generate thumbnail URLs for the videos
+        const videosWithThumbnails = await Promise.all(
+            paginatedVideos.map(async (video) => {
+                let thumbnailUrl = null;
+                if (video.thumbnailKey) {
+                    try {
+                        thumbnailUrl = await getSignedUrl(
+                            s3Client,
+                            new GetObjectCommand({
+                                Bucket: process.env.S3_BUCKET,
+                                Key: video.thumbnailKey,
+                            }),
+                            { expiresIn: 3600 }
+                        );
+                    } catch (error) {
+                        console.error('Error generating thumbnail URL:', error);
+                    }
+                }
+
+                return {
+                    _id: video._id,
+                    title: video.title,
+                    description: video.description,
+                    duration: video.duration,
+                    thumbnailUrl,
+                    status: video.status,
+                    views: video.views,
+                    createdAt: video.createdAt,
+                    user: {
+                        _id: video.userId._id,
+                        userName: video.userId.userName,
+                        roles: video.userId.roles
+                    },
+                    recommendationScore: video.recommendationScore // Optional: for debugging
+                };
+            })
+        );
+
+        // Get total count for pagination info
+        const totalVideos = recommendedVideos.length;
+        const hasNextPage = skip + limit < totalVideos;
+
+        console.log(`✅ Recommended content served: page ${page}, ${videosWithThumbnails.length} videos`);
+
+        res.json({
+            videos: videosWithThumbnails,
+            pagination: {
+                currentPage: page,
+                totalPages: Math.ceil(totalVideos / limit),
+                totalVideos,
+                hasNextPage,
+                limit
+            }
+        });
+
+    } catch (error) {
+        console.error('💥 Error fetching recommended content:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+}
+
+export const getRecommendations = async (req, res) => {
+    try {
+        const videoId = req.params.videoId;
+        console.log('🎯 Fetching recommendations for video:', videoId);
+
+        if (!mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ error: 'Invalid video ID' });
+        }
+
+        const currentVideo = await Video.findById(videoId);
+        if (!currentVideo) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+
+        const { findSimilarVideos } = await import('../../algorithms/videoSimilarity.js');
+        const result = await findSimilarVideos(currentVideo, page, limit);
+
+        console.log(`✅ Recommendations served: page ${page}, ${result.videos.length} videos`);
+
+        res.json(result);
+
+    } catch (error) {
+        console.error('💥 Error fetching recommendations:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 }
