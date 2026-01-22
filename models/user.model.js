@@ -27,18 +27,48 @@ const userSchema = new mongoose.Schema({
         ref: "SelectedRole",
         required: false,
     },
-    
-  prefferedRendition: {
-    type:String,
-    default: `Auto`
-  }
-  ,
-    roles: {
-      type: [String],
-      enum: ["Actor", "Writer", "Director", "Singer", "Producer", "Cinematographer", "Editor"],
-      required: false,
 
-}
+    // Quality preferences
+    preferredQuality: {
+        type: String,
+        default: "auto",
+        enum: ["auto", "144p", "360p", "480p", "720p", "1080p", "1440p", "2160p"]
+    },
+    autoQualityEnabled: {
+        type: Boolean,
+        default: true
+    },
+    stableVolumeEnabled: {
+        type: Boolean,
+        default: true
+    },
+    playbackSpeed: {
+        type: Number,
+        default: 1.0,
+        min: 0.25,
+        max: 4.0
+    },
+
+    roles: {
+        type: [String],
+        enum: ["Actor", "Writer", "Director", "Singer", "Producer", "Cinematographer", "Editor"],
+        required: false,
+
+    },
+    channelName: {
+        type: String,
+        required: false,
+        trim: true,
+    },
+    channelDescription: {
+        type: String,
+        required: false,
+        trim: true,
+    },
+    subscriptions: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
 });
 
 const User = mongoose.model("User", userSchema);

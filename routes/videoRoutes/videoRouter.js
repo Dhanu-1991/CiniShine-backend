@@ -15,6 +15,8 @@ import {
   getContent,
   getRecommendations
 } from "../../controllers/video-controllers/videoController.js";
+import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/video-controllers/interactions.js";
+import { searchVideos } from "../../controllers/video-controllers/search.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 
 const router = express.Router();
@@ -40,6 +42,9 @@ router.get("/video/general/content", getGeneralContent);
 // Recommendations route
 router.get("/video/:videoId/recommendations", universalTokenVerifier, getRecommendations);
 
+// Search route
+router.get("/search", universalTokenVerifier, searchVideos);
+
 // HLS streaming routes (MUST come before general :id routes)
 // Master playlist route
 router.get('/video/:id/master.m3u8', universalTokenVerifier, getHLSMasterPlaylist);
@@ -55,6 +60,16 @@ router.get('/video/:id/segments/:segmentFile', universalTokenVerifier, getHLSSeg
 
 // View tracking route (POST not GET)
 router.post("/video/:id/view", universalTokenVerifier, recordView);
+
+// Like/Dislike routes
+router.post("/video/:id/like", universalTokenVerifier, likeVideo);
+router.post("/video/:id/dislike", universalTokenVerifier, dislikeVideo);
+
+// Subscribe route
+router.post("/user/:userId/subscribe", universalTokenVerifier, subscribeToUser);
+
+// Watch time tracking
+router.post("/video/:id/watch-time", universalTokenVerifier, updateWatchTime);
 
 // Status route (specific with /status suffix)
 router.get("/video/:id/status", universalTokenVerifier, getVideoStatus);

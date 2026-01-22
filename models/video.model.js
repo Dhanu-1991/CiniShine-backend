@@ -29,7 +29,7 @@ const Video = mongoose.model('Video', new mongoose.Schema({
   viewHistory: [{
     lastViewedAt: {
       type: Date
-      
+
     },
     ipAddress: String,
     userAgent: String
@@ -38,7 +38,26 @@ const Video = mongoose.model('Video', new mongoose.Schema({
     type: Date
     // removed default: Date.now — only set when view is actually recorded
   },
-  userId: mongoose.Schema.Types.ObjectId,
+  averageWatchTime: {
+    type: Number,
+    default: 0
+  },
+  watchCount: {
+    type: Number,
+    default: 0
+  },
+  likes: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  dislikes: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   createdAt: { type: Date, default: Date.now },
   processingStart: Date,
   processingEnd: Date,

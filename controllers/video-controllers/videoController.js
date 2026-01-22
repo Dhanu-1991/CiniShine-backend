@@ -56,7 +56,7 @@ export const getVideo = async (req, res) => {
         const videoId = req.params.id ?? req.params.videoId;
         console.log('📹 Fetching video metadata for ID:', videoId);
 
-        const video = await Video.findById(videoId).populate('userId', 'userName');
+        const video = await Video.findById(videoId).populate('userId', 'userName channelName');
         if (!video) {
             console.error('❌ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
@@ -100,7 +100,20 @@ export const getVideo = async (req, res) => {
             "createdAt : ", video.createdAt,
             "user : ", video.userId,
             "views : ", video.views,
+            "channelName : ", video.userId.channelName
         );
+
+        // Get subscriber count for the channel
+        const subscriberCount = await User.countDocuments({
+            subscriptions: video.userId._id
+        });
+
+        // Check if current user is subscribed (if authenticated)
+        let isSubscribed = false;
+        if (req.user?.id) {
+            const currentUser = await User.findById(req.user.id);
+            isSubscribed = currentUser?.subscriptions?.includes(video.userId._id) || false;
+        }
 
         res.json({
             _id: video._id,
@@ -115,6 +128,11 @@ export const getVideo = async (req, res) => {
             createdAt: video.createdAt,
             user: video.userId,
             views: video.views,
+            likes: video.likes?.length || 0,
+            dislikes: video.dislikes?.length || 0,
+            channelName: video.userId.channelName,
+            subscriberCount,
+            isSubscribed
         });
 
     } catch (error) {
@@ -799,21 +817,22 @@ export const getUserPreferences = async (req, res) => {
             return res.status(400).json({ error: "Invalid user id" });
         }
 
-        // Query Video: select both correct and misspelled fields to be safe
-        const latest = await Video.findOne({ userId })
-            .sort({ createdAt: -1 })
-            .select("preferredRendition prefferedRendition")
-            .lean()
-            .exec();
+        // Query User model for preferences
+        const user = await User.findById(userId).select(
+            "preferredQuality autoQualityEnabled stableVolumeEnabled playbackSpeed"
+        );
 
-        console.log("Latest preferred rendition (safe lookup):", latest);
-
-        if (latest) {
-            const pref = latest.preferredRendition ?? latest.prefferedRendition ?? "Auto";
-            return res.json({ preferredRendition: pref });
+        if (!user) {
+            console.warn("getUserPreferences: user not found:", userId);
+            return res.status(404).json({ error: "User not found" });
         }
 
-        return res.json({ preferredRendition: "Auto" });
+        return res.json({
+            preferredQuality: user.preferredQuality || "auto",
+            autoQualityEnabled: user.autoQualityEnabled !== false,
+            stableVolumeEnabled: user.stableVolumeEnabled !== false,
+            playbackSpeed: user.playbackSpeed || 1.0
+        });
     } catch (err) {
         console.error("Error in getUserPreferences:", err);
         return res.status(500).json({ error: "Failed to get user preferences" });
@@ -863,12 +882,10 @@ export const updateUserPreferences = async (req, res) => {
         }
 
         const allowedKeys = [
-            "preferredRendition",
             "preferredQuality",
-            "autoQuality",
-            "stableVolume",
-            "playbackSpeed",
-            "captionsEnabled"
+            "autoQualityEnabled",
+            "stableVolumeEnabled",
+            "playbackSpeed"
         ];
 
         const incoming = req.body || {};
@@ -883,14 +900,29 @@ export const updateUserPreferences = async (req, res) => {
             return res.status(400).json({ error: "No valid preference keys provided" });
         }
 
+        // Validate preferredQuality enum
+        if (safePrefs.preferredQuality && !["auto", "144p", "360p", "480p", "720p", "1080p", "1440p", "2160p"].includes(safePrefs.preferredQuality)) {
+            return res.status(400).json({ error: "Invalid preferred quality value" });
+        }
+
+        // Validate playbackSpeed range
+        if (typeof safePrefs.playbackSpeed === 'number' && (safePrefs.playbackSpeed < 0.25 || safePrefs.playbackSpeed > 4.0)) {
+            return res.status(400).json({ error: "Playback speed must be between 0.25 and 4.0" });
+        }
+
         const user = await User.findById(userId);
         if (!user) return res.status(404).json({ error: "User not found" });
 
-        // persist under user.preferences (merge)
-        user.preferences = { ...(user.preferences || {}), ...safePrefs };
+        // Update user preferences directly on the user model
+        Object.assign(user, safePrefs);
         await user.save();
 
-        return res.json({ preferences: user.preferences });
+        return res.json({
+            preferredQuality: user.preferredQuality,
+            autoQualityEnabled: user.autoQualityEnabled,
+            stableVolumeEnabled: user.stableVolumeEnabled,
+            playbackSpeed: user.playbackSpeed
+        });
     } catch (err) {
         console.error("Error in updateUserPreferences:", err);
         return res.status(500).json({ error: "Failed to update user preferences" });

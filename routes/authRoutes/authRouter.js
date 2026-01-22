@@ -9,6 +9,7 @@ import changePassword from '../../controllers/auth-controllers/changepassword.js
 import { verifyToken } from '../../controllers/auth-controllers/checkUser/verifytoken.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 import { userData } from '../../controllers/auth-controllers/userdata.js';
+import { updateChannel } from '../../controllers/auth-controllers/updateChannel.js';
 const authRouter = express.Router();
 //
 authRouter.post("/sendOtp/signup", sendOtp);
@@ -20,4 +21,5 @@ authRouter.post("/sendOtp/forgotPass", sendOtp);
 authRouter.post("/signin/changePassword", changePassword);
 // authRouter.get("/verify-token", verifyToken);
 authRouter.get("/user-data", universalTokenVerifier, userData);
+authRouter.put("/update-channel", universalTokenVerifier, updateChannel);
 export default authRouter;
