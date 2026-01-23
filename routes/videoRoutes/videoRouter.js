@@ -8,7 +8,6 @@ import {
   getHLSMasterPlaylist,
   getHLSVariantPlaylist,
   getHLSSegment,
-  recordView,
   getGeneralContent,
   getUserPreferences,
   updateUserPreferences,
@@ -58,8 +57,7 @@ router.get('/video/:id/segments/:segmentFile', universalTokenVerifier, getHLSSeg
 // Legacy segment route (if you have old URLs with userId in path)
 // router.get('/video/:userId/:videoId/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
 
-// View tracking route (POST not GET)
-router.post("/video/:id/view", universalTokenVerifier, recordView);
+
 
 // Like/Dislike routes
 router.post("/video/:id/like", universalTokenVerifier, likeVideo);

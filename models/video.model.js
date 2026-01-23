@@ -38,6 +38,10 @@ const Video = mongoose.model('Video', new mongoose.Schema({
     type: Number,
     default: 0
   },
+  totalWatchTime: {
+    type: Number,
+    default: 0
+  },
   likes: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

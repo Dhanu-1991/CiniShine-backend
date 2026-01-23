@@ -202,7 +202,14 @@ export const updateWatchTime = async (req, res) => {
         if (video.duration < MIN_VIDEO_DURATION ||
             watchTimeSeconds < MIN_WATCH_TIME ||
             watchTimeSeconds > MAX_WATCH_TIME) {
-            console.log('⚠️ Watch time not counted due to constraints');
+            console.log('⚠️ Watch time not counted due to constraints - video too short or watch time outlier');
+            console.log('📊 Skipped update details:', {
+                videoDuration: video.duration,
+                watchTimeSeconds,
+                minDuration: MIN_VIDEO_DURATION,
+                minWatch: MIN_WATCH_TIME,
+                maxWatch: MAX_WATCH_TIME
+            });
             return res.json({
                 message: "Watch time not counted (invalid duration or outlier)",
                 averageWatchTime: video.averageWatchTime || 0
@@ -212,10 +219,16 @@ export const updateWatchTime = async (req, res) => {
         // Check for bot-like behavior: rapid successive watches
         const recentWatchKey = `${userId}_${videoId}`;
         const now = Date.now();
-        const lastWatch = watchRateLimit.get(recentWatchKey) || 0;
+        const cacheEntry = watchRateLimit.get(recentWatchKey) || { lastWatch: 0, viewCounted: false };
 
-        if (now - lastWatch < 30000) { // Less than 30 seconds since last watch
-            console.log('⚠️ Watch time not counted due to rate limiting');
+        if (now - cacheEntry.lastWatch < 30000) { // Less than 30 seconds since last watch
+            console.log('⚠️ Watch time not counted due to rate limiting - too frequent updates');
+            console.log('📊 Rate limit details:', {
+                timeSinceLastWatch: now - cacheEntry.lastWatch,
+                limit: 30000,
+                userId,
+                videoId
+            });
             return res.json({
                 message: "Watch time not counted (too frequent)",
                 averageWatchTime: video.averageWatchTime || 0
@@ -223,50 +236,124 @@ export const updateWatchTime = async (req, res) => {
         }
 
         // Update rate limit cache
-        watchRateLimit.set(recentWatchKey, now);
+        watchRateLimit.set(recentWatchKey, { lastWatch: now, viewCounted: cacheEntry.viewCounted });
 
-        // Add to user's viewHistory if not added recently (once per hour per video)
-        const viewHistoryKey = `view_${userId}_${videoId}`;
-        const lastViewHistory = viewHistoryRateLimit.get(viewHistoryKey) || 0;
+        // Update total watch time
+        console.log('📊 Before update:', {
+            currentTotalWatchTime: video.totalWatchTime || 0,
+            currentViews: video.views || 0,
+            currentAverageWatchTime: video.averageWatchTime || 0,
+            incomingWatchTimeSeconds: watchTimeSeconds
+        });
 
-        if (now - lastViewHistory > 3600000) { // 1 hour
-            const user = await User.findById(userId);
-            if (user) {
-                user.viewHistory.push({
-                    videoId: videoId,
-                    lastViewedAt: new Date(),
-                    ipAddress: req.ip || req.connection.remoteAddress,
-                    userAgent: req.get('User-Agent')
-                });
-                await user.save();
-                viewHistoryRateLimit.set(viewHistoryKey, now);
-                console.log('✅ Added to user viewHistory');
-            }
-        }
+        video.totalWatchTime = (video.totalWatchTime || 0) + watchTimeSeconds;
 
-        // Calculate rolling average with diminishing weight for older watches
-        const currentAvg = video.averageWatchTime || 0;
-        const watchCount = video.watchCount || 0;
-
-        console.log('📈 Current stats:', { currentAvg, watchCount });
-
-        // Use exponential moving average to reduce impact of outliers
-        const alpha = 0.1; // Weight for new value (10%)
-        const newAverage = currentAvg * (1 - alpha) + watchTimeSeconds * alpha;
-
-        video.averageWatchTime = Math.round(newAverage * 100) / 100; // Round to 2 decimal places
-        video.watchCount = watchCount + 1;
-
-        console.log('💾 Saving video with new stats:', { averageWatchTime: video.averageWatchTime, watchCount: video.watchCount });
+        console.log('💾 Saving video with updated stats:', {
+            newTotalWatchTime: video.totalWatchTime,
+            newViews: video.views,
+            newAverageWatchTime: video.averageWatchTime,
+            calculation: `${video.totalWatchTime} / ${video.views || 0} = ${video.averageWatchTime}`
+        });
 
         await video.save();
 
+        // View counting logic
+        const duration = video.duration || 0;
+        let threshold;
+        if (duration < 10) {
+            threshold = 2; // For very short videos, require 2 seconds watch time
+        } else if (duration <= 60) {
+            threshold = 5; // For videos 10s to 1min, require 5 seconds
+        } else {
+            threshold = 15; // For videos >1min, require 15 seconds
+        }
+
+        console.log('📊 View counting check:', { watchTimeSeconds, threshold, duration, viewCounted: cacheEntry.viewCounted });
+
+        if (watchTimeSeconds >= threshold && !cacheEntry.viewCounted) {
+            console.log('✅ Threshold met, checking user and last view...');
+            const user = await User.findById(userId);
+            if (user) {
+                console.log('✅ User found, checking last view entry...');
+                const lastViewEntry = user.viewHistory.find(v => v.videoId.toString() === videoId);
+                let canCountView = true;
+
+                if (lastViewEntry) {
+                    const timeSinceLastView = now - new Date(lastViewEntry.lastViewedAt).getTime();
+                    console.log('📊 Last view found, time since:', timeSinceLastView / 1000, 'seconds');
+                    if (duration >= 60 && duration <= 600) { // 1-10 minutes
+                        if (timeSinceLastView < 60 * 1000) { // Less than 1 minute
+                            canCountView = false;
+                            console.log('⚠️ View not counted - too soon after last view (1min limit)');
+                        }
+                    } else if (duration > 600) { // >10 minutes
+                        if (timeSinceLastView < 30 * 60 * 1000) { // Less than 30 minutes
+                            canCountView = false;
+                            console.log('⚠️ View not counted - too soon after last view (30min limit)');
+                        }
+                    }
+                } else {
+                    console.log('📊 No last view entry found, can count view');
+                }
+
+                if (canCountView) {
+                    console.log('✅ Counting view...');
+                    video.views = (video.views || 0) + 1;
+                    video.averageWatchTime = video.totalWatchTime / video.views;
+
+                    if (lastViewEntry) {
+                        lastViewEntry.lastViewedAt = new Date();
+                        lastViewEntry.ipAddress = req.ip || req.connection.remoteAddress;
+                        lastViewEntry.userAgent = req.get('User-Agent');
+                    } else {
+                        user.viewHistory.push({
+                            videoId: videoId,
+                            lastViewedAt: new Date(),
+                            ipAddress: req.ip || req.connection.remoteAddress,
+                            userAgent: req.get('User-Agent')
+                        });
+                    }
+
+                    await user.save();
+                    await video.save();
+
+                    // Mark as counted in cache
+                    const updatedCache = watchRateLimit.get(recentWatchKey);
+                    if (updatedCache) {
+                        updatedCache.viewCounted = true;
+                    }
+
+                    console.log('✅ View counted successfully');
+                    console.log('📊 View stats:', {
+                        newViews: video.views,
+                        newAverageWatchTime: video.averageWatchTime,
+                        videoId,
+                        userId
+                    });
+                } else {
+                    console.log('⚠️ View not counted due to time restrictions');
+                }
+            } else {
+                console.log('❌ User not found for view counting');
+            }
+        } else {
+            console.log('⚠️ View not counted - threshold not met or already counted');
+        }
+
         console.log('✅ Watch time updated successfully');
+        console.log('📊 Final stats:', {
+            totalWatchTime: video.totalWatchTime,
+            views: video.views,
+            averageWatchTime: video.averageWatchTime,
+            videoId,
+            userId
+        });
 
         res.json({
             message: "Watch time updated",
             averageWatchTime: video.averageWatchTime,
-            watchCount: video.watchCount
+            views: video.views,
+            totalWatchTime: video.totalWatchTime
         });
 
     } catch (error) {
