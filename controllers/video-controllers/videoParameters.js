@@ -1,9 +1,10 @@
 import Video from "../../models/video.model.js";
+import User from "../../models/user.model.js";
 import mongoose from 'mongoose';
 
-const updateViews = async (videoId) => {
+const updateViews = async (videoId, userId, ipAddress, userAgent) => {
     try {
-        console.log("📊 updateViews called for:", videoId);
+        console.log("📊 updateViews called for:", videoId, "by user:", userId);
 
         // Validate videoId
         if (!mongoose.Types.ObjectId.isValid(videoId)) {
@@ -16,15 +17,25 @@ const updateViews = async (videoId) => {
         }
 
         video.views = (video.views || 0) + 1;
-        
+
         video.lastViewedAt = new Date();
 
-        // Add entry to viewHistory with current timestamp
-        video.viewHistory.push({
-            lastViewedAt: new Date(),
-        });
-
         await video.save();
+
+        // Update user's viewHistory if userId is provided
+        if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+            const user = await User.findById(userId);
+            if (user) {
+                user.viewHistory.push({
+                    videoId: videoId,
+                    lastViewedAt: new Date(),
+                    ipAddress: ipAddress,
+                    userAgent: userAgent
+                });
+                await user.save();
+                console.log(`✅ User's viewHistory updated for user: ${userId}`);
+            }
+        }
 
         console.log(`✅ View count updated: ${video.views} views | Last viewed: ${video.lastViewedAt}`);
         return video;

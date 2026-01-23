@@ -69,6 +69,17 @@ const userSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     }],
+    viewHistory: [{
+        videoId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Video'
+        },
+        lastViewedAt: {
+            type: Date
+        },
+        ipAddress: String,
+        userAgent: String
+    }],
 });
 
 const User = mongoose.model("User", userSchema);

@@ -26,14 +26,6 @@ const Video = mongoose.model('Video', new mongoose.Schema({
     playlistKey: String,
     codecs: String,
   }],
-  viewHistory: [{
-    lastViewedAt: {
-      type: Date
-
-    },
-    ipAddress: String,
-    userAgent: String
-  }],
   lastViewedAt: {
     type: Date
     // removed default: Date.now — only set when view is actually recorded

@@ -952,15 +952,18 @@ export const uploadComplete = async (req, res) => {
 export const recordView = async (req, res) => {
     try {
         const { id: videoId } = req.params;
+        const userId = req.user?.id;
+        const ipAddress = req.ip || req.connection.remoteAddress;
+        const userAgent = req.get('User-Agent');
 
         if (!videoId) {
             return res.status(400).json({ error: "Video ID required" });
         }
 
-        console.log(`📊 Recording view for video: ${videoId}`);
+        console.log(`📊 Recording view for video: ${videoId} by user: ${userId}`);
 
         // Fetch updated video to return new view count
-        const updatedVideo = await updateViews(videoId);
+        const updatedVideo = await updateViews(videoId, userId, ipAddress, userAgent);
 
         if (!updatedVideo) {
             return res.status(404).json({ error: "Video not found" });
