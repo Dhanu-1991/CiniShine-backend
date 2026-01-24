@@ -130,7 +130,7 @@ export const getVideo = async (req, res) => {
             views: video.views,
             likes: video.likes?.length || 0,
             dislikes: video.dislikes?.length || 0,
-            channelName: video.userId.channelName,
+            channelName: video.channelName,
             subscriberCount,
             isSubscribed
         });
@@ -647,7 +647,8 @@ export const getContent = async (req, res) => {
                         userName: video.userId.userName,
                         roles: video.userId.roles
                     },
-                    recommendationScore: video.recommendationScore // Optional: for debugging
+                    recommendationScore: video.recommendationScore,// Optional: for debugging
+                    channelName: video.channelName 
                 };
             })
         );

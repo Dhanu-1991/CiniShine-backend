@@ -6,6 +6,11 @@ const Video = mongoose.model('Video', new mongoose.Schema({
   originalKey: String,
   hlsMasterKey: String,
   thumbnailKey: String,
+  channelName: {
+        type: String,
+        required: false,
+        trim: true,
+    },
   views: {
     type: Number,
     default: 0
