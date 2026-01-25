@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: false,
     },
+    channelPicture: {
+        type: String,
+        required: false,
+    },
     selectedRolesId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "SelectedRole",

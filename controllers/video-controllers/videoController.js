@@ -600,7 +600,7 @@ export const getContent = async (req, res) => {
 
         // Get all completed videos with user info
         const allVideos = await Video.find({ status: 'completed' })
-            .populate('userId', 'roles userName')
+            .populate('userId', 'roles userName channelPicture')
             .sort({ createdAt: -1 }); // Get recent videos first
         console.log("allVideos found : ", allVideos.length);
         // Get personalized recommendations
@@ -648,10 +648,12 @@ export const getContent = async (req, res) => {
                         roles: video.userId.roles
                     },
                     recommendationScore: video.recommendationScore,// Optional: for debugging
-                    channelName: video.channelName 
+                    channelName: video.channelName,
+                    channelPicture: video.userId?.channelPicture || null
                 };
             })
         );
+        console.log("videosWithThumbnails prepared : ", videosWithThumbnails);
 
         // Get total count for pagination info
         const totalVideos = recommendedVideos.length;

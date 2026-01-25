@@ -43,6 +43,7 @@ export const selectedRoles = async (req, res) => {
 
     // --- Save application ---
     const application = new Application({
+      userId: tokenResponse.userId,
       personalInfo,
       location,
       roles,

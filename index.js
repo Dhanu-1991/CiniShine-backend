@@ -14,6 +14,7 @@ import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers
 import contactRouter from "./routes/contactRoutes/contactRouter.js";
 import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
 import videoRouter from "./routes/videoRoutes/videoRouter.js"; // Updated import
+import channelPicRouter from "./routes/pictureRoutes/channelPicRouter.js";
 
 const app = express();
 
@@ -54,10 +55,10 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.use("/api/v1/contact", contactRouter);
-app.use("/api/v1/payments", router);
+app.use("/api/v1/payments", router);//
 app.use("/api/v1/auth/authRoutes", authRouter);
 app.use("/api/data/selected-roles", selectedRolesRouter);
-// app.use("/api/v1/auth/user", selectedRolesRouter);
+app.use("/api/v1/user/channel-picture", channelPicRouter);
 app.use("/api/v2", videoRouter); // Updated route
 app.use(errorHandlingMiddleware);
 
