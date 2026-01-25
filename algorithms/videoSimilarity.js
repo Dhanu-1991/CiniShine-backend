@@ -19,10 +19,11 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
         const keywords = extractKeywords(currentVideo);
 
         // Find all completed videos except current one
+        // ✅ FIX: Populate all needed user fields
         const allVideos = await Video.find({
             status: 'completed',
             _id: { $ne: currentVideo._id }
-        }).populate('userId', 'userName');
+        }).populate('userId', 'userName channelName channelPicture roles');
 
         // Calculate similarity scores
         const scoredVideos = allVideos.map(video => ({
@@ -78,6 +79,10 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
                     views: video.views,
                     createdAt: video.createdAt,
                     user: video.userId,
+                    // ✅ FIX: Use channelName from video or fallback to userName
+                    channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+                    // ✅ FIX: Get channelPicture from populated userId
+                    channelPicture: video.userId?.channelPicture || null,
                     similarityScore: video.similarityScore
                 };
             })

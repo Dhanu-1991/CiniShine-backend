@@ -56,7 +56,7 @@ export const getVideo = async (req, res) => {
         const videoId = req.params.id ?? req.params.videoId;
         console.log('📹 Fetching video metadata for ID:', videoId);
 
-        const video = await Video.findById(videoId).populate('userId', 'userName channelName');
+        const video = await Video.findById(videoId).populate('userId', 'userName channelName channelPicture');
         if (!video) {
             console.error('❌ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
@@ -132,7 +132,8 @@ export const getVideo = async (req, res) => {
             dislikes: video.dislikes?.length || 0,
             channelName: video.channelName,
             subscriberCount,
-            isSubscribed
+            isSubscribed,
+            channelPicture: video.userId.channelPicture
         });
 
     } catch (error) {
