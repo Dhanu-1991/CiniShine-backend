@@ -7,10 +7,10 @@ const Video = mongoose.model('Video', new mongoose.Schema({
   hlsMasterKey: String,
   thumbnailKey: String,
   channelName: {
-        type: String,
-        required: false,
-        trim: true,
-    },
+    type: String,
+    required: false,
+    trim: true,
+  },
   views: {
     type: Number,
     default: 0
@@ -47,17 +47,18 @@ const Video = mongoose.model('Video', new mongoose.Schema({
     type: Number,
     default: 0
   },
-  likes: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
-  dislikes: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
+  likeCount: {
+    type: Number,
+    default: 0
+  },
+  dislikeCount: {
+    type: Number,
+    default: 0
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    index: true
   },
   createdAt: { type: Date, default: Date.now },
   processingStart: Date,

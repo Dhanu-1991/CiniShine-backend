@@ -1,6 +1,8 @@
 // controllers/video-controllers/videoController.js
 import Video from "../../models/video.model.js";
 import User from "../../models/user.model.js";
+import VideoReaction from "../../models/videoReaction.model.js";
+import Comment from "../../models/comment.model.js";
 import mongoose from 'mongoose';
 import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -115,6 +117,21 @@ export const getVideo = async (req, res) => {
             isSubscribed = currentUser?.subscriptions?.includes(video.userId._id) || false;
         }
 
+        // Check if current user liked/disliked - O(log N) indexed lookup
+        let userReaction = null;
+        if (req.user?.id) {
+            userReaction = await VideoReaction.findOne({
+                videoId,
+                userId: req.user.id
+            }).select('type');
+        }
+
+        // Get comment count for the video (only top-level comments, not replies)
+        const commentCount = await Comment.countDocuments({
+            videoId,
+            parentCommentId: null
+        });
+
         res.json({
             _id: video._id,
             title: video.title,
@@ -128,12 +145,14 @@ export const getVideo = async (req, res) => {
             createdAt: video.createdAt,
             user: video.userId,
             views: video.views,
-            likes: video.likes?.length || 0,
-            dislikes: video.dislikes?.length || 0,
+            likes: video.likeCount || 0,
+            dislikes: video.dislikeCount || 0,
+            userReaction: userReaction?.type || null,
             channelName: video.channelName,
             subscriberCount,
             isSubscribed,
-            channelPicture: video.userId.channelPicture
+            channelPicture: video.userId.channelPicture,
+            commentCount
         });
 
     } catch (error) {

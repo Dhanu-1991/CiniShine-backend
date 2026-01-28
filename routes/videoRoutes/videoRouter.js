@@ -17,42 +17,42 @@ import {
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/video-controllers/interactions.js";
 import { searchVideos } from "../../controllers/video-controllers/search.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
+import commentRouter from "../commentRoutes/commentRouter.js";
 
 const router = express.Router();
 
 // CRITICAL: Route order matters! Most specific first, general last
 
 // Upload routes (very specific)
-router.post("/video/upload/complete", universalTokenVerifier, uploadComplete);
-router.post("/video/upload/init", universalTokenVerifier, uploadInit);
+router.post("/upload/complete", universalTokenVerifier, uploadComplete);
+router.post("/upload/init", universalTokenVerifier, uploadInit);
 
 // User content route (specific path)
-router.get("/video/user/my-content", universalTokenVerifier, getMyContent);
-
-router.get("/video/user/content", universalTokenVerifier, getContent);
+router.get("/user/my-content", universalTokenVerifier, getMyContent);
+router.get("/user/content", universalTokenVerifier, getContent);
 
 router.get("/user/preferences", universalTokenVerifier, getUserPreferences);
 
 // NEW: update user preferences
 router.put("/user/preferences", universalTokenVerifier, updateUserPreferences);
 
-router.get("/video/general/content", getGeneralContent);
+router.get("/general/content", getGeneralContent);
 
 // Recommendations route
-router.get("/video/:videoId/recommendations", universalTokenVerifier, getRecommendations);
+router.get("/:videoId/recommendations", universalTokenVerifier, getRecommendations);
 
 // Search route
 router.get("/search", universalTokenVerifier, searchVideos);
 
 // HLS streaming routes (MUST come before general :id routes)
 // Master playlist route
-router.get('/video/:id/master.m3u8', universalTokenVerifier, getHLSMasterPlaylist);
+router.get('/:id/master.m3u8', universalTokenVerifier, getHLSMasterPlaylist);
 
 // Variant playlist route (for quality-specific playlists like 144p, 360p, etc.)
-router.get('/video/:id/variants/:variantFile', universalTokenVerifier, getHLSVariantPlaylist);
+router.get('/:id/variants/:variantFile', universalTokenVerifier, getHLSVariantPlaylist);
 
 // Segment routes (for .ts, .m4s, .mp4, .aac files)
-router.get('/video/:id/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
+router.get('/:id/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
 
 // Legacy segment route (if you have old URLs with userId in path)
 // router.get('/video/:userId/:videoId/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
@@ -60,19 +60,23 @@ router.get('/video/:id/segments/:segmentFile', universalTokenVerifier, getHLSSeg
 
 
 // Like/Dislike routes
-router.post("/video/:id/like", universalTokenVerifier, likeVideo);
-router.post("/video/:id/dislike", universalTokenVerifier, dislikeVideo);
+router.post("/:id/like", universalTokenVerifier, likeVideo);
+router.post("/:id/dislike", universalTokenVerifier, dislikeVideo);
+
+// Comments routes
+router.use("/:videoId/comments", commentRouter);
+// router.use("/comments", commentRouter);
 
 // Subscribe route
 router.post("/user/:userId/subscribe", universalTokenVerifier, subscribeToUser);
 
 // Watch time tracking
-router.post("/video/:id/watch-time", universalTokenVerifier, updateWatchTime);
+router.post("/:id/watch-time", universalTokenVerifier, updateWatchTime);
 
 // Status route (specific with /status suffix)
-router.get("/video/:id/status", universalTokenVerifier, getVideoStatus);
+router.get("/:id/status", universalTokenVerifier, getVideoStatus);
 
 // General video route (MUST BE LAST - catches all /video/:id)
-router.get("/video/:id", universalTokenVerifier, getVideo);
+router.get("/:id", universalTokenVerifier, getVideo);
 
 export default router;

@@ -24,3 +24,23 @@ export const universalTokenVerifier = async (req, res, next) => {
     return res.status(401).json({ message: "Invalid token" });
   }
 };
+
+// Optional token verifier - doesn't fail if no token, just sets req.user if valid
+export const optionalTokenVerifier = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) {
+      // No token is fine, just continue without user
+      return next();
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = { id: decoded.userId };
+    console.log("✅ Optional token verified for user:", decoded.userId);
+    next();
+  } catch (error) {
+    // Token invalid/expired, but we still continue without user
+    console.log("⚠️ Optional token verification failed:", error.message);
+    next();
+  }
+};

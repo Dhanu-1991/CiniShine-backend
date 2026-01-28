@@ -1,5 +1,6 @@
 import Video from "../../models/video.model.js";
 import User from "../../models/user.model.js";
+import VideoReaction from "../../models/videoReaction.model.js";
 
 // In-memory cache for rate limiting (resets on server restart)
 const watchRateLimit = new Map();
@@ -19,37 +20,55 @@ export const likeVideo = async (req, res) => {
             return res.status(404).json({ message: "Video not found" });
         }
 
-        // Initialize arrays if not exists
-        if (!video.likes) video.likes = [];
-        if (!video.dislikes) video.dislikes = [];
+        // Check if user already has a reaction - O(log N) indexed lookup
+        const existingReaction = await VideoReaction.findOne({
+            videoId,
+            userId
+        });
 
-        const userObjectId = userId;
-        const likedIndex = video.likes.indexOf(userObjectId);
-        const dislikedIndex = video.dislikes.indexOf(userObjectId);
-
-        if (likedIndex > -1) {
-            // User already liked, remove like (unlike)
-            video.likes.splice(likedIndex, 1);
-            await video.save();
-            return res.json({
-                message: "Like removed",
-                liked: false,
-                likes: video.likes.length,
-                dislikes: video.dislikes.length
-            });
-        } else {
-            // Add like
-            video.likes.push(userObjectId);
-            // Remove dislike if exists
-            if (dislikedIndex > -1) {
-                video.dislikes.splice(dislikedIndex, 1);
+        if (existingReaction) {
+            if (existingReaction.type === 'like') {
+                // User already liked, remove like (unlike)
+                await VideoReaction.deleteOne({ _id: existingReaction._id });
+                video.likeCount = Math.max(0, (video.likeCount || 1) - 1);
+                await video.save();
+                return res.json({
+                    message: "Like removed",
+                    liked: false,
+                    likes: video.likeCount,
+                    dislikes: video.dislikeCount,
+                    userReaction: null
+                });
+            } else {
+                // User disliked before, change to like
+                existingReaction.type = 'like';
+                await existingReaction.save();
+                video.dislikeCount = Math.max(0, (video.dislikeCount || 1) - 1);
+                video.likeCount = (video.likeCount || 0) + 1;
+                await video.save();
+                return res.json({
+                    message: "Changed to like",
+                    liked: true,
+                    likes: video.likeCount,
+                    dislikes: video.dislikeCount,
+                    userReaction: 'like'
+                });
             }
+        } else {
+            // Add new like
+            await VideoReaction.create({
+                videoId,
+                userId,
+                type: 'like'
+            });
+            video.likeCount = (video.likeCount || 0) + 1;
             await video.save();
             return res.json({
                 message: "Video liked",
                 liked: true,
-                likes: video.likes.length,
-                dislikes: video.dislikes.length
+                likes: video.likeCount,
+                dislikes: video.dislikeCount,
+                userReaction: 'like'
             });
         }
 
@@ -73,37 +92,55 @@ export const dislikeVideo = async (req, res) => {
             return res.status(404).json({ message: "Video not found" });
         }
 
-        // Initialize arrays if not exists
-        if (!video.likes) video.likes = [];
-        if (!video.dislikes) video.dislikes = [];
+        // Check if user already has a reaction - O(log N) indexed lookup
+        const existingReaction = await VideoReaction.findOne({
+            videoId,
+            userId
+        });
 
-        const userObjectId = userId;
-        const likedIndex = video.likes.indexOf(userObjectId);
-        const dislikedIndex = video.dislikes.indexOf(userObjectId);
-
-        if (dislikedIndex > -1) {
-            // User already disliked, remove dislike
-            video.dislikes.splice(dislikedIndex, 1);
-            await video.save();
-            return res.json({
-                message: "Dislike removed",
-                disliked: false,
-                likes: video.likes.length,
-                dislikes: video.dislikes.length
-            });
-        } else {
-            // Add dislike
-            video.dislikes.push(userObjectId);
-            // Remove like if exists
-            if (likedIndex > -1) {
-                video.likes.splice(likedIndex, 1);
+        if (existingReaction) {
+            if (existingReaction.type === 'dislike') {
+                // User already disliked, remove dislike
+                await VideoReaction.deleteOne({ _id: existingReaction._id });
+                video.dislikeCount = Math.max(0, (video.dislikeCount || 1) - 1);
+                await video.save();
+                return res.json({
+                    message: "Dislike removed",
+                    disliked: false,
+                    likes: video.likeCount,
+                    dislikes: video.dislikeCount,
+                    userReaction: null
+                });
+            } else {
+                // User liked before, change to dislike
+                existingReaction.type = 'dislike';
+                await existingReaction.save();
+                video.likeCount = Math.max(0, (video.likeCount || 1) - 1);
+                video.dislikeCount = (video.dislikeCount || 0) + 1;
+                await video.save();
+                return res.json({
+                    message: "Changed to dislike",
+                    disliked: true,
+                    likes: video.likeCount,
+                    dislikes: video.dislikeCount,
+                    userReaction: 'dislike'
+                });
             }
+        } else {
+            // Add new dislike
+            await VideoReaction.create({
+                videoId,
+                userId,
+                type: 'dislike'
+            });
+            video.dislikeCount = (video.dislikeCount || 0) + 1;
             await video.save();
             return res.json({
                 message: "Video disliked",
                 disliked: true,
-                likes: video.likes.length,
-                dislikes: video.dislikes.length
+                likes: video.likeCount,
+                dislikes: video.dislikeCount,
+                userReaction: 'dislike'
             });
         }
 

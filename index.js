@@ -59,7 +59,7 @@ app.use("/api/v1/payments", router);//
 app.use("/api/v1/auth/authRoutes", authRouter);
 app.use("/api/data/selected-roles", selectedRolesRouter);
 app.use("/api/v1/user/channel-picture", channelPicRouter);
-app.use("/api/v2", videoRouter); // Updated route
+app.use("/api/v2/video", videoRouter); // Updated route
 app.use(errorHandlingMiddleware);
 
 mongoose
