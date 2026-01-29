@@ -15,6 +15,7 @@ import contactRouter from "./routes/contactRoutes/contactRouter.js";
 import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
 import videoRouter from "./routes/videoRoutes/videoRouter.js"; // Updated import
 import channelPicRouter from "./routes/pictureRoutes/channelPicRouter.js";
+import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
 
 const app = express();
 
@@ -59,6 +60,7 @@ app.use("/api/v1/payments", router);//
 app.use("/api/v1/auth/authRoutes", authRouter);
 app.use("/api/data/selected-roles", selectedRolesRouter);
 app.use("/api/v1/user/channel-picture", channelPicRouter);
+app.use("/api/v1/user/profile-picture", profilePicRouter);
 app.use("/api/v2/video", videoRouter); // Updated route
 app.use(errorHandlingMiddleware);
 

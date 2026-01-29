@@ -13,9 +13,12 @@ const commentSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    // userName and userProfilePic are deprecated - we fetch live from User via populate
+    // Kept for backward compatibility with old comments
     userName: {
         type: String,
-        required: true
+        required: false,
+        default: null
     },
     userProfilePic: {
         type: String,
