@@ -42,18 +42,16 @@ export const createComment = async (req, res) => {
             }
         }
 
-        // Get user info
-        const user = await User.findById(userId).select("userName channelPicture");
+        // Get user info (channelName for display, channelPicture for avatar)
+        const user = await User.findById(userId).select("userName channelName channelPicture");
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
 
-        // Create comment
+        // Create comment - only store essential data (userId), fetch user details live via populate
         const newComment = await Comment.create({
             videoId,
             userId,
-            userName: user.userName,
-            userProfilePic: user.channelPicture || null,
             text: text.trim(),
             parentCommentId: parentCommentId || null
         });
@@ -69,14 +67,15 @@ export const createComment = async (req, res) => {
             );
         }
 
+        // Return with current user data (channelName and channelPicture fetched live)
         res.status(201).json({
             message: "Comment created successfully",
             comment: {
                 _id: newComment._id,
                 videoId: newComment.videoId,
                 userId: newComment.userId,
-                userName: newComment.userName,
-                userProfilePic: newComment.userProfilePic,
+                userName: user.channelName || user.userName, // display channelName
+                userProfilePic: user.channelPicture || null, // channelPicture only, fetched live
                 text: newComment.text,
                 likeCount: 0,
                 replyCount: 0,
@@ -112,7 +111,7 @@ export const getComments = async (req, res) => {
         const limitNum = Math.max(1, Math.min(50, parseInt(limit))); // Max 50 per page
         const skip = (pageNum - 1) * limitNum;
 
-        // Get top-level comments (no parent)
+        // Get top-level comments (no parent) and populate user data for live channelName & channelPicture
         const comments = await Comment.find({
             videoId,
             parentCommentId: null
@@ -120,7 +119,11 @@ export const getComments = async (req, res) => {
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limitNum)
-            .select("-likes")
+            .select("-likes -userProfilePic")
+            .populate({
+                path: "userId",
+                select: "userName channelName channelPicture"
+            })
             .lean();
 
         // Get total count
@@ -139,11 +142,17 @@ export const getComments = async (req, res) => {
             userLikedCommentIds = userLikedCommentIds.map(c => c._id.toString());
         }
 
-        // Format response
-        const formattedComments = comments.map(comment => ({
-            ...comment,
-            userLiked: userLikedCommentIds.includes(comment._id.toString())
-        }));
+        // Format response with live user data (channelName & channelPicture)
+        const formattedComments = comments.map(comment => {
+            const currentUser = comment.userId; // populated user object
+            return {
+                ...comment,
+                userId: currentUser?._id || comment.userId, // restore userId as ID
+                userName: currentUser?.channelName || currentUser?.userName || "Deleted User", // live fetch only
+                userProfilePic: currentUser?.channelPicture || null, // only channelPicture, null if user deleted
+                userLiked: userLikedCommentIds.includes(comment._id.toString())
+            };
+        });
 
         res.json({
             comments: formattedComments,
@@ -178,14 +187,18 @@ export const getCommentReplies = async (req, res) => {
         const limitNum = Math.max(1, Math.min(50, parseInt(limit)));
         const skip = (pageNum - 1) * limitNum;
 
-        // Get replies
+        // Get replies and populate user data for live channelName & channelPicture
         const replies = await Comment.find({
             parentCommentId: commentId
         })
             .sort({ createdAt: 1 }) // Oldest first for replies
             .skip(skip)
             .limit(limitNum)
-            .select("-likes")
+            .select("-likes -userProfilePic")
+            .populate({
+                path: "userId",
+                select: "userName channelName channelPicture"
+            })
             .lean();
 
         const total = await Comment.countDocuments({
@@ -202,10 +215,17 @@ export const getCommentReplies = async (req, res) => {
             userLikedReplyIds = userLikedReplyIds.map(r => r._id.toString());
         }
 
-        const formattedReplies = replies.map(reply => ({
-            ...reply,
-            userLiked: userLikedReplyIds.includes(reply._id.toString())
-        }));
+        // Format response with live user data (channelName & channelPicture)
+        const formattedReplies = replies.map(reply => {
+            const currentUser = reply.userId; // populated user object
+            return {
+                ...reply,
+                userId: currentUser?._id || reply.userId, // restore userId as ID
+                userName: currentUser?.channelName || currentUser?.userName || "Deleted User", // live fetch only
+                userProfilePic: currentUser?.channelPicture || null, // only channelPicture, null if user deleted
+                userLiked: userLikedReplyIds.includes(reply._id.toString())
+            };
+        });
 
         res.json({
             replies: formattedReplies,
