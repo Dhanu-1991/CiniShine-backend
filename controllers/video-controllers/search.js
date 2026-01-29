@@ -11,9 +11,49 @@ const s3Client = new S3Client({
 });
 
 /**
+ * Calculate relevance score between search terms and text
+ * @param {string[]} searchWords - Array of search words
+ * @param {string} text - Text to search in
+ * @param {number} exactMatchScore - Score for exact full match
+ * @param {number} wordMatchScore - Score for each word match
+ * @param {number} partialMatchScore - Score for partial match
+ */
+const calculateTextScore = (searchWords, text, exactMatchScore, wordMatchScore, partialMatchScore) => {
+    if (!text) return 0;
+
+    const textLower = text.toLowerCase();
+    const textWords = textLower.split(/\s+/).filter(w => w.length > 0);
+    let score = 0;
+
+    // Check for exact full phrase match
+    const fullSearchPhrase = searchWords.join(' ');
+    if (textLower === fullSearchPhrase) {
+        score += exactMatchScore;
+    }
+
+    // Check for each search word
+    searchWords.forEach(searchWord => {
+        // Exact word match (highest for individual words)
+        if (textWords.includes(searchWord)) {
+            score += wordMatchScore;
+        }
+        // Word starts with search term
+        else if (textWords.some(tw => tw.startsWith(searchWord))) {
+            score += wordMatchScore * 0.7;
+        }
+        // Partial/substring match
+        else if (textLower.includes(searchWord)) {
+            score += partialMatchScore;
+        }
+    });
+
+    return score;
+};
+
+/**
  * Advanced search algorithm for videos
- * Searches by title, description, and user name
- * Ranks results by relevance score
+ * Searches by title, description, channel name, and username
+ * Ranks results by relevance score with smart word matching
  */
 export const searchVideos = async (req, res) => {
     try {
@@ -32,50 +72,54 @@ export const searchVideos = async (req, res) => {
         }
 
         const searchTerm = query.trim().toLowerCase();
-        const skip = (page - 1) * limit;
+        const searchWords = searchTerm.split(/\s+/).filter(w => w.length > 0);
+        const skip = (page - 1) * parseInt(limit);
 
         // Get all completed videos with user info
         const allVideos = await Video.find({ status: 'completed' })
-            .populate('userId', 'userName channelName')
+            .populate('userId', 'userName channelName channelPicture')
             .sort({ createdAt: -1 });
 
         // Score and filter videos based on search relevance
         const scoredVideos = allVideos.map(video => {
-            const title = video.title?.toLowerCase() || '';
-            const description = video.description?.toLowerCase() || '';
-            const userName = video.userId?.userName?.toLowerCase() || '';
-            const channelName = video.userId?.channelName?.toLowerCase() || '';
+            const title = video.title || '';
+            const description = video.description || '';
+            const userName = video.userId?.userName || '';
+            const channelName = video.userId?.channelName || '';
 
             let score = 0;
 
-            // Exact matches get highest score
-            if (title === searchTerm) score += 100;
-            if (channelName === searchTerm) score += 90;
-            if (userName === searchTerm) score += 80;
+            // Title scoring (highest priority)
+            // Exact match: 100, word match: 50 each, partial: 30
+            score += calculateTextScore(searchWords, title, 100, 50, 30);
 
-            // Word matches in title
-            const titleWords = title.split(/\s+/);
-            if (titleWords.includes(searchTerm)) score += 50;
+            // Channel name scoring (high priority)
+            // Exact match: 90, word match: 40 each, partial: 25
+            score += calculateTextScore(searchWords, channelName, 90, 40, 25);
 
-            // Partial matches in title
-            if (title.includes(searchTerm)) score += 30;
+            // Username scoring (medium priority)
+            // Exact match: 80, word match: 30 each, partial: 20
+            score += calculateTextScore(searchWords, userName, 80, 30, 20);
 
-            // Matches in description
-            if (description.includes(searchTerm)) score += 20;
+            // Description scoring (lower priority)
+            // Exact match: 40, word match: 15 each, partial: 10
+            score += calculateTextScore(searchWords, description, 40, 15, 10);
 
-            // Matches in channel name
-            if (channelName.includes(searchTerm)) score += 25;
+            // Bonus for matching multiple search words (relevance boost)
+            const matchedWordsInTitle = searchWords.filter(sw =>
+                title.toLowerCase().includes(sw)
+            ).length;
+            if (matchedWordsInTitle > 1) {
+                score += matchedWordsInTitle * 10; // Bonus for multi-word matches
+            }
 
-            // Matches in username
-            if (userName.includes(searchTerm)) score += 15;
-
-            // Boost recent videos
+            // Recency boost (videos from last 30 days get up to 20 points)
             const daysSinceCreation = (new Date() - new Date(video.createdAt)) / (1000 * 60 * 60 * 24);
-            const recencyBoost = Math.max(0, 30 - daysSinceCreation); // Boost videos from last 30 days
+            const recencyBoost = Math.max(0, 20 - (daysSinceCreation * 0.66));
             score += recencyBoost;
 
-            // Boost popular videos
-            const popularityBoost = Math.min(video.views / 1000, 20); // Max 20 points for popular videos
+            // Popularity boost (up to 15 points based on views)
+            const popularityBoost = Math.min(video.views / 1000, 15);
             score += popularityBoost;
 
             return {
@@ -86,7 +130,7 @@ export const searchVideos = async (req, res) => {
             .sort((a, b) => b.searchScore - a.searchScore); // Sort by relevance
 
         // Apply pagination
-        const paginatedVideos = scoredVideos.slice(skip, skip + limit);
+        const paginatedVideos = scoredVideos.slice(skip, skip + parseInt(limit));
 
         // Generate thumbnail URLs
         const videosWithUrls = await Promise.all(
@@ -118,9 +162,10 @@ export const searchVideos = async (req, res) => {
                     dislikes: video.dislikes || 0,
                     createdAt: video.createdAt,
                     user: {
-                        _id: video.userId._id,
-                        userName: video.userId.userName,
-                        channelName: video.userId.channelName
+                        _id: video.userId?._id,
+                        userName: video.userId?.userName,
+                        channelName: video.userId?.channelName,
+                        channelPicture: video.userId?.channelPicture
                     },
                     searchScore: video.searchScore
                 };
@@ -128,13 +173,13 @@ export const searchVideos = async (req, res) => {
         );
 
         const totalVideos = scoredVideos.length;
-        const hasNextPage = skip + limit < totalVideos;
+        const hasNextPage = skip + parseInt(limit) < totalVideos;
 
         res.json({
             videos: videosWithUrls,
             pagination: {
                 currentPage: parseInt(page),
-                totalPages: Math.ceil(totalVideos / limit),
+                totalPages: Math.ceil(totalVideos / parseInt(limit)),
                 totalVideos,
                 hasNextPage,
                 limit: parseInt(limit)
