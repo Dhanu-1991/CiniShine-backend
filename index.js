@@ -13,7 +13,8 @@ import router from "./routes/paymentRoutes/cashfree.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
 import contactRouter from "./routes/contactRoutes/contactRouter.js";
 import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
-import videoRouter from "./routes/videoRoutes/videoRouter.js"; // Updated import
+import videoRouter from "./routes/videoRoutes/videoRouter.js";
+import contentRouter from "./routes/contentRoutes/contentRouter.js"; // New content routes
 import channelPicRouter from "./routes/pictureRoutes/channelPicRouter.js";
 import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
 
@@ -61,7 +62,8 @@ app.use("/api/v1/auth/authRoutes", authRouter);
 app.use("/api/data/selected-roles", selectedRolesRouter);
 app.use("/api/v1/user/channel-picture", channelPicRouter);
 app.use("/api/v1/user/profile-picture", profilePicRouter);
-app.use("/api/v2/video", videoRouter); // Updated route
+app.use("/api/v2/video", videoRouter);
+app.use("/api/v2/content", contentRouter); // Shorts, Audio, Posts
 app.use(errorHandlingMiddleware);
 
 mongoose

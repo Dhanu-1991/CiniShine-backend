@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-# Production Video Processing Worker Setup - STABLE HLS FOR LARGE VIDEOS
-# Keeps SQS + systemd framework. Applies safer FFmpeg profile, better logging,
-# progress output, and temp-dir selection to avoid 0-byte master playlist issues.
+# Production Media Processing Worker Setup - SUPPORTS VIDEOS, SHORTS, AUDIO
+# Handles multiple content types with appropriate processing pipelines
+# Version 4.0
 
 REGION="us-east-1"
 BUCKET_NAME="cini-shine"
-QUEUE_URL="https://sqs.us-east-1.amazonaws.com/107597587874/video-processing-queue"
+QUEUE_URL="https://sqs.us-east-1.amazonaws.com/856507207317/media-processing-queue"
 SSM_PREFIX="/cinishine"
 ASG_NAME="cinishine-worker-asg"
 INSTANCE_ID=""
@@ -30,7 +30,7 @@ fi
 INSTANCE_TYPE=$(ec2-metadata --instance-type 2>/dev/null | cut -d ' ' -f 2 || echo "unknown")
 
 exec > >(tee /var/log/worker-setup.log) 2>&1
-echo "=== CiniShine Production Worker Setup - $(date) ==="
+echo "=== CiniShine Media Processing Worker Setup - $(date) ==="
 echo "Instance ID: $INSTANCE_ID"
 echo "Instance Type: $INSTANCE_TYPE"
 
@@ -74,7 +74,7 @@ cd $APP_DIR
 cat > package.json << 'EOF'
 {
   "name": "cinishine-worker",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "type": "module",
   "scripts": {
     "worker": "node workers/worker.js"
@@ -115,6 +115,8 @@ LOG_LEVEL=info
 EOF
 
 mkdir -p models
+
+# Video model (for long-form videos)
 cat > models/video.model.js << 'JSEOF'
 import mongoose from 'mongoose';
 
@@ -158,19 +160,109 @@ const videoSchema = new mongoose.Schema({
 export default mongoose.model('Video', videoSchema);
 JSEOF
 
+# Content model (for shorts, audio, posts)
+cat > models/content.model.js << 'JSEOF'
+import mongoose from 'mongoose';
+
+const contentSchema = new mongoose.Schema({
+  contentType: {
+    type: String,
+    enum: ['short', 'audio', 'post'],
+    required: true,
+    index: true
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  title: {
+    type: String,
+    required: true,
+    trim: true,
+    maxlength: 200
+  },
+  description: {
+    type: String,
+    trim: true,
+    maxlength: 5000
+  },
+  channelName: String,
+  tags: [String],
+  category: String,
+  visibility: {
+    type: String,
+    enum: ['public', 'unlisted', 'private'],
+    default: 'public'
+  },
+  
+  // Media files (S3 keys)
+  originalKey: String,
+  hlsMasterKey: String,
+  processedKey: String,      // For audio: processed AAC file
+  thumbnailKey: String,
+  imageKey: String,          // For posts
+  
+  // Media metadata
+  duration: Number,
+  fileSize: Number,
+  mimeType: String,
+  
+  // Processing status
+  status: {
+    type: String,
+    enum: ['uploading', 'processing', 'completed', 'failed'],
+    default: 'uploading'
+  },
+  processingStart: Date,
+  processingEnd: Date,
+  processingError: String,
+  
+  // Renditions (for shorts)
+  renditions: [{
+    resolution: String,
+    bitrate: Number,
+    playlistKey: String,
+    codecs: String
+  }],
+  
+  // Audio-specific
+  audioMetadata: {
+    bitrate: Number,
+    sampleRate: Number,
+    channels: Number,
+    codec: String
+  },
+  
+  // Engagement
+  views: { type: Number, default: 0 },
+  likeCount: { type: Number, default: 0 },
+  dislikeCount: { type: Number, default: 0 },
+  commentCount: { type: Number, default: 0 }
+}, {
+  timestamps: true
+});
+
+contentSchema.index({ contentType: 1, status: 1, createdAt: -1 });
+contentSchema.index({ userId: 1, contentType: 1 });
+
+export default mongoose.model('Content', contentSchema);
+JSEOF
+
 mkdir -p workers
 cat > workers/worker.js << 'JSEOF'
 import 'dotenv/config';
 import { spawn, execSync } from 'child_process';
 import Video from '../models/video.model.js';
+import Content from '../models/content.model.js';
 import fs from 'fs';
 import path from 'path';
 import {
   S3Client,
   GetObjectCommand,
   PutObjectCommand,
-  HeadObjectCommand,
-  GetBucketLocationCommand
+  HeadObjectCommand
 } from '@aws-sdk/client-s3';
 import {
   SQSClient,
@@ -188,9 +280,9 @@ import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
 const ffprobePath = ffprobeInstaller.path;
 
-console.log("🎬 CiniShine Production Worker v3.0 - STABLE HLS");
+console.log("🎬 CiniShine Media Processing Worker v4.0 - VIDEOS, SHORTS, AUDIO");
 console.log("📊 Configuration:");
-console.log("   MONGO_URI:", process.env.MONGO_URI ? "✓" : "✗");
+console.log("   MONGO_URI:", process.env.MONGO_URI ? "✔" : "✗");
 console.log("   AWS_REGION:", process.env.AWS_REGION);
 console.log("   S3_BUCKET:", process.env.S3_BUCKET);
 console.log("   QUEUE_URL:", process.env.QUEUE_URL);
@@ -210,7 +302,12 @@ const asgClient = new AutoScalingClient({
   region: process.env.AWS_REGION
 });
 
-const ALL_RENDITIONS = [
+// ============================================================================
+// RENDITION PROFILES
+// ============================================================================
+
+// Full renditions for long-form videos (horizontal)
+const VIDEO_RENDITIONS = [
   { resolution: '256x144', bitrate: 200000, audioBitrate: '128k', name: '144p', width: 256, height: 144 },
   { resolution: '426x240', bitrate: 400000, audioBitrate: '128k', name: '240p', width: 426, height: 240 },
   { resolution: '640x360', bitrate: 800000, audioBitrate: '128k', name: '360p', width: 640, height: 360 },
@@ -219,15 +316,61 @@ const ALL_RENDITIONS = [
   { resolution: '1920x1080', bitrate: 5000000, audioBitrate: '128k', name: '1080p', width: 1920, height: 1080 }
 ];
 
-function getAppropriateRenditions(inputWidth, inputHeight) {
-  console.log(`📏 Input: ${inputWidth}x${inputHeight}`);
+// Optimized renditions for shorts (vertical, mobile-first)
+const SHORT_RENDITIONS = [
+  { resolution: '480x854', bitrate: 1500000, audioBitrate: '128k', name: '480p', width: 480, height: 854 },
+  { resolution: '720x1280', bitrate: 3000000, audioBitrate: '128k', name: '720p', width: 720, height: 1280 },
+  { resolution: '1080x1920', bitrate: 6000000, audioBitrate: '128k', name: '1080p', width: 1080, height: 1920 }
+];
+
+// ============================================================================
+// CONTENT TYPE DETECTION
+// ============================================================================
+
+function detectContentType(s3Key) {
+  // S3 key patterns:
+  // uploads/{userId}/{fileId}_*.mp4 → video
+  // shorts/{userId}/{fileId}_*.mp4 → short
+  // audio/{userId}/{fileId}_*.* → audio
+  
+  const parts = s3Key.split('/');
+  const folder = parts[0].toLowerCase();
+  
+  if (folder === 'uploads') return 'video';
+  if (folder === 'shorts') return 'short';
+  if (folder === 'audio') return 'audio';
+  
+  // Fallback: check file extension
+  const ext = path.extname(s3Key).toLowerCase();
+  if (['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg'].includes(ext)) {
+    return 'audio';
+  }
+  
+  return 'video'; // default
+}
+
+function getAppropriateRenditions(inputWidth, inputHeight, contentType) {
+  const isVertical = inputHeight > inputWidth;
+  const renditions = contentType === 'short' ? SHORT_RENDITIONS : VIDEO_RENDITIONS;
+  
+  console.log(`📐 Input: ${inputWidth}x${inputHeight} (${contentType}, ${isVertical ? 'vertical' : 'horizontal'})`);
+  
   const inputPixels = inputWidth * inputHeight;
-  const appropriate = ALL_RENDITIONS.filter(r => (r.width * r.height) <= (inputPixels * 1.1));
-  if (appropriate.length === 0) return [ALL_RENDITIONS[0]];
+  
+  const appropriate = renditions.filter(r => {
+    const targetPixels = r.width * r.height;
+    return targetPixels <= (inputPixels * 1.1);
+  });
+  
+  if (appropriate.length === 0) return [renditions[0]];
   appropriate.sort((a, b) => (a.width * a.height) - (b.width * b.height));
   console.log(`✅ Selected: ${appropriate.map(r => r.name).join(', ')}`);
   return appropriate;
 }
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
 
 async function getFFmpegPath() {
   try {
@@ -238,14 +381,8 @@ async function getFFmpegPath() {
   }
 }
 
-// choose temp base: prefer /mnt if it exists and has >5GB free, else /tmp
-function chooseTempBase() {
-  return '/tmp';
-}
-
 function getTempDir(fileId) {
-  const base = chooseTempBase();
-  return path.join(base, `video-processor-${fileId}-${Date.now()}`);
+  return path.join('/tmp', `media-processor-${fileId}-${Date.now()}`);
 }
 
 function ensureDirectoryExists(dirPath) {
@@ -255,9 +392,9 @@ function ensureDirectoryExists(dirPath) {
   }
 }
 
-async function getVideoMetadata(inputPath) {
+async function getMediaMetadata(inputPath) {
   return new Promise((resolve, reject) => {
-    console.log('📊 Analyzing video with FFprobe...');
+    console.log('📊 Analyzing media with FFprobe...');
     const proc = spawn(ffprobePath, [
       '-v', 'quiet',
       '-print_format', 'json',
@@ -278,15 +415,22 @@ async function getVideoMetadata(inputPath) {
           const metadata = JSON.parse(stdout);
           const videoStream = metadata.streams.find(s => s.codec_type === 'video');
           const audioStream = metadata.streams.find(s => s.codec_type === 'audio');
-          if (!videoStream) return reject(new Error('No video stream found'));
+          
           console.log('✅ Metadata:');
           console.log(`   Duration: ${parseFloat(metadata.format.duration).toFixed(2)}s`);
-          console.log(`   Video: ${videoStream.codec_name} ${videoStream.width}x${videoStream.height}`);
-          console.log(`   Audio: ${audioStream ? audioStream.codec_name : 'NONE'}`);
+          if (videoStream) {
+            console.log(`   Video: ${videoStream.codec_name} ${videoStream.width}x${videoStream.height}`);
+          }
+          if (audioStream) {
+            console.log(`   Audio: ${audioStream.codec_name} ${audioStream.sample_rate}Hz ${audioStream.channels}ch`);
+          }
+          
           resolve({
             duration: parseFloat(metadata.format.duration),
+            bitrate: parseInt(metadata.format.bit_rate) || 0,
             videoStream,
             audioStream,
+            hasVideo: !!videoStream,
             hasAudio: !!audioStream
           });
         } catch (parseError) {
@@ -303,14 +447,10 @@ async function getVideoMetadata(inputPath) {
 
 async function runFFmpeg(args, options = {}) {
   const ffmpegPath = await getFFmpegPath();
-
-  // Log first part of command to avoid huge log lines
   console.log(`🚀 FFmpeg command (first 12 args): ${args.slice(0, 12).join(' ')}...`);
 
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
-
-    // spawn and capture both stdout+stderr; we add progress via -progress pipe:2 in args
     const ffmpeg = spawn(ffmpegPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       ...options
@@ -321,30 +461,22 @@ async function runFFmpeg(args, options = {}) {
     let lastLogTime = 0;
     let hasError = false;
 
-    ffmpeg.stdout.on('data', (chunk) => {
-      // some builds may emit progress to stdout if pipe:1 used
-      const text = chunk.toString();
-      // optionally parse progress if needed
-    });
-
     ffmpeg.stderr.on('data', (data) => {
       const text = data.toString();
       stderr += text;
 
-      // parse classic ffmpeg progress lines (time=...) for human-readable progress
       if (text.includes('time=')) {
         const m = text.match(/time=(\d+:\d+:\d+\.\d+)/);
         if (m && m[1] !== lastProgress) {
           lastProgress = m[1];
           const now = Date.now();
-          if (now - lastLogTime > 2000) { // log at most every 2s
+          if (now - lastLogTime > 2000) {
             console.log(`   ⏱️  Progress: ${lastProgress}`);
             lastLogTime = now;
           }
         }
       }
 
-      // catch fatal errors early
       if (text.match(/(Error|Invalid|No such file or directory|Broken pipe)/i)) {
         hasError = true;
         console.error('⚠️  FFmpeg stderr flagged an error:', text.substring(0, 300));
@@ -353,7 +485,6 @@ async function runFFmpeg(args, options = {}) {
 
     ffmpeg.on('close', (code) => {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-      // Always print the tail of stderr (helps debugging even on success)
       if (stderr && stderr.length > 0) {
         const tail = stderr.slice(-1500);
         console.log('--- FFmpeg STDERR (tail) ---');
@@ -377,7 +508,6 @@ async function runFFmpeg(args, options = {}) {
   });
 }
 
-// Upload with verification (small, robust version)
 async function uploadToS3WithRetry(filePath, s3Key, contentType, cacheControl, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -394,7 +524,6 @@ async function uploadToS3WithRetry(filePath, s3Key, contentType, cacheControl, m
         CacheControl: cacheControl
       }));
 
-      // Verify size
       const head = await s3Client.send(new HeadObjectCommand({
         Bucket: process.env.S3_BUCKET,
         Key: s3Key
@@ -414,7 +543,7 @@ async function uploadToS3WithRetry(filePath, s3Key, contentType, cacheControl, m
   }
 }
 
-async function validateHLSOutput(outputDir, renditionCount, hasAudio) {
+async function validateHLSOutput(outputDir, renditionCount) {
   console.log('🔍 Validating HLS output...');
   const masterPath = path.join(outputDir, 'master.m3u8');
   if (!fs.existsSync(masterPath)) {
@@ -423,13 +552,7 @@ async function validateHLSOutput(outputDir, renditionCount, hasAudio) {
   }
   const masterStats = fs.statSync(masterPath);
   if (masterStats.size === 0) {
-    const files = fs.readdirSync(outputDir);
-    const info = files.map(f => {
-      const p = path.join(outputDir, f);
-      const s = fs.statSync(p);
-      return `${f}: ${s.isDirectory() ? 'DIR' : s.size+' bytes'}`;
-    }).join(', ');
-    throw new Error(`Master playlist is EMPTY; output contents: ${info}`);
+    throw new Error('Master playlist is EMPTY');
   }
   const masterContent = fs.readFileSync(masterPath, 'utf8');
   if (!masterContent.includes('#EXTM3U')) {
@@ -447,10 +570,6 @@ async function validateHLSOutput(outputDir, renditionCount, hasAudio) {
   let totalSegments = 0;
   for (const dir of renditionDirs) {
     const dirPath = path.join(outputDir, dir);
-    const playlistPath = path.join(dirPath, 'playlist.m3u8');
-    if (!fs.existsSync(playlistPath)) throw new Error(`Missing playlist ${dir}/playlist.m3u8`);
-    const playlistContent = fs.readFileSync(playlistPath, 'utf8');
-    if (!playlistContent.includes('#EXTM3U')) throw new Error(`Invalid playlist for ${dir}`);
     const segments = fs.readdirSync(dirPath).filter(f => f.endsWith('.ts'));
     if (segments.length === 0) throw new Error(`No .ts segments for ${dir}`);
     totalSegments += segments.length;
@@ -487,8 +606,12 @@ async function extendVisibility(receiptHandle) {
   }
 }
 
-async function processVideo(fileId, receiptHandle) {
-  console.log(`\n🎬 Processing: ${fileId}`);
+// ============================================================================
+// VIDEO PROCESSING (Long-form videos from /uploads)
+// ============================================================================
+
+async function processVideo(fileId, userId, s3Key, receiptHandle) {
+  console.log(`\n🎬 Processing VIDEO: ${fileId}`);
   console.log('═'.repeat(70));
 
   let tempDir;
@@ -500,7 +623,6 @@ async function processVideo(fileId, receiptHandle) {
     if (!video) throw new Error(`Video ${fileId} not found`);
 
     await Video.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), error: null });
-
     visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
 
     tempDir = getTempDir(fileId);
@@ -511,6 +633,7 @@ async function processVideo(fileId, receiptHandle) {
     ensureDirectoryExists(tempDir);
     ensureDirectoryExists(outputDir);
 
+    // Download
     console.log('📥 Downloading from S3...');
     const { Body } = await s3Client.send(new GetObjectCommand({
       Bucket: process.env.S3_BUCKET,
@@ -525,44 +648,37 @@ async function processVideo(fileId, receiptHandle) {
     const fileStats = fs.statSync(inputPath);
     console.log(`✅ Downloaded ${(fileStats.size/1024/1024).toFixed(2)} MB`);
 
-    const metadata = await getVideoMetadata(inputPath);
+    const metadata = await getMediaMetadata(inputPath);
     const { duration, videoStream, hasAudio } = metadata;
 
-    const estMin = Math.ceil(duration / 60 * 1.5);
-    console.log(`⏱️  Duration: ${Math.floor(duration/60)}m ${Math.floor(duration%60)}s`);
-    console.log(`⏱️  Estimated: ~${estMin} min`);
-
+    // Generate thumbnail
     console.log('🖼️  Generating thumbnail...');
+    const thumbTime = Math.min(5, duration / 2);
     await runFFmpeg([
-  '-ss','5',
-  '-i', inputPath,
-  '-frames:v','1',
-  '-vf','scale=320:-2',
-  '-q:v','2',
-  '-update','1',
-  '-y',
-  thumbnailPath
-]);
+      '-ss', thumbTime.toString(),
+      '-i', inputPath,
+      '-frames:v', '1',
+      '-vf', 'scale=320:-2',
+      '-q:v', '2',
+      '-update', '1',
+      '-y',
+      thumbnailPath
+    ]);
 
+    // Get renditions
+    const renditions = getAppropriateRenditions(videoStream.width, videoStream.height, 'video');
+    console.log(`🎥 Transcoding ${renditions.length} renditions...`);
 
-    const renditions = getAppropriateRenditions(videoStream.width, videoStream.height);
-    console.log(`🎥 Transcoding ${renditions.length} renditions (Audio: ${hasAudio ? 'YES' : 'NO'})...`);
-
-    
-    // Build simple filter_complex
+    // Build FFmpeg command
     const filterComplex = renditions.map((r, i) => `[v${i}]scale=${r.resolution}[v${i}out]`).join('; ');
     const baseFilter = `[0:v]split=${renditions.length}${renditions.map((_, i) => `[v${i}]`).join('')}; `;
 
     const ffmpegArgs = [
-      '-hide_banner',
-      '-loglevel','info',
-      '-progress','pipe:2',
-      '-y',
+      '-hide_banner', '-loglevel', 'info', '-progress', 'pipe:2', '-y',
       '-i', inputPath,
       '-filter_complex', baseFilter + filterComplex,
     ];
 
-    // Map video & audio for each rendition, include rate control and crf
     renditions.forEach((rendition, i) => {
       ffmpegArgs.push(
         '-map', `[v${i}out]`,
@@ -570,34 +686,24 @@ async function processVideo(fileId, receiptHandle) {
         '-b:v:' + i, rendition.bitrate.toString(),
         '-maxrate:v:' + i, Math.round(rendition.bitrate * 1.5).toString(),
         '-bufsize:v:' + i, Math.round(rendition.bitrate * 2).toString(),
-        '-preset','medium',
-        '-crf','23',
+        '-preset', 'medium', '-crf', '23',
         '-profile:v:' + i, 'main',
-        '-g:v:' + i, '48',
-        '-keyint_min:v:' + i, '48',
-        '-sc_threshold:v:' + i, '0'
+        '-g:v:' + i, '48', '-keyint_min:v:' + i, '48', '-sc_threshold:v:' + i, '0'
       );
-
       if (hasAudio) {
-        // map audio and force stereo / sample rate
         ffmpegArgs.push(
           '-map', '0:a:0?',
           '-c:a:' + i, 'aac',
           '-b:a:' + i, rendition.audioBitrate,
-          '-ar:a:' + i, '48000',
-          '-ac:a:' + i, '2'
+          '-ar:a:' + i, '48000', '-ac:a:' + i, '2'
         );
       }
     });
 
-    // HLS options
     ffmpegArgs.push(
-      '-f','hls',
-      '-hls_time','6',
-      '-hls_list_size','0',
-      '-hls_playlist_type','vod',
-      '-hls_flags','independent_segments',
-      '-hls_segment_type','mpegts',
+      '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0',
+      '-hls_playlist_type', 'vod', '-hls_flags', 'independent_segments',
+      '-hls_segment_type', 'mpegts',
       '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts'),
       '-master_pl_name', 'master.m3u8'
     );
@@ -605,37 +711,30 @@ async function processVideo(fileId, receiptHandle) {
     const varStreamMap = renditions.map((r, i) => hasAudio ? `v:${i},a:${i},name:${r.name}` : `v:${i},name:${r.name}`).join(' ');
     ffmpegArgs.push('-var_stream_map', varStreamMap, path.join(outputDir, 'stream_%v', 'playlist.m3u8'));
 
-    console.log('🎬 Starting FFmpeg transcoding...');
     await runFFmpeg(ffmpegArgs);
-    console.log('✅ Transcoding complete');
 
-    // Validate outputs BEFORE upload
-    const validation = await validateHLSOutput(outputDir, renditions.length, hasAudio);
+    // Validate and upload
+    const validation = await validateHLSOutput(outputDir, renditions.length);
 
     console.log('☁️  Uploading to S3...');
-    let uploadCount = 0;
-
-    const masterKey = `hls/${video.userId}/${fileId}/master.m3u8`;
+    const masterKey = `hls/${userId}/${fileId}/master.m3u8`;
     await uploadToS3WithRetry(path.join(outputDir, 'master.m3u8'), masterKey, 'application/vnd.apple.mpegurl', 'max-age=300');
-    uploadCount++;
 
     for (const dir of validation.renditionDirs) {
       const dirPath = path.join(outputDir, dir);
       const files = fs.readdirSync(dirPath).sort();
-      console.log(`   📁 Uploading ${dir} (${files.length} files)...`);
       for (const file of files) {
         const filePath = path.join(dirPath, file);
-        const fileKey = `hls/${video.userId}/${fileId}/${dir}/${file}`;
+        const fileKey = `hls/${userId}/${fileId}/${dir}/${file}`;
         const contentType = file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/MP2T';
         const cacheControl = file.endsWith('.ts') ? 'max-age=31536000' : 'max-age=300';
         await uploadToS3WithRetry(filePath, fileKey, contentType, cacheControl);
-        uploadCount++;
       }
     }
 
-    const thumbnailKey = `thumbnails/${video.userId}/${fileId}.jpg`;
+    // Thumbnail to videos folder
+    const thumbnailKey = `thumbnails/videos/${userId}/${fileId}.jpg`;
     await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
-    uploadCount++;
 
     // Update DB
     await Video.findByIdAndUpdate(fileId, {
@@ -647,7 +746,7 @@ async function processVideo(fileId, receiptHandle) {
         resolution: r.resolution,
         bitrate: r.bitrate,
         name: r.name,
-        playlistKey: `hls/${video.userId}/${fileId}/stream_${i}/playlist.m3u8`,
+        playlistKey: `hls/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
         codecs: hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028'
       })),
       processingEnd: new Date(),
@@ -658,45 +757,337 @@ async function processVideo(fileId, receiptHandle) {
     });
 
     const totalMinutes = ((Date.now() - processStart) / 1000 / 60).toFixed(2);
-    console.log(`✅ COMPLETE: ${fileId} in ${totalMinutes} min`);
-    console.log('═'.repeat(70));
-    return { success: true, uploadCount };
+    console.log(`✅ VIDEO COMPLETE: ${fileId} in ${totalMinutes} min`);
+    return { success: true };
 
   } catch (error) {
     console.error('❌ ERROR:', error.message);
     await Video.findByIdAndUpdate(fileId, {
-      status: 'failed',
-      error: error.message,
-      processingEnd: new Date()
+      status: 'failed', error: error.message, processingEnd: new Date()
     }).catch(e => console.error('DB update failed:', e));
     throw error;
   } finally {
     if (visibilityExtender) clearInterval(visibilityExtender);
     if (tempDir && fs.existsSync(tempDir)) {
-      try {
-        console.log('🧹 Cleaning temp files...');
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch (err) {
-        console.error('⚠️ Cleanup failed:', err.message);
-      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   }
 }
 
-async function checkQueueEmpty() {
+// ============================================================================
+// SHORT PROCESSING (Vertical videos ≤60s from /shorts)
+// ============================================================================
+
+async function processShort(fileId, userId, s3Key, receiptHandle) {
+  console.log(`\n📱 Processing SHORT: ${fileId}`);
+  console.log('═'.repeat(70));
+
+  let tempDir;
+  let visibilityExtender;
+  const processStart = Date.now();
+
   try {
-    const result = await sqsClient.send(new GetQueueAttributesCommand({
-      QueueUrl: process.env.QUEUE_URL,
-      AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible']
+    const content = await Content.findById(fileId);
+    if (!content) throw new Error(`Short ${fileId} not found`);
+
+    await Content.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), processingError: null });
+    visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
+
+    tempDir = getTempDir(fileId);
+    const inputPath = path.join(tempDir, 'input.mp4');
+    const outputDir = path.join(tempDir, 'hls');
+    const thumbnailPath = path.join(tempDir, 'thumbnail.jpg');
+
+    ensureDirectoryExists(tempDir);
+    ensureDirectoryExists(outputDir);
+
+    // Download
+    console.log('📥 Downloading from S3...');
+    const { Body } = await s3Client.send(new GetObjectCommand({
+      Bucket: process.env.S3_BUCKET,
+      Key: content.originalKey,
     }));
-    const visible = parseInt(result.Attributes.ApproximateNumberOfMessages || '0');
-    const notVisible = parseInt(result.Attributes.ApproximateNumberOfMessagesNotVisible || '0');
-    return visible === 0 && notVisible === 0;
-  } catch (err) {
-    console.error('⚠️  Queue check failed:', err.message);
-    return false;
+
+    await new Promise((resolve, reject) => {
+      const ws = fs.createWriteStream(inputPath);
+      Body.pipe(ws).on('finish', resolve).on('error', reject);
+    });
+
+    const fileStats = fs.statSync(inputPath);
+    console.log(`✅ Downloaded ${(fileStats.size/1024/1024).toFixed(2)} MB`);
+
+    const metadata = await getMediaMetadata(inputPath);
+    const { duration, videoStream, hasAudio } = metadata;
+
+    // Validate duration (shorts should be ≤60s)
+    if (duration > 65) {
+      console.warn(`⚠️  Short duration ${duration}s exceeds 60s limit`);
+    }
+
+    // Generate thumbnail (first frame for shorts)
+    console.log('🖼️  Generating thumbnail...');
+    await runFFmpeg([
+      '-ss', '0.5',
+      '-i', inputPath,
+      '-frames:v', '1',
+      '-vf', 'scale=360:-2',
+      '-q:v', '2',
+      '-update', '1',
+      '-y',
+      thumbnailPath
+    ]);
+
+    // Detect orientation
+    const isVertical = videoStream.height > videoStream.width;
+    const renditions = getAppropriateRenditions(videoStream.width, videoStream.height, 'short');
+    
+    console.log(`📱 Transcoding ${renditions.length} renditions (vertical: ${isVertical})...`);
+
+    // Build FFmpeg command - handle vertical scaling
+    const scaleFilter = renditions.map((r, i) => {
+      // For vertical videos, swap width/height in scale
+      const scale = isVertical 
+        ? `scale=${r.height}:${r.width}` 
+        : `scale=${r.resolution}`;
+      return `[v${i}]${scale}[v${i}out]`;
+    }).join('; ');
+    const baseFilter = `[0:v]split=${renditions.length}${renditions.map((_, i) => `[v${i}]`).join('')}; `;
+
+    const ffmpegArgs = [
+      '-hide_banner', '-loglevel', 'info', '-progress', 'pipe:2', '-y',
+      '-i', inputPath,
+      '-filter_complex', baseFilter + scaleFilter,
+    ];
+
+    renditions.forEach((rendition, i) => {
+      ffmpegArgs.push(
+        '-map', `[v${i}out]`,
+        '-c:v:' + i, 'libx264',
+        '-b:v:' + i, rendition.bitrate.toString(),
+        '-maxrate:v:' + i, Math.round(rendition.bitrate * 1.5).toString(),
+        '-bufsize:v:' + i, Math.round(rendition.bitrate * 2).toString(),
+        '-preset', 'fast', '-crf', '21',  // Faster preset, better quality for shorts
+        '-profile:v:' + i, 'high',
+        '-g:v:' + i, '30', '-keyint_min:v:' + i, '30', '-sc_threshold:v:' + i, '0'
+      );
+      if (hasAudio) {
+        ffmpegArgs.push(
+          '-map', '0:a:0?',
+          '-c:a:' + i, 'aac',
+          '-b:a:' + i, rendition.audioBitrate,
+          '-ar:a:' + i, '48000', '-ac:a:' + i, '2'
+        );
+      }
+    });
+
+    ffmpegArgs.push(
+      '-f', 'hls', '-hls_time', '2', '-hls_list_size', '0',  // Shorter segments for shorts
+      '-hls_playlist_type', 'vod', '-hls_flags', 'independent_segments',
+      '-hls_segment_type', 'mpegts',
+      '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts'),
+      '-master_pl_name', 'master.m3u8'
+    );
+
+    const varStreamMap = renditions.map((r, i) => hasAudio ? `v:${i},a:${i},name:${r.name}` : `v:${i},name:${r.name}`).join(' ');
+    ffmpegArgs.push('-var_stream_map', varStreamMap, path.join(outputDir, 'stream_%v', 'playlist.m3u8'));
+
+    await runFFmpeg(ffmpegArgs);
+
+    // Validate and upload
+    const validation = await validateHLSOutput(outputDir, renditions.length);
+
+    console.log('☁️  Uploading to S3...');
+    // Upload to hls/shorts/ folder
+    const masterKey = `hls/shorts/${userId}/${fileId}/master.m3u8`;
+    await uploadToS3WithRetry(path.join(outputDir, 'master.m3u8'), masterKey, 'application/vnd.apple.mpegurl', 'max-age=300');
+
+    for (const dir of validation.renditionDirs) {
+      const dirPath = path.join(outputDir, dir);
+      const files = fs.readdirSync(dirPath).sort();
+      for (const file of files) {
+        const filePath = path.join(dirPath, file);
+        const fileKey = `hls/shorts/${userId}/${fileId}/${dir}/${file}`;
+        const contentType = file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/MP2T';
+        const cacheControl = file.endsWith('.ts') ? 'max-age=31536000' : 'max-age=300';
+        await uploadToS3WithRetry(filePath, fileKey, contentType, cacheControl);
+      }
+    }
+
+    // Thumbnail to shorts folder
+    const thumbnailKey = `thumbnails/shorts/${userId}/${fileId}.jpg`;
+    await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
+
+    // Update DB
+    await Content.findByIdAndUpdate(fileId, {
+      status: 'completed',
+      hlsMasterKey: masterKey,
+      thumbnailKey,
+      duration,
+      fileSize: fileStats.size,
+      renditions: renditions.map((r, i) => ({
+        resolution: r.resolution,
+        bitrate: r.bitrate,
+        playlistKey: `hls/shorts/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
+        codecs: hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028'
+      })),
+      processingEnd: new Date()
+    });
+
+    const totalSeconds = ((Date.now() - processStart) / 1000).toFixed(2);
+    console.log(`✅ SHORT COMPLETE: ${fileId} in ${totalSeconds}s`);
+    return { success: true };
+
+  } catch (error) {
+    console.error('❌ ERROR:', error.message);
+    await Content.findByIdAndUpdate(fileId, {
+      status: 'failed', processingError: error.message, processingEnd: new Date()
+    }).catch(e => console.error('DB update failed:', e));
+    throw error;
+  } finally {
+    if (visibilityExtender) clearInterval(visibilityExtender);
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   }
 }
+
+// ============================================================================
+// AUDIO PROCESSING (from /audio folder)
+// ============================================================================
+
+async function processAudio(fileId, userId, s3Key, receiptHandle) {
+  console.log(`\n🎵 Processing AUDIO: ${fileId}`);
+  console.log('═'.repeat(70));
+
+  let tempDir;
+  let visibilityExtender;
+  const processStart = Date.now();
+
+  try {
+    const content = await Content.findById(fileId);
+    if (!content) throw new Error(`Audio ${fileId} not found`);
+
+    await Content.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), processingError: null });
+    visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
+
+    tempDir = getTempDir(fileId);
+    const ext = path.extname(s3Key).toLowerCase() || '.mp3';
+    const inputPath = path.join(tempDir, `input${ext}`);
+    const outputPath = path.join(tempDir, 'output.m4a');  // AAC in M4A container
+    const hlsDir = path.join(tempDir, 'hls');
+
+    ensureDirectoryExists(tempDir);
+    ensureDirectoryExists(hlsDir);
+
+    // Download
+    console.log('📥 Downloading from S3...');
+    const { Body } = await s3Client.send(new GetObjectCommand({
+      Bucket: process.env.S3_BUCKET,
+      Key: content.originalKey,
+    }));
+
+    await new Promise((resolve, reject) => {
+      const ws = fs.createWriteStream(inputPath);
+      Body.pipe(ws).on('finish', resolve).on('error', reject);
+    });
+
+    const fileStats = fs.statSync(inputPath);
+    console.log(`✅ Downloaded ${(fileStats.size/1024/1024).toFixed(2)} MB`);
+
+    const metadata = await getMediaMetadata(inputPath);
+    const { duration, audioStream } = metadata;
+
+    if (!audioStream) {
+      throw new Error('No audio stream found in file');
+    }
+
+    // Convert to AAC 256kbps
+    console.log('🎵 Converting to AAC...');
+    await runFFmpeg([
+      '-i', inputPath,
+      '-vn',  // No video
+      '-c:a', 'aac',
+      '-b:a', '256k',
+      '-ar', '48000',
+      '-ac', '2',
+      '-y',
+      outputPath
+    ]);
+
+    // Also create HLS audio stream for streaming
+    console.log('🎵 Creating HLS audio stream...');
+    await runFFmpeg([
+      '-i', inputPath,
+      '-vn',
+      '-c:a', 'aac',
+      '-b:a', '256k',
+      '-ar', '48000',
+      '-ac', '2',
+      '-f', 'hls',
+      '-hls_time', '10',
+      '-hls_list_size', '0',
+      '-hls_playlist_type', 'vod',
+      '-hls_segment_filename', path.join(hlsDir, 'segment%03d.ts'),
+      '-y',
+      path.join(hlsDir, 'playlist.m3u8')
+    ]);
+
+    // Upload
+    console.log('☁️  Uploading to S3...');
+    
+    // Upload processed AAC file
+    const processedKey = `audio/processed/${userId}/${fileId}.m4a`;
+    await uploadToS3WithRetry(outputPath, processedKey, 'audio/mp4', 'max-age=31536000');
+
+    // Upload HLS to hls/audio/ folder
+    const hlsFiles = fs.readdirSync(hlsDir);
+    const hlsMasterKey = `hls/audio/${userId}/${fileId}/playlist.m3u8`;
+    
+    for (const file of hlsFiles) {
+      const filePath = path.join(hlsDir, file);
+      const fileKey = `hls/audio/${userId}/${fileId}/${file}`;
+      const contentType = file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'audio/aac';
+      const cacheControl = file.endsWith('.ts') ? 'max-age=31536000' : 'max-age=300';
+      await uploadToS3WithRetry(filePath, fileKey, contentType, cacheControl);
+    }
+
+    // Update DB
+    await Content.findByIdAndUpdate(fileId, {
+      status: 'completed',
+      processedKey,
+      hlsMasterKey,
+      duration,
+      fileSize: fileStats.size,
+      audioMetadata: {
+        bitrate: 256000,
+        sampleRate: 48000,
+        channels: 2,
+        codec: 'aac'
+      },
+      processingEnd: new Date()
+    });
+
+    const totalSeconds = ((Date.now() - processStart) / 1000).toFixed(2);
+    console.log(`✅ AUDIO COMPLETE: ${fileId} in ${totalSeconds}s`);
+    return { success: true };
+
+  } catch (error) {
+    console.error('❌ ERROR:', error.message);
+    await Content.findByIdAndUpdate(fileId, {
+      status: 'failed', processingError: error.message, processingEnd: new Date()
+    }).catch(e => console.error('DB update failed:', e));
+    throw error;
+  } finally {
+    if (visibilityExtender) clearInterval(visibilityExtender);
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+}
+
+// ============================================================================
+// MAIN WORKER LOOP
+// ============================================================================
 
 let currentReceiptHandle = null;
 
@@ -715,13 +1106,13 @@ async function startWorker() {
   console.log('\n📡 Starting SQS polling...');
   console.log('═'.repeat(70));
 
-  let processedCount = 0;
-  let failedCount = 0;
+  let stats = { video: 0, short: 0, audio: 0, failed: 0 };
   let emptyPollCount = 0;
 
   while (true) {
     try {
-      console.log(`\n🔭 Polling SQS [Processed: ${processedCount}, Failed: ${failedCount}]`);
+      console.log(`\n📭 Polling SQS [V:${stats.video} S:${stats.short} A:${stats.audio} F:${stats.failed}]`);
+      
       const result = await sqsClient.send(new ReceiveMessageCommand({
         QueueUrl: process.env.QUEUE_URL,
         MaxNumberOfMessages: 1,
@@ -735,16 +1126,24 @@ async function startWorker() {
         const message = result.Messages[0];
         currentReceiptHandle = message.ReceiptHandle;
 
-        let videoId, userId, s3Key;
+        let contentId, userId, s3Key, contentType;
+        
         try {
           const body = JSON.parse(message.Body);
           s3Key = body.key || body.s3Key;
           if (!s3Key) throw new Error('No S3 key in message');
+          
+          // Detect content type from S3 path
+          contentType = detectContentType(s3Key);
+          
+          // Parse path: folder/{userId}/{fileId}_*.ext
           const parts = s3Key.split('/');
-          if (parts.length < 3) throw new Error('Invalid S3 key');
+          if (parts.length < 3) throw new Error('Invalid S3 key format');
+          
           userId = parts[1];
           const fileName = parts[2];
-          videoId = fileName.split('_')[0];
+          contentId = fileName.split('_')[0];
+          
         } catch (parseError) {
           console.error('❌ Invalid message:', parseError.message);
           await sqsClient.send(new DeleteMessageCommand({
@@ -755,30 +1154,47 @@ async function startWorker() {
           continue;
         }
 
-        processedCount++;
-        console.log(`\n📥 Job #${processedCount}: ${videoId}`);
+        console.log(`\n📥 Job: ${contentType.toUpperCase()} - ${contentId}`);
         console.log(`   User: ${userId}`);
         console.log(`   S3 Key: ${s3Key}`);
 
         await protectInstance(true);
 
         try {
-          await processVideo(videoId, currentReceiptHandle);
+          // Route to appropriate processor based on content type
+          switch (contentType) {
+            case 'video':
+              await processVideo(contentId, userId, s3Key, currentReceiptHandle);
+              stats.video++;
+              break;
+            case 'short':
+              await processShort(contentId, userId, s3Key, currentReceiptHandle);
+              stats.short++;
+              break;
+            case 'audio':
+              await processAudio(contentId, userId, s3Key, currentReceiptHandle);
+              stats.audio++;
+              break;
+            default:
+              throw new Error(`Unknown content type: ${contentType}`);
+          }
+
           await sqsClient.send(new DeleteMessageCommand({
             QueueUrl: process.env.QUEUE_URL,
             ReceiptHandle: currentReceiptHandle,
           }));
-          console.log(`✅ Job ${videoId} complete, message deleted`);
+          console.log(`✅ Job ${contentId} complete, message deleted`);
+
         } catch (err) {
-          console.error(`❌ Job ${videoId} FAILED:`, err.message);
-          failedCount++;
+          console.error(`❌ Job ${contentId} FAILED:`, err.message);
+          stats.failed++;
           try {
             await sqsClient.send(new ChangeMessageVisibilityCommand({
               QueueUrl: process.env.QUEUE_URL,
               ReceiptHandle: currentReceiptHandle,
               VisibilityTimeout: 0
             }));
-            console.log('🔁 Message released (visibility=0)');
+            console.log('🔄 Message released (visibility=0)');
           } catch (releaseErr) {
             console.warn('⚠️ Release failed:', releaseErr.message);
           }
@@ -790,7 +1206,6 @@ async function startWorker() {
       } else {
         emptyPollCount++;
         console.log(`⏰ No messages (${emptyPollCount}/3)`);
-
         if (emptyPollCount >= 3) {
           await protectInstance(false);
         }
@@ -803,14 +1218,15 @@ async function startWorker() {
   }
 }
 
+// Graceful shutdown
 let isShuttingDown = false;
 async function gracefulShutdown(signal) {
   if (isShuttingDown) return;
   isShuttingDown = true;
   console.log(`\n🛑 ${signal} - shutting down...`);
+  
   if (currentReceiptHandle) {
     try {
-      console.log('🔁 Releasing current message');
       await sqsClient.send(new ChangeMessageVisibilityCommand({
         QueueUrl: process.env.QUEUE_URL,
         ReceiptHandle: currentReceiptHandle,
@@ -821,6 +1237,7 @@ async function gracefulShutdown(signal) {
       console.warn('⚠️ Release failed:', e.message);
     }
   }
+  
   await new Promise(resolve => setTimeout(resolve, 10000));
   try { await mongoose.connection.close(); console.log('✅ MongoDB closed'); } catch (e) {}
   try { await protectInstance(false); } catch (_) {}
@@ -848,7 +1265,7 @@ chown -R ec2-user:ec2-user $APP_DIR
 
 cat > /etc/systemd/system/cinishine-worker.service << EOF
 [Unit]
-Description=CiniShine Production Video Worker v3.0
+Description=CiniShine Media Processing Worker v4.0
 After=network-online.target
 Wants=network-online.target
 
@@ -887,14 +1304,25 @@ fi
 
 echo ""
 echo "=== Setup completed at $(date) ==="
-echo "✅ CiniShine Production Worker v3.0 - STABLE HLS"
+echo "✅ CiniShine Media Processing Worker v4.0"
 echo ""
-echo "Key fixes applied:"
-echo " - Per-rendition rate control: -maxrate & -bufsize + -crf 23"
-echo " - FFmpeg progress: -progress pipe:2 and -loglevel info (stderr tail logged)"
-echo " - Prefer /mnt for temp storage when available (>5GB)"
-echo " - Pre-create stream_* directories before FFmpeg runs"
-echo " - Validation checks and upload verification"
+echo "Supported content types:"
+echo " - uploads/  → Long-form videos → Full HLS renditions (144p-1080p)"
+echo " - shorts/   → Short videos ≤60s → Optimized vertical HLS (480p-1080p)"
+echo " - audio/    → Audio files → AAC 256k + HLS audio stream"
+echo ""
+echo "S3 Input Structure:"
+echo " - uploads/{userId}/{fileId}_*.mp4  → Videos"
+echo " - shorts/{userId}/{fileId}_*.mp4   → Shorts"
+echo " - audio/{userId}/{fileId}_*.*      → Audio"
+echo ""
+echo "S3 Output Structure:"
+echo " - hls/{userId}/{id}/               → Video HLS"
+echo " - hls/shorts/{userId}/{id}/        → Short HLS"
+echo " - hls/audio/{userId}/{id}/         → Audio HLS"
+echo " - audio/processed/{userId}/        → Processed AAC files"
+echo " - thumbnails/videos/{userId}/      → Video thumbnails"
+echo " - thumbnails/shorts/{userId}/      → Short thumbnails"
 echo ""
 echo "Useful commands:"
 echo "  sudo journalctl -u cinishine-worker -f"
