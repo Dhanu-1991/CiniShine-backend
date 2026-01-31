@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 import {
   getVideo,
   getVideoStatus,
@@ -12,12 +13,26 @@ import {
   getUserPreferences,
   updateUserPreferences,
   getContent,
-  getRecommendations
+  getRecommendations,
+  uploadVideoThumbnail
 } from "../../controllers/video-controllers/videoController.js";
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/video-controllers/interactions.js";
 import { searchVideos } from "../../controllers/video-controllers/search.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 import commentRouter from "../commentRoutes/commentRouter.js";
+
+// Configure multer for thumbnail uploads (memory storage)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
 
 const router = express.Router();
 
@@ -72,6 +87,9 @@ router.post("/user/:userId/subscribe", universalTokenVerifier, subscribeToUser);
 
 // Watch time tracking
 router.post("/:id/watch-time", universalTokenVerifier, updateWatchTime);
+
+// Custom thumbnail upload for videos
+router.post("/:id/thumbnail", universalTokenVerifier, upload.single('thumbnail'), uploadVideoThumbnail);
 
 // Status route (specific with /status suffix)
 router.get("/:id/status", universalTokenVerifier, getVideoStatus);

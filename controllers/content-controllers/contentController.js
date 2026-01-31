@@ -449,10 +449,13 @@ export const uploadThumbnail = async (req, res) => {
 
         await s3Client.send(command);
 
-        // Update content with thumbnail key
-        await Content.findByIdAndUpdate(contentId, { thumbnailKey });
+        // Update content with thumbnail key and mark as custom
+        await Content.findByIdAndUpdate(contentId, {
+            thumbnailKey,
+            thumbnailSource: 'custom'
+        });
 
-        console.log(`✅ Thumbnail uploaded for content: ${contentId}`);
+        console.log(`✅ Custom thumbnail uploaded for content: ${contentId}`);
 
         res.json({
             success: true,

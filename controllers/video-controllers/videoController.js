@@ -1061,3 +1061,66 @@ export const getGeneralContent = async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 };
+
+/**
+ * Upload custom thumbnail for video
+ * Sets thumbnailSource to 'custom' so worker won't overwrite it
+ */
+export const uploadVideoThumbnail = async (req, res) => {
+    try {
+        const { id: videoId } = req.params;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({ error: 'User not authenticated' });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ error: 'Invalid video ID' });
+        }
+
+        const video = await Video.findById(videoId);
+        if (!video) {
+            return res.status(404).json({ error: 'Video not found' });
+        }
+
+        if (video.userId.toString() !== userId) {
+            return res.status(403).json({ error: 'Not authorized' });
+        }
+
+        // Check if file was uploaded (via multer or similar)
+        if (!req.file && !req.files?.thumbnail) {
+            return res.status(400).json({ error: 'No thumbnail file provided' });
+        }
+
+        const file = req.file || req.files.thumbnail[0];
+        const thumbnailKey = `thumbnails/videos/${userId}/${videoId}_custom.${file.mimetype.split('/')[1] || 'jpg'}`;
+
+        // Upload to S3
+        const command = new PutObjectCommand({
+            Bucket: process.env.S3_BUCKET,
+            Key: thumbnailKey,
+            Body: file.buffer,
+            ContentType: file.mimetype,
+        });
+
+        await s3Client.send(command);
+
+        // Update video with thumbnail key and mark as custom
+        await Video.findByIdAndUpdate(videoId, {
+            thumbnailKey,
+            thumbnailSource: 'custom'
+        });
+
+        console.log(`✅ Custom thumbnail uploaded for video: ${videoId}`);
+
+        res.json({
+            success: true,
+            message: 'Thumbnail uploaded successfully',
+            thumbnailKey
+        });
+    } catch (error) {
+        console.error('❌ Error uploading video thumbnail:', error);
+        res.status(500).json({ error: 'Failed to upload thumbnail' });
+    }
+};

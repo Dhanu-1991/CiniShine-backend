@@ -76,6 +76,11 @@ const ContentSchema = new mongoose.Schema({
     originalKey: String,        // Original file key in S3
     hlsMasterKey: String,       // For shorts: HLS master playlist
     thumbnailKey: String,       // Thumbnail/cover art
+    thumbnailSource: {          // Track if thumbnail is auto-generated or custom
+        type: String,
+        enum: ['auto', 'custom'],
+        default: 'auto'
+    },
     imageKey: String,           // For posts: attached image
 
     // Media metadata
