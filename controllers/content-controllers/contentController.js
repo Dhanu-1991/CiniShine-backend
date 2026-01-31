@@ -437,7 +437,17 @@ export const uploadThumbnail = async (req, res) => {
         }
 
         const file = req.file || req.files.thumbnail[0];
-        const thumbnailKey = `thumbnails/${userId}/${contentId}_thumb.${file.mimetype.split('/')[1] || 'jpg'}`;
+
+        // Determine thumbnail path based on content type
+        let thumbnailKey;
+        if (content.contentType === 'short') {
+            thumbnailKey = `thumbnails/shorts/${userId}/${contentId}_thumb.${file.mimetype.split('/')[1] || 'jpg'}`;
+        } else if (content.contentType === 'audio') {
+            thumbnailKey = `thumbnails/audio/${userId}/${contentId}_thumb.${file.mimetype.split('/')[1] || 'jpg'}`;
+        } else {
+            // Default for posts or other types
+            thumbnailKey = `thumbnails/${userId}/${contentId}_thumb.${file.mimetype.split('/')[1] || 'jpg'}`;
+        }
 
         // Upload to S3
         const command = new PutObjectCommand({
