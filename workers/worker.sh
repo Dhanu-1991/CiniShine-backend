@@ -717,7 +717,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     const validation = await validateHLSOutput(outputDir, renditions.length);
 
     console.log('☁️  Uploading to S3...');
-    const masterKey = `hls/videos/${userId}/${fileId}/master.m3u8`;
+    const masterKey = `hls/${userId}/${fileId}/master.m3u8`;
     await uploadToS3WithRetry(path.join(outputDir, 'master.m3u8'), masterKey, 'application/vnd.apple.mpegurl', 'max-age=300');
 
     for (const dir of validation.renditionDirs) {
@@ -725,7 +725,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       const files = fs.readdirSync(dirPath).sort();
       for (const file of files) {
         const filePath = path.join(dirPath, file);
-        const fileKey = `hls/videos/${userId}/${fileId}/${dir}/${file}`;
+        const fileKey = `hls/${userId}/${fileId}/${dir}/${file}`;
         const contentType = file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/MP2T';
         const cacheControl = file.endsWith('.ts') ? 'max-age=31536000' : 'max-age=300';
         await uploadToS3WithRetry(filePath, fileKey, contentType, cacheControl);
@@ -746,7 +746,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
         resolution: r.resolution,
         bitrate: r.bitrate,
         name: r.name,
-        playlistKey: `hls/videos/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
+        playlistKey: `hls/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
         codecs: hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028'
       })),
       processingEnd: new Date(),
@@ -1317,7 +1317,7 @@ echo " - shorts/{userId}/{fileId}_*.mp4   → Shorts"
 echo " - audio/{userId}/{fileId}_*.*      → Audio"
 echo ""
 echo "S3 Output Structure:"
-echo " - hls/videos/{userId}/{id}/        → Video HLS"
+echo " - hls/{userId}/{id}/               → Video HLS"
 echo " - hls/shorts/{userId}/{id}/        → Short HLS"
 echo " - hls/audio/{userId}/{id}/         → Audio HLS"
 echo " - audio/processed/{userId}/        → Processed AAC files"
