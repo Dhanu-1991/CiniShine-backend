@@ -1,8 +1,16 @@
 import mongoose from 'mongoose';
 
 const Video = mongoose.model('Video', new mongoose.Schema({
-  title: String,
-  description: String,
+  title: {
+    type: String,
+    trim: true,
+    maxlength: 200
+  },
+  description: {
+    type: String,
+    trim: true,
+    maxlength: 5000
+  },
   originalKey: String,
   hlsMasterKey: String,
   thumbnailKey: String,
@@ -11,11 +19,38 @@ const Video = mongoose.model('Video', new mongoose.Schema({
     enum: ['auto', 'custom'],
     default: 'auto'
   },
-  channelName: {
+
+  // Tags and categorization
+  tags: [{
     type: String,
-    required: false,
-    trim: true,
+    trim: true
+  }],
+  category: {
+    type: String,
+    trim: true
   },
+
+  // Content settings
+  visibility: {
+    type: String,
+    enum: ['public', 'unlisted', 'private'],
+    default: 'public'
+  },
+  isAgeRestricted: {
+    type: Boolean,
+    default: false
+  },
+  commentsEnabled: {
+    type: Boolean,
+    default: true
+  },
+
+  // Creator roles associated with this content
+  selectedRoles: [{
+    type: String,
+    trim: true
+  }],
+
   views: {
     type: Number,
     default: 0
@@ -26,6 +61,8 @@ const Video = mongoose.model('Video', new mongoose.Schema({
     default: 'uploading'
   },
   duration: Number,
+  fileSize: Number,
+  mimeType: String,
   sizes: {
     original: Number,
     processed: Number,
@@ -63,6 +100,7 @@ const Video = mongoose.model('Video', new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
+    required: true,
     index: true
   },
   createdAt: { type: Date, default: Date.now },

@@ -35,12 +35,6 @@ const ContentSchema = new mongoose.Schema({
         maxlength: 5000
     },
 
-    // Channel info (denormalized for quick access)
-    channelName: {
-        type: String,
-        trim: true
-    },
-
     // Tags and categorization
     tags: [{
         type: String,

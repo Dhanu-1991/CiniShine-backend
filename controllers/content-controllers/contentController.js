@@ -47,24 +47,17 @@ export const shortUploadInit = async (req, res) => {
             return res.status(400).json({ error: 'fileName and fileType are required' });
         }
 
-        // Get user info for channel name
-        const user = await User.findById(userId).select('channelName userName');
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
         // Generate unique file ID
         const fileId = new mongoose.Types.ObjectId();
         const key = `shorts/${userId}/${fileId}_${fileName}`;
 
-        // Create content record
+        // Create content record (channelName fetched via populate when needed)
         const content = await Content.create({
             _id: fileId,
             contentType: 'short',
             userId,
             title: title || fileName,
             description: description || '',
-            channelName: user.channelName || user.userName,
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
             category: category || '',
             visibility: visibility || 'public',
@@ -176,23 +169,16 @@ export const audioUploadInit = async (req, res) => {
             return res.status(400).json({ error: 'fileName and fileType are required' });
         }
 
-        // Get user info
-        const user = await User.findById(userId).select('channelName userName');
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
         const fileId = new mongoose.Types.ObjectId();
         const key = `audio/${userId}/${fileId}_${fileName}`;
 
-        // Create content record
+        // Create content record (channelName fetched via populate when needed)
         const content = await Content.create({
             _id: fileId,
             contentType: 'audio',
             userId,
             title: title || fileName,
             description: description || '',
-            channelName: user.channelName || user.userName,
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
             category: category || '',
             audioCategory: audioCategory || 'music',
@@ -357,15 +343,9 @@ export const createPost = async (req, res) => {
             return res.status(400).json({ error: 'Description or content is required' });
         }
 
-        // Get user info
-        const user = await User.findById(userId).select('channelName userName');
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
         const fileId = new mongoose.Types.ObjectId();
 
-        // Create post content
+        // Create post content (channelName fetched via populate when needed)
         const post = await Content.create({
             _id: fileId,
             contentType: 'post',
@@ -373,7 +353,6 @@ export const createPost = async (req, res) => {
             title: title.trim(),
             description: description || '',
             postContent: postContent || description || '',
-            channelName: user.channelName || user.userName,
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
             visibility: visibility || 'public',
             commentsEnabled: commentsEnabled !== false,

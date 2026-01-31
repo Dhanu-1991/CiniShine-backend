@@ -148,11 +148,16 @@ export const getVideo = async (req, res) => {
             likes: video.likeCount || 0,
             dislikes: video.dislikeCount || 0,
             userReaction: userReaction?.type || null,
-            channelName: video.channelName,
+            channelName: video.userId?.channelName || 'Unknown', // Fetch from populated user
             subscriberCount,
             isSubscribed,
-            channelPicture: video.userId.channelPicture,
-            commentCount
+            channelPicture: video.userId?.channelPicture,
+            commentCount,
+            // Additional video metadata
+            tags: video.tags || [],
+            category: video.category || '',
+            visibility: video.visibility || 'public',
+            commentsEnabled: video.commentsEnabled !== false
         });
 
     } catch (error) {
@@ -775,15 +780,24 @@ export const uploadInit = async (req, res) => {
         }
 
         const fileId = new mongoose.Types.ObjectId();
-        const key = `uploads/${userId}/${fileId}_${fileName}`;
+        const key = `uploads/video/${userId}/${fileId}_${fileName}`;
 
         const video = await Video.create({
             _id: fileId,
-            title: title || fileName, // Use entered title, fallback to fileName
+            title: title || fileName,
             description: description || '',
+            tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
+            category: category || '',
+            visibility: visibility || 'public',
+            isAgeRestricted: isAgeRestricted || false,
+            commentsEnabled: commentsEnabled !== false,
+            selectedRoles: selectedRoles || [],
             originalKey: key,
+            mimeType: fileType,
             userId,
         });
+
+        console.log(`📤 Video upload initialized: ${fileId}, title: "${title || fileName}"`);
 
         const command = new PutObjectCommand({
             Bucket: process.env.S3_BUCKET,
