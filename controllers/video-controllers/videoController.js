@@ -24,7 +24,7 @@ const s3Client = new S3Client({
 // Helper to find HLS files in S3
 async function findHLSFiles(videoId, userId) {
     try {
-        const prefix = `hls/${userId}/${videoId}/`;
+        const prefix = `hls/videos/${userId}/${videoId}/`;
         const command = new ListObjectsV2Command({
             Bucket: process.env.S3_BUCKET,
             Prefix: prefix,
@@ -332,7 +332,7 @@ export const getHLSVariantPlaylist = async (req, res) => {
         // Determine base path (folder containing master)
         const basePath = video.hlsMasterKey ?
             video.hlsMasterKey.substring(0, video.hlsMasterKey.lastIndexOf('/') + 1) :
-            `hls/${video.userId}/${videoId}/`;
+            `hls/videos/${video.userId}/${videoId}/`;
 
         // build candidate S3 keys
         const q = quality && quality !== 'auto' ? (quality.endsWith('p') ? quality : `${quality}p`) : null;
@@ -465,7 +465,7 @@ export const getHLSSegment = async (req, res) => {
         const userId = video.userId;
         const basePath = video.hlsMasterKey ?
             video.hlsMasterKey.substring(0, video.hlsMasterKey.lastIndexOf('/') + 1) :
-            `hls/${userId}/${videoId}/`;
+            `hls/videos/${userId}/${videoId}/`;
 
         // Candidate keys for segment
         const q = quality && quality !== 'auto' ? (quality.endsWith('p') ? quality : `${quality}p`) : null;
