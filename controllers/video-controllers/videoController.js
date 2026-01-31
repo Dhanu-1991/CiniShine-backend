@@ -756,7 +756,18 @@ export const getVideoStatus = async (req, res) => {
 
 export const uploadInit = async (req, res) => {
     try {
-        const { fileName, fileType } = req.body;
+        const {
+            fileName,
+            fileType,
+            title,
+            description,
+            tags,
+            category,
+            visibility,
+            isAgeRestricted,
+            commentsEnabled,
+            selectedRoles
+        } = req.body;
         const userId = req.user?.id;
 
         if (!userId) {
@@ -764,11 +775,12 @@ export const uploadInit = async (req, res) => {
         }
 
         const fileId = new mongoose.Types.ObjectId();
-        const key = `uploads/video/${userId}/${fileId}_${fileName}`;
+        const key = `uploads/${userId}/${fileId}_${fileName}`;
 
         const video = await Video.create({
             _id: fileId,
-            title: fileName,
+            title: title || fileName, // Use entered title, fallback to fileName
+            description: description || '',
             originalKey: key,
             userId,
         });
