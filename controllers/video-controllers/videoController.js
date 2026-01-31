@@ -780,7 +780,7 @@ export const uploadInit = async (req, res) => {
         }
 
         const fileId = new mongoose.Types.ObjectId();
-        const key = `uploads/video/${userId}/${fileId}_${fileName}`;
+        const key = `uploads/${userId}/${fileId}_${fileName}`;
 
         const video = await Video.create({
             _id: fileId,
