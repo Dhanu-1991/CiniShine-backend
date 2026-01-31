@@ -7,7 +7,7 @@ set -e
 
 REGION="us-east-1"
 BUCKET_NAME="cini-shine"
-QUEUE_URL="https://sqs.us-east-1.amazonaws.com/856507207317/media-processing-queue"
+QUEUE_URL="https://sqs.us-east-1.amazonaws.com/856507207317/video-processing-queue"
 SSM_PREFIX="/cinishine"
 ASG_NAME="cinishine-worker-asg"
 INSTANCE_ID=""
@@ -131,6 +131,11 @@ const videoSchema = new mongoose.Schema({
   },
   hlsMasterKey: String,
   thumbnailKey: String,
+  thumbnailSource: {
+    type: String,
+    enum: ['auto', 'custom'],
+    default: 'auto'
+  },
   duration: Number,
   renditions: [{
     resolution: String,
@@ -202,6 +207,11 @@ const contentSchema = new mongoose.Schema({
   hlsMasterKey: String,
   processedKey: String,      // For audio: processed AAC file
   thumbnailKey: String,
+  thumbnailSource: {         // Track if thumbnail is auto or custom
+    type: String,
+    enum: ['auto', 'custom'],
+    default: 'auto'
+  },
   imageKey: String,          // For posts
   
   // Media metadata
@@ -651,19 +661,30 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     const metadata = await getMediaMetadata(inputPath);
     const { duration, videoStream, hasAudio } = metadata;
 
-    // Generate thumbnail
-    console.log('🖼️  Generating thumbnail...');
-    const thumbTime = Math.min(5, duration / 2);
-    await runFFmpeg([
-      '-ss', thumbTime.toString(),
-      '-i', inputPath,
-      '-frames:v', '1',
-      '-vf', 'scale=320:-2',
-      '-q:v', '2',
-      '-update', '1',
-      '-y',
-      thumbnailPath
-    ]);
+    // Check if custom thumbnail already exists (don't overwrite user-uploaded thumbnails)
+    let shouldGenerateThumbnail = true;
+    let existingThumbnailKey = video.thumbnailKey;
+    
+    if (video.thumbnailSource === 'custom' && video.thumbnailKey) {
+      console.log('🖼️  Custom thumbnail exists - skipping auto-generation');
+      shouldGenerateThumbnail = false;
+    }
+
+    // Generate thumbnail only if no custom one exists
+    if (shouldGenerateThumbnail) {
+      console.log('🖼️  Generating auto thumbnail...');
+      const thumbTime = Math.min(5, duration / 2);
+      await runFFmpeg([
+        '-ss', thumbTime.toString(),
+        '-i', inputPath,
+        '-frames:v', '1',
+        '-vf', 'scale=320:-2',
+        '-q:v', '2',
+        '-update', '1',
+        '-y',
+        thumbnailPath
+      ]);
+    }
 
     // Get renditions
     const renditions = getAppropriateRenditions(videoStream.width, videoStream.height, 'video');
@@ -717,7 +738,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     const validation = await validateHLSOutput(outputDir, renditions.length);
 
     console.log('☁️  Uploading to S3...');
-    const masterKey = `hls/${userId}/${fileId}/master.m3u8`;
+    const masterKey = `hls/videos/${userId}/${fileId}/master.m3u8`;
     await uploadToS3WithRetry(path.join(outputDir, 'master.m3u8'), masterKey, 'application/vnd.apple.mpegurl', 'max-age=300');
 
     for (const dir of validation.renditionDirs) {
@@ -725,19 +746,22 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       const files = fs.readdirSync(dirPath).sort();
       for (const file of files) {
         const filePath = path.join(dirPath, file);
-        const fileKey = `hls/${userId}/${fileId}/${dir}/${file}`;
+        const fileKey = `hls/videos/${userId}/${fileId}/${dir}/${file}`;
         const contentType = file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/MP2T';
         const cacheControl = file.endsWith('.ts') ? 'max-age=31536000' : 'max-age=300';
         await uploadToS3WithRetry(filePath, fileKey, contentType, cacheControl);
       }
     }
 
-    // Thumbnail to videos folder
-    const thumbnailKey = `thumbnails/videos/${userId}/${fileId}.jpg`;
-    await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
+    // Only upload auto-generated thumbnail if we created one
+    let thumbnailKey = existingThumbnailKey;
+    if (shouldGenerateThumbnail) {
+      thumbnailKey = `thumbnails/videos/${userId}/${fileId}.jpg`;
+      await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
+    }
 
-    // Update DB
-    await Video.findByIdAndUpdate(fileId, {
+    // Update DB - preserve existing thumbnailSource if custom
+    const updateData = {
       status: 'completed',
       hlsMasterKey: masterKey,
       thumbnailKey,
@@ -746,7 +770,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
         resolution: r.resolution,
         bitrate: r.bitrate,
         name: r.name,
-        playlistKey: `hls/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
+        playlistKey: `hls/videos/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
         codecs: hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028'
       })),
       processingEnd: new Date(),
@@ -754,7 +778,14 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       'metadata.originalCodec': videoStream.codec_name,
       'metadata.hasAudio': hasAudio,
       'sizes.original': fileStats.size
-    });
+    };
+    
+    // Only set thumbnailSource to 'auto' if we generated it
+    if (shouldGenerateThumbnail) {
+      updateData.thumbnailSource = 'auto';
+    }
+
+    await Video.findByIdAndUpdate(fileId, updateData);
 
     const totalMinutes = ((Date.now() - processStart) / 1000 / 60).toFixed(2);
     console.log(`✅ VIDEO COMPLETE: ${fileId} in ${totalMinutes} min`);
@@ -824,18 +855,29 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       console.warn(`⚠️  Short duration ${duration}s exceeds 60s limit`);
     }
 
-    // Generate thumbnail (first frame for shorts)
-    console.log('🖼️  Generating thumbnail...');
-    await runFFmpeg([
-      '-ss', '0.5',
-      '-i', inputPath,
-      '-frames:v', '1',
-      '-vf', 'scale=360:-2',
-      '-q:v', '2',
-      '-update', '1',
-      '-y',
-      thumbnailPath
-    ]);
+    // Check if custom thumbnail already exists (don't overwrite user-uploaded thumbnails)
+    let shouldGenerateThumbnail = true;
+    let existingThumbnailKey = content.thumbnailKey;
+    
+    if (content.thumbnailSource === 'custom' && content.thumbnailKey) {
+      console.log('🖼️  Custom thumbnail exists - skipping auto-generation');
+      shouldGenerateThumbnail = false;
+    }
+
+    // Generate thumbnail only if no custom one exists (first frame for shorts)
+    if (shouldGenerateThumbnail) {
+      console.log('🖼️  Generating auto thumbnail...');
+      await runFFmpeg([
+        '-ss', '0.5',
+        '-i', inputPath,
+        '-frames:v', '1',
+        '-vf', 'scale=360:-2',
+        '-q:v', '2',
+        '-update', '1',
+        '-y',
+        thumbnailPath
+      ]);
+    }
 
     // Detect orientation
     const isVertical = videoStream.height > videoStream.width;
@@ -913,12 +955,15 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       }
     }
 
-    // Thumbnail to shorts folder
-    const thumbnailKey = `thumbnails/shorts/${userId}/${fileId}.jpg`;
-    await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
+    // Only upload auto-generated thumbnail if we created one
+    let thumbnailKey = existingThumbnailKey;
+    if (shouldGenerateThumbnail) {
+      thumbnailKey = `thumbnails/shorts/${userId}/${fileId}.jpg`;
+      await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
+    }
 
-    // Update DB
-    await Content.findByIdAndUpdate(fileId, {
+    // Update DB - preserve existing thumbnailSource if custom
+    const updateData = {
       status: 'completed',
       hlsMasterKey: masterKey,
       thumbnailKey,
@@ -931,7 +976,14 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
         codecs: hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028'
       })),
       processingEnd: new Date()
-    });
+    };
+    
+    // Only set thumbnailSource to 'auto' if we generated it
+    if (shouldGenerateThumbnail) {
+      updateData.thumbnailSource = 'auto';
+    }
+
+    await Content.findByIdAndUpdate(fileId, updateData);
 
     const totalSeconds = ((Date.now() - processStart) / 1000).toFixed(2);
     console.log(`✅ SHORT COMPLETE: ${fileId} in ${totalSeconds}s`);
@@ -1317,7 +1369,7 @@ echo " - shorts/{userId}/{fileId}_*.mp4   → Shorts"
 echo " - audio/{userId}/{fileId}_*.*      → Audio"
 echo ""
 echo "S3 Output Structure:"
-echo " - hls/{userId}/{id}/               → Video HLS"
+echo " - hls/videos/{userId}/{id}/        → Video HLS"
 echo " - hls/shorts/{userId}/{id}/        → Short HLS"
 echo " - hls/audio/{userId}/{id}/         → Audio HLS"
 echo " - audio/processed/{userId}/        → Processed AAC files"
