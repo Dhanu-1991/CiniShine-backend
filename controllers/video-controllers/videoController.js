@@ -620,7 +620,7 @@ export const getContent = async (req, res) => {
 
         // Get all completed videos with user info
         const allVideos = await Video.find({ status: 'completed' })
-            .populate('userId', 'roles userName channelPicture')
+            .populate('userId', 'roles userName channelName channelPicture')
             .sort({ createdAt: -1 }); // Get recent videos first
         console.log("allVideos found : ", allVideos.length);
         // Get personalized recommendations
@@ -668,7 +668,7 @@ export const getContent = async (req, res) => {
                         roles: video.userId.roles
                     },
                     recommendationScore: video.recommendationScore,// Optional: for debugging
-                    channelName: video.channelName,
+                    channelName: video.userId?.channelName,
                     channelPicture: video.userId?.channelPicture || null
                 };
             })
@@ -764,7 +764,7 @@ export const uploadInit = async (req, res) => {
         }
 
         const fileId = new mongoose.Types.ObjectId();
-        const key = `uploads/${userId}/${fileId}_${fileName}`;
+        const key = `uploads/video/${userId}/${fileId}_${fileName}`;
 
         const video = await Video.create({
             _id: fileId,
