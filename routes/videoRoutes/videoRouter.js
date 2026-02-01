@@ -18,7 +18,7 @@ import {
 } from "../../controllers/video-controllers/videoController.js";
 import { getMixedFeed, getRecommendationsWithShorts } from "../../controllers/video-controllers/feedController.js";
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/video-controllers/interactions.js";
-import { searchVideos } from "../../controllers/video-controllers/search.js";
+import { searchVideos, getSearchSuggestions, clearSearchHistory } from "../../controllers/video-controllers/search.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 import commentRouter from "../commentRoutes/commentRouter.js";
 
@@ -63,7 +63,9 @@ router.get("/:videoId/recommendations", universalTokenVerifier, getRecommendatio
 // Recommendations with shorts (for WatchPage sidebar)
 router.get("/:videoId/recommendations-with-shorts", universalTokenVerifier, getRecommendationsWithShorts);
 
-// Search route
+// Search routes - suggestions returns text queries, search returns videos
+router.get("/search/suggestions", universalTokenVerifier, getSearchSuggestions);
+router.delete("/search/history", universalTokenVerifier, clearSearchHistory);
 router.get("/search", universalTokenVerifier, searchVideos);
 
 // HLS streaming routes (MUST come before general :id routes)

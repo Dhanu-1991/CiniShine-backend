@@ -1219,6 +1219,18 @@ export const getSingleContent = async (req, res) => {
         const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
         let mediaUrl = null;
 
+        // For posts with multiple images, generate URLs for all images
+        let imageUrls = [];
+        if (content.contentType === 'post' && content.imageKeys && content.imageKeys.length > 0) {
+            imageUrls = await Promise.all(
+                content.imageKeys.map(key => getSignedUrlIfExists(process.env.S3_BUCKET, key))
+            );
+            // Filter out nulls
+            imageUrls = imageUrls.filter(url => url !== null);
+        } else if (imageUrl) {
+            imageUrls = [imageUrl];
+        }
+
         if (content.contentType === 'short') {
             const videoKey = content.hlsKey || content.processedKey || content.originalKey;
             mediaUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
@@ -1236,6 +1248,7 @@ export const getSingleContent = async (req, res) => {
             duration: content.duration,
             thumbnailUrl,
             imageUrl: imageUrl || thumbnailUrl,
+            imageUrls: imageUrls, // Array of all image URLs for multi-image posts
             videoUrl: content.contentType === 'short' ? mediaUrl : null,
             audioUrl: content.contentType === 'audio' ? mediaUrl : null,
             views: content.views,

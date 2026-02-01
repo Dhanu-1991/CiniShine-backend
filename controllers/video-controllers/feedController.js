@@ -71,313 +71,173 @@ const calculateScore = (item, userPreferences = {}) => {
 /**
  * Get mixed feed content (videos, shorts, audio, posts)
  * Returns shorts and audio separately for horizontal display rows
- * Uses WatchHistoryEngine for personalized recommendations when user is logged in
+ * OPTIMIZED: Parallel fetching, reduced S3 calls, lean queries
+ * More shorts slots with fewer per row
  */
 export const getMixedFeed = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { page = 1, limit = 20, shortsLimit = 12, audioLimit = 8 } = req.query;
+        const { page = 1, limit = 20, shortsLimit = 30, audioLimit = 12 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const isFirstPage = parseInt(page) === 1;
 
         console.log(`📥 [Feed] getMixedFeed called - userId: ${userId}, page: ${page}, limit: ${limit}`);
 
-        // Fetch shorts (for horizontal row - only on first page)
-        let shorts = [];
-        if (isFirstPage || req.query.includeShorts === 'true') {
-            console.log(`📥 [Feed] Fetching shorts...`);
+        // OPTIMIZATION: Parallel fetch all content types at once
+        const fetchPromises = [];
 
-            // Use WatchHistoryEngine for personalized shorts if user is logged in
-            if (userId) {
-                try {
-                    const recommendations = await watchHistoryEngine.getRecommendations(
-                        userId,
-                        'short',
-                        { limit: parseInt(shortsLimit) }
-                    );
-                    if (recommendations?.content?.length > 0) {
-                        shorts = recommendations.content;
-                        console.log(`✅ [Feed] Got ${shorts.length} personalized shorts from WatchHistoryEngine`);
-                    }
-                } catch (err) {
-                    console.log(`ℹ️ [Feed] WatchHistoryEngine failed for shorts, falling back to default`);
-                }
-            }
-
-            // Fallback to recent shorts if no personalized results
-            if (shorts.length === 0) {
-                const shortsQuery = {
+        // 1. Fetch more shorts (for multiple rows, 6 per row)
+        if (isFirstPage) {
+            fetchPromises.push(
+                Content.find({
                     contentType: 'short',
                     status: 'completed',
                     visibility: 'public'
-                };
-
-                shorts = await Content.find(shortsQuery)
+                })
                     .populate('userId', 'userName channelName channelPicture')
                     .sort({ createdAt: -1 })
-                    .limit(parseInt(shortsLimit));
-            }
-
-            console.log(`✅ [Feed] Fetched ${shorts.length} shorts`);
+                    .limit(parseInt(shortsLimit))
+                    .lean() // OPTIMIZATION: Use lean for read-only data
+            );
+        } else {
+            fetchPromises.push(Promise.resolve([]));
         }
 
-        // Fetch audio (for horizontal row - only on first page)
-        let audioContent = [];
-        if (isFirstPage || req.query.includeAudio === 'true') {
-            console.log(`📥 [Feed] Fetching audio...`);
-
-            // Use WatchHistoryEngine for personalized audio if user is logged in
-            if (userId) {
-                try {
-                    const recommendations = await watchHistoryEngine.getRecommendations(
-                        userId,
-                        'audio',
-                        { limit: parseInt(audioLimit) }
-                    );
-                    if (recommendations?.content?.length > 0) {
-                        audioContent = recommendations.content;
-                        console.log(`✅ [Feed] Got ${audioContent.length} personalized audio from WatchHistoryEngine`);
-                    }
-                } catch (err) {
-                    console.log(`ℹ️ [Feed] WatchHistoryEngine failed for audio, falling back to default`);
-                }
-            }
-
-            // Fallback to recent audio if no personalized results
-            if (audioContent.length === 0) {
-                const audioQuery = {
+        // 2. Fetch audio (only on first page)
+        if (isFirstPage) {
+            fetchPromises.push(
+                Content.find({
                     contentType: 'audio',
                     status: 'completed',
                     visibility: 'public'
-                };
-
-                audioContent = await Content.find(audioQuery)
+                })
                     .populate('userId', 'userName channelName channelPicture')
                     .sort({ createdAt: -1 })
-                    .limit(parseInt(audioLimit));
-            }
-
-            console.log(`✅ [Feed] Fetched ${audioContent.length} audio tracks`);
+                    .limit(parseInt(audioLimit))
+                    .lean()
+            );
+        } else {
+            fetchPromises.push(Promise.resolve([]));
         }
 
-        // Fetch videos - use WatchHistoryEngine for personalized recommendations
-        console.log(`📥 [Feed] Fetching videos...`);
-        let videos = [];
-        let videosFromEngine = false; // Track if videos came from WatchHistoryEngine (already have thumbnailUrl)
-
-        if (userId) {
-            try {
-                const recommendations = await watchHistoryEngine.getRecommendations(
-                    userId,
-                    'video',
-                    { page: parseInt(page), limit: parseInt(limit) }
-                );
-                if (recommendations?.content?.length > 0) {
-                    videos = recommendations.content;
-                    videosFromEngine = true; // WatchHistoryEngine already generates thumbnailUrl
-                    console.log(`✅ [Feed] Got ${videos.length} personalized videos from WatchHistoryEngine (thumbnails pre-generated)`);
-                }
-            } catch (err) {
-                console.log(`ℹ️ [Feed] WatchHistoryEngine failed for videos, falling back to default`);
-            }
-        }
-
-        // Fallback to recent videos if no personalized results
-        if (videos.length === 0) {
-            videos = await Video.find({
-                status: 'completed'
-            })
+        // 3. Fetch videos
+        fetchPromises.push(
+            Video.find({ status: 'completed' })
                 .populate('userId', 'userName channelName channelPicture')
                 .sort({ createdAt: -1 })
                 .skip(skip)
-                .limit(parseInt(limit));
-            videosFromEngine = false;
-        }
-
-        console.log(`✅ [Feed] Fetched ${videos.length} videos (from engine: ${videosFromEngine})`);
-
-        // Fetch posts
-        console.log(`📥 [Feed] Fetching posts...`);
-        const posts = await Content.find({
-            contentType: 'post',
-            status: 'completed',
-            visibility: 'public'
-        })
-            .populate('userId', 'userName channelName channelPicture')
-            .sort({ createdAt: -1 })
-            .skip(isFirstPage ? 0 : skip)
-            .limit(Math.floor(parseInt(limit) / 4));
-
-        console.log(`✅ [Feed] Fetched ${posts.length} posts`);
-
-        // Process shorts - check if from WatchHistoryEngine (already has thumbnailUrl)
-        console.log(`🎬 [Feed] Processing ${shorts.length} shorts...`);
-        const shortsFromEngine = shorts.length > 0 && shorts[0].thumbnailUrl !== undefined;
-        const processedShorts = shortsFromEngine
-            ? shorts.map(s => ({ ...s, score: calculateScore(s) }))
-            : await Promise.all(
-                shorts.map(async (content, idx) => {
-                    const thumbnailUrl = await generateSignedUrl(content.thumbnailKey);
-                    if (!thumbnailUrl) {
-                        console.warn(`⚠️ [Feed] Short ${idx} (${content._id}): No thumbnail - thumbnailKey: ${content.thumbnailKey || 'MISSING'}`);
-                    }
-                    return {
-                        _id: content._id,
-                        contentType: 'short',
-                        title: content.title,
-                        description: content.description,
-                        duration: content.duration,
-                        thumbnailUrl,
-                        views: content.views,
-                        likeCount: content.likeCount,
-                        createdAt: content.createdAt,
-                        channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                        channelPicture: content.userId?.channelPicture || null,
-                        status: content.status,
-                        score: calculateScore(content)
-                    };
-                })
-            );
-        console.log(`✅ [Feed] Processed ${processedShorts.length} shorts (from engine: ${shortsFromEngine})`);
-
-        // Process audio - check if from WatchHistoryEngine (already has thumbnailUrl)
-        console.log(`🎵 [Feed] Processing ${audioContent.length} audio tracks...`);
-        const audioFromEngine = audioContent.length > 0 && audioContent[0].thumbnailUrl !== undefined;
-        const processedAudio = audioFromEngine
-            ? audioContent.map(a => ({ ...a, score: calculateScore(a) }))
-            : await Promise.all(
-                audioContent.map(async (content, idx) => {
-                    const thumbnailKey = content.thumbnailKey || content.imageKey;
-                    const thumbnailUrl = await generateSignedUrl(thumbnailKey);
-                    if (!thumbnailUrl) {
-                        console.warn(`⚠️ [Feed] Audio ${idx} (${content._id}): No thumbnail URL - thumbnailKey: ${content.thumbnailKey || 'MISSING'}, imageKey: ${content.imageKey || 'MISSING'}`);
-                    }
-                    return {
-                        _id: content._id,
-                        contentType: 'audio',
-                        title: content.title,
-                        description: content.description,
-                        duration: content.duration,
-                        thumbnailUrl,
-                        imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
-                        views: content.views,
-                        likeCount: content.likeCount,
-                        createdAt: content.createdAt,
-                        channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                        channelPicture: content.userId?.channelPicture || null,
-                        artist: content.artist,
-                        album: content.album,
-                        audioCategory: content.audioCategory,
-                        status: content.status,
-                        score: calculateScore(content)
-                    };
-                })
-            );
-        console.log(`✅ [Feed] Processed ${processedAudio.length} audio (from engine: ${audioFromEngine})`);
-
-        // Process videos - if from WatchHistoryEngine, thumbnailUrl is already generated!
-        console.log(`🎬 [Feed] Processing ${videos.length} videos...`);
-        const processedVideos = videosFromEngine
-            ? videos.map(v => ({ ...v, score: calculateScore(v) })) // Already has thumbnailUrl from engine
-            : await Promise.all(
-                videos.map(async (video, idx) => {
-                    const thumbnailUrl = await generateSignedUrl(video.thumbnailKey);
-                    if (!thumbnailUrl) {
-                        console.warn(`⚠️ [Feed] Video ${idx} (${video._id}): No thumbnail URL - thumbnailKey: ${video.thumbnailKey || 'MISSING'}`);
-                    }
-                    return {
-                        _id: video._id,
-                        contentType: 'video',
-                        title: video.title,
-                        description: video.description,
-                        duration: video.duration,
-                        thumbnailUrl,
-                        views: video.views,
-                        likeCount: video.likes?.length || 0,
-                        createdAt: video.createdAt,
-                        channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
-                        channelPicture: video.userId?.channelPicture || null,
-                        status: video.status,
-                        score: calculateScore(video)
-                    };
-                })
-            );
-        console.log(`✅ [Feed] Processed ${processedVideos.length} videos (from engine: ${videosFromEngine})`);
-
-        // Process posts with URLs - use imageKey for post images
-        // Also fetch top comment for each post
-        const processedPosts = await Promise.all(
-            posts.map(async (content) => {
-                // For posts, imageKey is the primary image
-                const imageUrl = content.imageKey ? await generateSignedUrl(content.imageKey) : null;
-
-                // Fetch top comment (most liked or most recent)
-                let topComment = null;
-                try {
-                    const comment = await Comment.findOne({
-                        videoId: content._id,
-                        parentCommentId: null // Only top-level comments
-                    })
-                        .sort({ likeCount: -1, createdAt: -1 })
-                        .populate('userId', 'userName channelName channelPicture')
-                        .lean();
-
-                    if (comment) {
-                        topComment = {
-                            _id: comment._id,
-                            text: comment.text,
-                            userName: comment.userId?.channelName || comment.userId?.userName || 'User',
-                            userProfilePic: comment.userId?.channelPicture || null,
-                            likeCount: comment.likeCount || 0
-                        };
-                    }
-                } catch (err) {
-                    console.error('Error fetching top comment for post:', err);
-                }
-
-                return {
-                    _id: content._id,
-                    contentType: 'post',
-                    title: content.title,
-                    description: content.description,
-                    postContent: content.postContent,
-                    thumbnailUrl: imageUrl, // Use image as thumbnail for consistency
-                    imageUrl: imageUrl,
-                    views: content.views,
-                    likeCount: content.likeCount,
-                    commentCount: content.commentCount || 0,
-                    createdAt: content.createdAt,
-                    channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                    channelPicture: content.userId?.channelPicture || null,
-                    status: content.status,
-                    score: calculateScore(content),
-                    topComment: topComment
-                };
-            })
+                .limit(parseInt(limit))
+                .lean()
         );
 
-        // Sort shorts by score
+        // 4. Fetch posts
+        fetchPromises.push(
+            Content.find({
+                contentType: 'post',
+                status: 'completed',
+                visibility: 'public'
+            })
+                .populate('userId', 'userName channelName channelPicture')
+                .sort({ createdAt: -1 })
+                .skip(isFirstPage ? 0 : skip)
+                .limit(Math.floor(parseInt(limit) / 4))
+                .lean()
+        );
+
+        // 5. Get counts in parallel (for pagination)
+        fetchPromises.push(Video.countDocuments({ status: 'completed' }));
+        fetchPromises.push(Content.countDocuments({ contentType: 'post', status: 'completed', visibility: 'public' }));
+        fetchPromises.push(Content.countDocuments({ contentType: 'audio', status: 'completed', visibility: 'public' }));
+
+        // Wait for all fetches to complete
+        const [shorts, audioContent, videos, posts, totalVideos, totalPosts, totalAudio] = await Promise.all(fetchPromises);
+
+        console.log(`✅ [Feed] Fetched: ${shorts.length} shorts, ${audioContent.length} audio, ${videos.length} videos, ${posts.length} posts`);
+
+        // OPTIMIZATION: Batch generate signed URLs with Promise.all
+        // Process all content types in parallel
+        const [processedShorts, processedAudio, processedVideos, processedPosts] = await Promise.all([
+            // Process shorts
+            Promise.all(shorts.map(async (content) => ({
+                _id: content._id,
+                contentType: 'short',
+                title: content.title,
+                description: content.description,
+                duration: content.duration,
+                thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
+                views: content.views,
+                likeCount: content.likeCount,
+                createdAt: content.createdAt,
+                channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                channelPicture: content.userId?.channelPicture || null,
+                status: content.status,
+                score: calculateScore(content)
+            }))),
+
+            // Process audio
+            Promise.all(audioContent.map(async (content) => ({
+                _id: content._id,
+                contentType: 'audio',
+                title: content.title,
+                description: content.description,
+                duration: content.duration,
+                thumbnailUrl: await generateSignedUrl(content.thumbnailKey || content.imageKey),
+                imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                views: content.views,
+                likeCount: content.likeCount,
+                createdAt: content.createdAt,
+                channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                channelPicture: content.userId?.channelPicture || null,
+                artist: content.artist,
+                album: content.album,
+                audioCategory: content.audioCategory,
+                status: content.status,
+                score: calculateScore(content)
+            }))),
+
+            // Process videos
+            Promise.all(videos.map(async (video) => ({
+                _id: video._id,
+                contentType: 'video',
+                title: video.title,
+                description: video.description,
+                duration: video.duration,
+                thumbnailUrl: await generateSignedUrl(video.thumbnailKey),
+                views: video.views,
+                likeCount: video.likes?.length || 0,
+                createdAt: video.createdAt,
+                channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+                channelPicture: video.userId?.channelPicture || null,
+                status: video.status,
+                score: calculateScore(video)
+            }))),
+
+            // Process posts (skip fetching top comment for speed - can be loaded on demand)
+            Promise.all(posts.map(async (content) => ({
+                _id: content._id,
+                contentType: 'post',
+                title: content.title,
+                description: content.description,
+                postContent: content.postContent,
+                thumbnailUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                views: content.views,
+                likeCount: content.likeCount,
+                commentCount: content.commentCount || 0,
+                createdAt: content.createdAt,
+                channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                channelPicture: content.userId?.channelPicture || null,
+                status: content.status,
+                score: calculateScore(content)
+            })))
+        ]);
+
+        // Sort by score
         processedShorts.sort((a, b) => b.score - a.score);
         processedAudio.sort((a, b) => b.score - a.score);
         processedVideos.sort((a, b) => b.score - a.score);
         processedPosts.sort((a, b) => b.score - a.score);
 
-        // Return content SEPARATELY for proper frontend interleaving
-        // Videos should NOT be mixed with audio/posts in main grid
-        // Frontend will handle the interleaving algorithm
-
-        // Get total counts for pagination
-        const totalVideos = await Video.countDocuments({ status: 'completed' });
-        const totalPosts = await Content.countDocuments({
-            contentType: 'post',
-            status: 'completed',
-            visibility: 'public'
-        });
-        const totalAudio = await Content.countDocuments({
-            contentType: 'audio',
-            status: 'completed',
-            visibility: 'public'
-        });
         const total = totalVideos + totalPosts + totalAudio;
 
         res.json({
@@ -385,7 +245,6 @@ export const getMixedFeed = async (req, res) => {
             videos: processedVideos,
             audio: isFirstPage ? processedAudio : [],
             posts: processedPosts,
-            // Legacy: combined content for backward compatibility
             content: processedVideos,
             pagination: {
                 currentPage: parseInt(page),

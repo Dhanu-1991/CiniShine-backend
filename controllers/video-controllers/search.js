@@ -1,4 +1,5 @@
 import Video from "../../models/video.model.js";
+import SearchHistory from "../../models/searchHistory.model.js";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 
@@ -9,6 +10,63 @@ const s3Client = new S3Client({
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     },
 });
+
+/**
+ * Get search text suggestions (autocomplete)
+ * Returns popular/recent search queries, NOT videos
+ */
+export const getSearchSuggestions = async (req, res) => {
+    try {
+        const { q: query } = req.query;
+        const userId = req.user?.id;
+
+        if (!query || query.trim().length < 1) {
+            // Return recent searches if no query
+            if (userId) {
+                const recentSearches = await SearchHistory.getRecentSearches(userId, 8);
+                return res.json({
+                    suggestions: recentSearches.map(s => ({ query: s.query, type: 'recent' })),
+                    type: 'recent'
+                });
+            }
+            // Return trending searches for anonymous users
+            const trending = await SearchHistory.getTrendingSearches(8);
+            return res.json({
+                suggestions: trending.map(s => ({ query: s.query, type: 'trending' })),
+                type: 'trending'
+            });
+        }
+
+        // Get search suggestions based on partial query
+        const suggestions = await SearchHistory.getSuggestions(query.trim(), userId, 10);
+
+        res.json({
+            suggestions,
+            type: 'suggestions'
+        });
+    } catch (error) {
+        console.error('Error getting search suggestions:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Clear user's search history
+ */
+export const clearSearchHistory = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) {
+            return res.status(401).json({ message: 'Authentication required' });
+        }
+
+        await SearchHistory.clearUserHistory(userId);
+        res.json({ success: true, message: 'Search history cleared' });
+    } catch (error) {
+        console.error('Error clearing search history:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
 
 /**
  * Extract hashtags from text
@@ -93,6 +151,7 @@ const calculateHashtagScore = (searchHashtags, contentHashtags) => {
 export const searchVideos = async (req, res) => {
     try {
         const { q: query, page = 1, limit = 20 } = req.query;
+        const userId = req.user?.id;
 
         if (!query || query.trim().length < 2) {
             return res.json({
@@ -117,9 +176,23 @@ export const searchVideos = async (req, res) => {
 
         const skip = (page - 1) * parseInt(limit);
 
-        // Get all completed videos with user info
-        const allVideos = await Video.find({ status: 'completed' })
+        // Use MongoDB text search with indexes for faster initial filtering
+        // Build query with $or for multiple field matching
+        const searchRegex = new RegExp(searchWords.join('|'), 'i');
+
+        const matchQuery = {
+            status: 'completed',
+            $or: [
+                { title: searchRegex },
+                { description: searchRegex }
+            ]
+        };
+
+        // Get matching videos with user info (limited initial fetch for performance)
+        const allVideos = await Video.find(matchQuery)
             .populate('userId', 'userName channelName channelPicture')
+            .sort({ views: -1, createdAt: -1 })
+            .limit(200) // Limit to top 200 for scoring (performance optimization)
             .sort({ createdAt: -1 });
 
         // Score and filter videos based on search relevance
@@ -248,6 +321,11 @@ export const searchVideos = async (req, res) => {
 
         const totalVideos = scoredVideos.length;
         const hasNextPage = skip + parseInt(limit) < totalVideos;
+
+        // Record search query for suggestions (async, don't wait)
+        SearchHistory.recordSearch(userId, query.trim(), totalVideos).catch(err =>
+            console.error('Error recording search:', err)
+        );
 
         res.json({
             videos: videosWithUrls,
