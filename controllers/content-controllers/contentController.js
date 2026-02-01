@@ -386,7 +386,7 @@ export const postImageInit = async (req, res) => {
  */
 export const createPost = async (req, res) => {
     try {
-        const { title, description, postContent, tags, visibility, commentsEnabled, imageUrl } = req.body;
+        const { title, description, postContent, tags, visibility, commentsEnabled, imageUrl, imageUrls } = req.body;
         const userId = req.user?.id;
 
         if (!userId) {
@@ -403,6 +403,11 @@ export const createPost = async (req, res) => {
 
         const fileId = new mongoose.Types.ObjectId();
 
+        // Handle both single image (legacy) and multiple images
+        const imageKeys = imageUrls && imageUrls.length > 0
+            ? imageUrls.slice(0, 5) // Limit to 5 images
+            : (imageUrl ? [imageUrl] : []);
+
         // Create post content (channelName fetched via populate when needed)
         const post = await Content.create({
             _id: fileId,
@@ -414,7 +419,8 @@ export const createPost = async (req, res) => {
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
             visibility: visibility || 'public',
             commentsEnabled: commentsEnabled !== false,
-            imageKey: imageUrl || null, // S3 key if image was uploaded
+            imageKey: imageKeys[0] || null, // Legacy: first image
+            imageKeys: imageKeys, // New: all images
             status: 'completed', // Posts are immediately completed
             publishedAt: new Date()
         });

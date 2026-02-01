@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import Video from '../../models/video.model.js';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
+import Comment from '../../models/comment.model.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
@@ -189,10 +190,36 @@ export const getMixedFeed = async (req, res) => {
         );
 
         // Process posts with URLs - use imageKey for post images
+        // Also fetch top comment for each post
         const processedPosts = await Promise.all(
             posts.map(async (content) => {
                 // For posts, imageKey is the primary image
                 const imageUrl = content.imageKey ? await generateSignedUrl(content.imageKey) : null;
+
+                // Fetch top comment (most liked or most recent)
+                let topComment = null;
+                try {
+                    const comment = await Comment.findOne({
+                        videoId: content._id,
+                        parentCommentId: null // Only top-level comments
+                    })
+                        .sort({ likeCount: -1, createdAt: -1 })
+                        .populate('userId', 'userName channelName channelPicture')
+                        .lean();
+
+                    if (comment) {
+                        topComment = {
+                            _id: comment._id,
+                            text: comment.text,
+                            userName: comment.userId?.channelName || comment.userId?.userName || 'User',
+                            userProfilePic: comment.userId?.channelPicture || null,
+                            likeCount: comment.likeCount || 0
+                        };
+                    }
+                } catch (err) {
+                    console.error('Error fetching top comment for post:', err);
+                }
+
                 return {
                     _id: content._id,
                     contentType: 'post',
@@ -203,11 +230,13 @@ export const getMixedFeed = async (req, res) => {
                     imageUrl: imageUrl,
                     views: content.views,
                     likeCount: content.likeCount,
+                    commentCount: content.commentCount || 0,
                     createdAt: content.createdAt,
                     channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                     channelPicture: content.userId?.channelPicture || null,
                     status: content.status,
-                    score: calculateScore(content)
+                    score: calculateScore(content),
+                    topComment: topComment
                 };
             })
         );
@@ -215,10 +244,12 @@ export const getMixedFeed = async (req, res) => {
         // Sort shorts by score
         processedShorts.sort((a, b) => b.score - a.score);
         processedAudio.sort((a, b) => b.score - a.score);
+        processedVideos.sort((a, b) => b.score - a.score);
+        processedPosts.sort((a, b) => b.score - a.score);
 
-        // Combine videos and posts for main content area
-        const mixedContent = [...processedVideos, ...processedAudio, ...processedPosts];
-        mixedContent.sort((a, b) => b.score - a.score);
+        // Return content SEPARATELY for proper frontend interleaving
+        // Videos should NOT be mixed with audio/posts in main grid
+        // Frontend will handle the interleaving algorithm
 
         // Get total counts for pagination
         const totalVideos = await Video.countDocuments({ status: 'completed' });
@@ -236,7 +267,11 @@ export const getMixedFeed = async (req, res) => {
 
         res.json({
             shorts: isFirstPage ? processedShorts : [],
-            content: mixedContent,
+            videos: processedVideos,
+            audio: isFirstPage ? processedAudio : [],
+            posts: processedPosts,
+            // Legacy: combined content for backward compatibility
+            content: processedVideos,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / parseInt(limit)),

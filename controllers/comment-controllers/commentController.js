@@ -1,11 +1,37 @@
 import Comment from "../../models/comment.model.js";
 import Video from "../../models/video.model.js";
+import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import mongoose from "mongoose";
 
 /**
+ * Helper function to find video or content by ID
+ * Returns { item, modelType } where modelType is 'Video' or 'Content'
+ */
+async function findVideoOrContent(id) {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+        return { item: null, modelType: null };
+    }
+
+    // Try Video first
+    let item = await Video.findById(id);
+    if (item) {
+        return { item, modelType: 'Video' };
+    }
+
+    // Try Content (shorts, audio, posts)
+    item = await Content.findById(id);
+    if (item) {
+        return { item, modelType: 'Content' };
+    }
+
+    return { item: null, modelType: null };
+}
+
+/**
  * POST /api/v2/video/:videoId/comments
- * Create a new comment
+ * POST /api/v2/content/:contentId/comments
+ * Create a new comment (works for both videos and content)
  */
 export const createComment = async (req, res) => {
     try {
@@ -25,10 +51,10 @@ export const createComment = async (req, res) => {
             return res.status(400).json({ message: "Comment is too long (max 5000 characters)" });
         }
 
-        // Validate video exists
-        const video = await Video.findById(videoId);
-        if (!video) {
-            return res.status(404).json({ message: "Video not found" });
+        // Validate video/content exists - check both models
+        const { item, modelType } = await findVideoOrContent(videoId);
+        if (!item) {
+            return res.status(404).json({ message: "Video or content not found" });
         }
 
         // If reply, validate parent comment exists
@@ -48,9 +74,10 @@ export const createComment = async (req, res) => {
             return res.status(404).json({ message: "User not found" });
         }
 
-        // Create comment - only store essential data (userId), fetch user details live via populate
+        // Create comment with the model type
         const newComment = await Comment.create({
             videoId,
+            onModel: modelType,
             userId,
             text: text.trim(),
             parentCommentId: parentCommentId || null
@@ -67,6 +94,13 @@ export const createComment = async (req, res) => {
             );
         }
 
+        // Update comment count on the content/video
+        if (modelType === 'Content') {
+            await Content.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
+        } else {
+            await Video.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
+        }
+
         // Return with current user data (channelName and channelPicture fetched live)
         res.status(201).json({
             message: "Comment created successfully",
@@ -74,8 +108,8 @@ export const createComment = async (req, res) => {
                 _id: newComment._id,
                 videoId: newComment.videoId,
                 userId: newComment.userId,
-                userName: user.channelName || user.userName, // display channelName
-                userProfilePic: user.channelPicture || null, // channelPicture only, fetched live
+                userName: user.channelName || user.userName,
+                userProfilePic: user.channelPicture || null,
                 text: newComment.text,
                 likeCount: 0,
                 replyCount: 0,
@@ -92,7 +126,8 @@ export const createComment = async (req, res) => {
 
 /**
  * GET /api/v2/video/:videoId/comments?page=1&limit=20
- * Get comments for a video (paginated, sorted by newest first)
+ * GET /api/v2/content/:contentId/comments?page=1&limit=20
+ * Get comments for a video or content (paginated, sorted by newest first)
  */
 export const getComments = async (req, res) => {
     try {

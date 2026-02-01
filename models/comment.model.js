@@ -1,11 +1,19 @@
 import mongoose from "mongoose";
 
 const commentSchema = new mongoose.Schema({
+    // Support both videos and content (shorts, audio, posts)
+    // videoId is kept for backward compatibility with existing video comments
     videoId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "Video",
+        refPath: 'onModel',
         required: true,
         index: true
+    },
+    // Specifies which model the videoId references
+    onModel: {
+        type: String,
+        enum: ['Video', 'Content'],
+        default: 'Video'
     },
     userId: {
         type: mongoose.Schema.Types.ObjectId,

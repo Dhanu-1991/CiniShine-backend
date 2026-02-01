@@ -75,7 +75,11 @@ const ContentSchema = new mongoose.Schema({
         enum: ['auto', 'custom'],
         default: 'auto'
     },
-    imageKey: String,           // For posts: attached image
+    imageKey: String,           // For posts: single attached image (legacy)
+    imageKeys: [{               // For posts: multiple attached images (up to 5)
+        type: String,
+        trim: true
+    }],
 
     // Media metadata
     duration: Number,           // In seconds (for shorts/audio)
