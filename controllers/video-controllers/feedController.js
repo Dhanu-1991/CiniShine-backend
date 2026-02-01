@@ -6,6 +6,7 @@ import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -63,16 +64,16 @@ const calculateScore = (item, userPreferences = {}) => {
 
 /**
  * Get mixed feed content (videos, shorts, audio, posts)
- * Returns shorts separately for horizontal display
+ * Returns shorts and audio separately for horizontal display rows
  */
 export const getMixedFeed = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { page = 1, limit = 20, shortsLimit = 10 } = req.query;
+        const { page = 1, limit = 20, shortsLimit = 12, audioLimit = 8 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const isFirstPage = parseInt(page) === 1;
 
-        // Fetch shorts (for horizontal row - only on first page or when specifically requested)
+        // Fetch shorts (for horizontal row - only on first page)
         let shorts = [];
         if (isFirstPage || req.query.includeShorts === 'true') {
             const shortsQuery = {
@@ -87,6 +88,21 @@ export const getMixedFeed = async (req, res) => {
                 .limit(parseInt(shortsLimit));
         }
 
+        // Fetch audio (for horizontal row - only on first page)
+        let audioContent = [];
+        if (isFirstPage || req.query.includeAudio === 'true') {
+            const audioQuery = {
+                contentType: 'audio',
+                status: 'completed',
+                visibility: 'public'
+            };
+
+            audioContent = await Content.find(audioQuery)
+                .populate('userId', 'userName channelName channelPicture')
+                .sort({ createdAt: -1 })
+                .limit(parseInt(audioLimit));
+        }
+
         // Fetch videos
         const videos = await Video.find({
             status: 'completed'
@@ -96,16 +112,16 @@ export const getMixedFeed = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit));
 
-        // Fetch other content (audio, posts)
-        const otherContent = await Content.find({
-            contentType: { $in: ['audio', 'post'] },
+        // Fetch posts
+        const posts = await Content.find({
+            contentType: 'post',
             status: 'completed',
             visibility: 'public'
         })
             .populate('userId', 'userName channelName channelPicture')
             .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(Math.floor(parseInt(limit) / 3));
+            .skip(isFirstPage ? 0 : skip)
+            .limit(Math.floor(parseInt(limit) / 4));
 
         // Process shorts with URLs
         const processedShorts = await Promise.all(
@@ -124,6 +140,33 @@ export const getMixedFeed = async (req, res) => {
                 status: content.status,
                 score: calculateScore(content)
             }))
+        );
+
+        // Process audio with URLs - use thumbnailKey OR imageKey for album art
+        const processedAudio = await Promise.all(
+            audioContent.map(async (content) => {
+                // For audio, thumbnailKey is the primary, imageKey is fallback
+                const thumbnailKey = content.thumbnailKey || content.imageKey;
+                return {
+                    _id: content._id,
+                    contentType: 'audio',
+                    title: content.title,
+                    description: content.description,
+                    duration: content.duration,
+                    thumbnailUrl: await generateSignedUrl(thumbnailKey),
+                    imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                    views: content.views,
+                    likeCount: content.likeCount,
+                    createdAt: content.createdAt,
+                    channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                    channelPicture: content.userId?.channelPicture || null,
+                    artist: content.artist,
+                    album: content.album,
+                    audioCategory: content.audioCategory,
+                    status: content.status,
+                    score: calculateScore(content)
+                };
+            })
         );
 
         // Process videos with URLs
@@ -145,42 +188,51 @@ export const getMixedFeed = async (req, res) => {
             }))
         );
 
-        // Process other content with URLs
-        const processedOther = await Promise.all(
-            otherContent.map(async (content) => ({
-                _id: content._id,
-                contentType: content.contentType,
-                title: content.title,
-                description: content.description,
-                postContent: content.postContent,
-                duration: content.duration,
-                thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
-                imageUrl: await generateSignedUrl(content.imageKey),
-                views: content.views,
-                likeCount: content.likeCount,
-                createdAt: content.createdAt,
-                channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                channelPicture: content.userId?.channelPicture || null,
-                status: content.status,
-                score: calculateScore(content)
-            }))
+        // Process posts with URLs - use imageKey for post images
+        const processedPosts = await Promise.all(
+            posts.map(async (content) => {
+                // For posts, imageKey is the primary image
+                const imageUrl = content.imageKey ? await generateSignedUrl(content.imageKey) : null;
+                return {
+                    _id: content._id,
+                    contentType: 'post',
+                    title: content.title,
+                    description: content.description,
+                    postContent: content.postContent,
+                    thumbnailUrl: imageUrl, // Use image as thumbnail for consistency
+                    imageUrl: imageUrl,
+                    views: content.views,
+                    likeCount: content.likeCount,
+                    createdAt: content.createdAt,
+                    channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                    channelPicture: content.userId?.channelPicture || null,
+                    status: content.status,
+                    score: calculateScore(content)
+                };
+            })
         );
 
         // Sort shorts by score
         processedShorts.sort((a, b) => b.score - a.score);
+        processedAudio.sort((a, b) => b.score - a.score);
 
-        // Combine videos and other content, sort by score
-        const mixedContent = [...processedVideos, ...processedOther];
+        // Combine videos and posts for main content area
+        const mixedContent = [...processedVideos, ...processedAudio, ...processedPosts];
         mixedContent.sort((a, b) => b.score - a.score);
 
         // Get total counts for pagination
         const totalVideos = await Video.countDocuments({ status: 'completed' });
-        const totalOther = await Content.countDocuments({
-            contentType: { $in: ['audio', 'post'] },
+        const totalPosts = await Content.countDocuments({
+            contentType: 'post',
             status: 'completed',
             visibility: 'public'
         });
-        const total = totalVideos + totalOther;
+        const totalAudio = await Content.countDocuments({
+            contentType: 'audio',
+            status: 'completed',
+            visibility: 'public'
+        });
+        const total = totalVideos + totalPosts + totalAudio;
 
         res.json({
             shorts: isFirstPage ? processedShorts : [],

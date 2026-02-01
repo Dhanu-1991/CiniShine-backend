@@ -20,7 +20,13 @@ import {
     // Get content
     getContent,
     getUserContent,
-    getFeedContent
+    getFeedContent,
+    // New endpoints
+    updateContentWatchTime,
+    updateContentEngagement,
+    getShortsPlayerFeed,
+    getAudioPlayerFeed,
+    getSingleContent
 } from '../../controllers/content-controllers/contentController.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
@@ -65,6 +71,21 @@ router.post('/post/create', universalTokenVerifier, createPost);
 router.post('/:id/thumbnail', universalTokenVerifier, upload.single('thumbnail'), uploadThumbnail);
 
 // ============================================
+// PLAYER FEEDS (for dedicated players)
+// ============================================
+// Shorts player feed (vertical scrolling like YouTube Shorts)
+router.get('/shorts/feed', universalTokenVerifier, getShortsPlayerFeed);
+
+// Audio player feed
+router.get('/audio/feed', universalTokenVerifier, getAudioPlayerFeed);
+
+// ============================================
+// WATCH TIME & ENGAGEMENT TRACKING
+// ============================================
+router.post('/:id/watch-time', universalTokenVerifier, updateContentWatchTime);
+router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
+
+// ============================================
 // GET ROUTES
 // ============================================
 // Get feed (public shorts, audio, posts)
@@ -73,7 +94,10 @@ router.get('/feed', getFeedContent);
 // Get user's own content
 router.get('/user/my-content', universalTokenVerifier, getUserContent);
 
-// Get specific content by ID
+// Get single content by ID (with all URLs)
+router.get('/single/:id', getSingleContent);
+
+// Get specific content by ID (legacy)
 router.get('/:id', universalTokenVerifier, getContent);
 
 export default router;
