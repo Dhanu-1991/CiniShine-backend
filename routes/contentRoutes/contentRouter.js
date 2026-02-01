@@ -107,9 +107,11 @@ import commentRouter from '../commentRoutes/commentRouter.js';
 // Mount comment routes for content
 // POST /api/v2/content/:id/comments - Create comment
 // GET /api/v2/content/:id/comments - Get comments
-router.use('/:contentId/comments', (req, res, next) => {
-    // Map contentId to videoId for comment router compatibility
-    req.params.videoId = req.params.contentId;
+router.use('/:id/comments', (req, res, next) => {
+    // Map id to videoId for comment router compatibility
+    req.params.videoId = req.params.id;
+    req.params.contentId = req.params.id;
+    console.log(`🔗 [ContentRouter] Mapping id to videoId: ${req.params.id}`);
     next();
 }, commentRouter);
 
