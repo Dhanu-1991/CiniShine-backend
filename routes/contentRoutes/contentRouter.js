@@ -107,13 +107,20 @@ import commentRouter from '../commentRoutes/commentRouter.js';
 // Mount comment routes for content
 // POST /api/v2/content/:id/comments - Create comment
 // GET /api/v2/content/:id/comments - Get comments
-router.use('/:id/comments', (req, res, next) => {
-    // Map id to videoId for comment router compatibility
-    req.params.videoId = req.params.id;
-    req.params.contentId = req.params.id;
-    console.log(`🔗 [ContentRouter] Mapping id to videoId: ${req.params.id}`);
+// Use a middleware function that explicitly handles the mapping
+const mapContentIdToVideoId = (req, res, next) => {
+    // req.params should have 'id' from the /:id/comments route
+    if (req.params.id) {
+        req.params.videoId = req.params.id;
+        req.params.contentId = req.params.id;
+        console.log(`🔗 [ContentRouter] Mapping id (${req.params.id}) to videoId for comments route`);
+    } else {
+        console.error(`❌ [ContentRouter] No id param found in route`);
+    }
     next();
-}, commentRouter);
+};
+
+router.use('/:id/comments', mapContentIdToVideoId, commentRouter);
 
 // Get specific content by ID (legacy)
 router.get('/:id', universalTokenVerifier, getContent);

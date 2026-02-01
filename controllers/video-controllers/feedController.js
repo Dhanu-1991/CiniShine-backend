@@ -21,9 +21,12 @@ const s3Client = new S3Client({
  * Generate signed URL for S3 objects
  */
 const generateSignedUrl = async (key) => {
-    if (!key) return null;
+    if (!key) {
+        console.warn(`⚠️ [S3] No key provided for signed URL generation`);
+        return null;
+    }
     try {
-        return await getSignedUrl(
+        const url = await getSignedUrl(
             s3Client,
             new GetObjectCommand({
                 Bucket: process.env.S3_BUCKET,
@@ -31,8 +34,10 @@ const generateSignedUrl = async (key) => {
             }),
             { expiresIn: 3600 }
         );
+        console.log(`✅ [S3] Generated signed URL for key: ${key.substring(0, 50)}...`);
+        return url;
     } catch (error) {
-        console.error('Error generating signed URL:', error);
+        console.error(`❌ [S3] Error generating signed URL for key ${key}:`, error.message);
         return null;
     }
 };
@@ -222,17 +227,22 @@ export const getMixedFeed = async (req, res) => {
         );
 
         // Process audio with URLs - use thumbnailKey OR imageKey for album art
+        console.log(`🎵 [Feed] Processing ${audioContent.length} audio tracks with thumbnail URLs...`);
         const processedAudio = await Promise.all(
-            audioContent.map(async (content) => {
+            audioContent.map(async (content, idx) => {
                 // For audio, thumbnailKey is the primary, imageKey is fallback
                 const thumbnailKey = content.thumbnailKey || content.imageKey;
+                const thumbnailUrl = await generateSignedUrl(thumbnailKey);
+                if (!thumbnailUrl) {
+                    console.warn(`⚠️ [Feed] Audio ${idx} (${content._id}): No thumbnail URL - thumbnailKey: ${content.thumbnailKey || 'MISSING'}, imageKey: ${content.imageKey || 'MISSING'}`);
+                }
                 return {
                     _id: content._id,
                     contentType: 'audio',
                     title: content.title,
                     description: content.description,
                     duration: content.duration,
-                    thumbnailUrl: await generateSignedUrl(thumbnailKey),
+                    thumbnailUrl,
                     imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
                     views: content.views,
                     likeCount: content.likeCount,
@@ -247,25 +257,34 @@ export const getMixedFeed = async (req, res) => {
                 };
             })
         );
+        console.log(`✅ [Feed] Processed ${processedAudio.length} audio tracks`);
 
         // Process videos with URLs
+        console.log(`🎬 [Feed] Processing ${videos.length} videos with thumbnail URLs...`);
         const processedVideos = await Promise.all(
-            videos.map(async (video) => ({
-                _id: video._id,
-                contentType: 'video',
-                title: video.title,
-                description: video.description,
-                duration: video.duration,
-                thumbnailUrl: await generateSignedUrl(video.thumbnailKey),
-                views: video.views,
-                likeCount: video.likes?.length || 0,
-                createdAt: video.createdAt,
-                channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
-                channelPicture: video.userId?.channelPicture || null,
-                status: video.status,
-                score: calculateScore(video)
-            }))
+            videos.map(async (video, idx) => {
+                const thumbnailUrl = await generateSignedUrl(video.thumbnailKey);
+                if (!thumbnailUrl) {
+                    console.warn(`⚠️ [Feed] Video ${idx} (${video._id}): No thumbnail URL - thumbnailKey: ${video.thumbnailKey || 'MISSING'}`);
+                }
+                return {
+                    _id: video._id,
+                    contentType: 'video',
+                    title: video.title,
+                    description: video.description,
+                    duration: video.duration,
+                    thumbnailUrl,
+                    views: video.views,
+                    likeCount: video.likes?.length || 0,
+                    createdAt: video.createdAt,
+                    channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+                    channelPicture: video.userId?.channelPicture || null,
+                    status: video.status,
+                    score: calculateScore(video)
+                };
+            })
         );
+        console.log(`✅ [Feed] Processed ${processedVideos.length} videos`);
 
         // Process posts with URLs - use imageKey for post images
         // Also fetch top comment for each post
@@ -399,6 +418,11 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 .populate('userId', 'userName channelName channelPicture')
                 .sort({ views: -1, createdAt: -1 })
                 .limit(parseInt(shortsLimit));
+
+            console.log(`📥 [Recommendations] Fetched ${shorts.length} shorts for first page`);
+            shorts.forEach((short, idx) => {
+                console.log(`  Short ${idx}: ${short._id}, thumbnailKey: ${short.thumbnailKey}, title: ${short.title}`);
+            });
         }
 
         // Fetch similar videos
@@ -421,20 +445,24 @@ export const getRecommendationsWithShorts = async (req, res) => {
 
         // Process shorts with URLs
         const processedShorts = await Promise.all(
-            shorts.map(async (content) => ({
-                _id: content._id,
-                contentType: 'short',
-                title: content.title,
-                description: content.description,
-                duration: content.duration,
-                thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
-                views: content.views,
-                likeCount: content.likeCount,
-                createdAt: content.createdAt,
-                channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                channelPicture: content.userId?.channelPicture || null,
-                status: content.status
-            }))
+            shorts.map(async (content, idx) => {
+                const thumbnailUrl = await generateSignedUrl(content.thumbnailKey);
+                console.log(`✅ [Recommendations] Processing short ${idx}: ${content._id}, URL: ${thumbnailUrl ? 'generated' : 'null'}`);
+                return {
+                    _id: content._id,
+                    contentType: 'short',
+                    title: content.title,
+                    description: content.description,
+                    duration: content.duration,
+                    thumbnailUrl,
+                    views: content.views,
+                    likeCount: content.likeCount,
+                    createdAt: content.createdAt,
+                    channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                    channelPicture: content.userId?.channelPicture || null,
+                    status: content.status
+                };
+            })
         );
 
         // Process videos with URLs

@@ -147,11 +147,16 @@ export const getComments = async (req, res) => {
         const { videoId } = req.params;
         const { page = 1, limit = 20 } = req.query;
         const userId = req.user?.id;
-        console.log("reached get comments route with details")
-        console.log("videoId received:", videoId);
 
+        console.log(`💬 [Comments] getComments called with params:`, { videoId, page, limit, allParams: req.params });
+
+        if (!videoId) {
+            console.error(`❌ [Comments] No videoId provided. req.params:`, req.params);
+            return res.status(400).json({ message: "Video ID is required" });
+        }
 
         if (!mongoose.Types.ObjectId.isValid(videoId)) {
+            console.error(`❌ [Comments] Invalid video ID: ${videoId}`);
             return res.status(400).json({ message: "Invalid video ID" });
         }
 
