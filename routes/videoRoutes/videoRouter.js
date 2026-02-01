@@ -16,6 +16,7 @@ import {
   getRecommendations,
   uploadVideoThumbnail
 } from "../../controllers/video-controllers/videoController.js";
+import { getMixedFeed, getRecommendationsWithShorts } from "../../controllers/video-controllers/feedController.js";
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/video-controllers/interactions.js";
 import { searchVideos } from "../../controllers/video-controllers/search.js";
 import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
@@ -53,8 +54,14 @@ router.put("/user/preferences", universalTokenVerifier, updateUserPreferences);
 
 router.get("/general/content", getGeneralContent);
 
-// Recommendations route
+// Mixed feed route (videos, shorts, audio, posts with recommendation algorithm)
+router.get("/feed/mixed", universalTokenVerifier, getMixedFeed);
+
+// Recommendations route (videos only - legacy)
 router.get("/:videoId/recommendations", universalTokenVerifier, getRecommendations);
+
+// Recommendations with shorts (for WatchPage sidebar)
+router.get("/:videoId/recommendations-with-shorts", universalTokenVerifier, getRecommendationsWithShorts);
 
 // Search route
 router.get("/search", universalTokenVerifier, searchVideos);
