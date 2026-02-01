@@ -964,13 +964,19 @@ export const getContentEngagementStatus = async (req, res) => {
 /**
  * Get shorts feed for the shorts player (vertical scrolling)
  * Returns personalized recommendations based on watch history
+ * Supports excludeIds to avoid duplicates on infinite scroll
  */
 export const getShortsPlayerFeed = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { page = 1, limit = 10, currentShortId } = req.query;
+        const { page = 1, limit = 10, currentShortId, excludeIds } = req.query;
 
-        console.log(`📥 [ShortsPlayerFeed] Request - userId: ${userId}, page: ${page}, currentShortId: ${currentShortId}`);
+        // Parse excludeIds from comma-separated string to array
+        const excludeIdArray = excludeIds
+            ? excludeIds.split(',').filter(id => mongoose.Types.ObjectId.isValid(id))
+            : [];
+
+        console.log(`📥 [ShortsPlayerFeed] Request - userId: ${userId}, page: ${page}, currentShortId: ${currentShortId}, excludeCount: ${excludeIdArray.length}`);
 
         // If starting from a specific short, fetch that first
         let startingShort = null;
@@ -1010,7 +1016,11 @@ export const getShortsPlayerFeed = async (req, res) => {
 
         // Get recommendations (personalized if user is logged in)
         let shorts = [];
-        const excludeIds = currentShortId ? [currentShortId] : [];
+        // Combine currentShortId with frontend-provided excludeIds to avoid duplicates
+        const allExcludeIds = [
+            ...(currentShortId ? [currentShortId] : []),
+            ...excludeIdArray
+        ];
 
         if (userId) {
             console.log(`📥 [ShortsPlayerFeed] Getting personalized recommendations for user: ${userId}`);
@@ -1018,7 +1028,7 @@ export const getShortsPlayerFeed = async (req, res) => {
             const recommendations = await watchHistoryEngine.getRecommendations(
                 userId,
                 'short',
-                { page: parseInt(page), limit: parseInt(limit), excludeIds }
+                { page: parseInt(page), limit: parseInt(limit), excludeIds: allExcludeIds }
             );
             shorts = recommendations.content;
             console.log(`✅ [ShortsPlayerFeed] Got ${shorts.length} personalized shorts`);
@@ -1030,7 +1040,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                 contentType: 'short',
                 status: 'completed',
                 visibility: 'public',
-                _id: { $nin: excludeIds.map(id => new mongoose.Types.ObjectId(id)) }
+                _id: { $nin: allExcludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
                 .populate('userId', 'userName channelName channelPicture')
                 .sort({ createdAt: -1, views: -1 })

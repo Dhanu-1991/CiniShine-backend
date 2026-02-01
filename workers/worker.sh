@@ -632,6 +632,12 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     const video = await Video.findById(fileId);
     if (!video) throw new Error(`Video ${fileId} not found`);
 
+    // 🛡️ Idempotency check - skip if already completed
+    if (video.status === 'completed') {
+      console.log(`⚠️ Video ${fileId} already completed - skipping`);
+      return { success: true, skipped: true };
+    }
+
     await Video.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), error: null });
     visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
 
@@ -820,6 +826,12 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
   try {
     const content = await Content.findById(fileId);
     if (!content) throw new Error(`Short ${fileId} not found`);
+
+    // 🛡️ Idempotency check - skip if already completed
+    if (content.status === 'completed') {
+      console.log(`⚠️ Short ${fileId} already completed - skipping`);
+      return { success: true, skipped: true };
+    }
 
     await Content.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), processingError: null });
     visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
@@ -1019,6 +1031,12 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
     const content = await Content.findById(fileId);
     if (!content) throw new Error(`Audio ${fileId} not found`);
 
+    // 🛡️ Idempotency check - skip if already completed
+    if (content.status === 'completed') {
+      console.log(`⚠️ Audio ${fileId} already completed - skipping`);
+      return { success: true, skipped: true };
+    }
+
     await Content.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), processingError: null });
     visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
 
@@ -1185,6 +1203,22 @@ async function startWorker() {
           s3Key = body.key || body.s3Key;
           if (!s3Key) throw new Error('No S3 key in message');
           
+          // 🚫 FILTER OUT OUTPUT ARTIFACTS - these should NOT be processed
+          // Output paths include: audio/processed/*, hls/*, thumbnails/*
+          if (
+            s3Key.startsWith('audio/processed/') ||
+            s3Key.startsWith('hls/') ||
+            s3Key.startsWith('thumbnails/')
+          ) {
+            console.log(`🚫 Ignoring output artifact: ${s3Key}`);
+            await sqsClient.send(new DeleteMessageCommand({
+              QueueUrl: process.env.QUEUE_URL,
+              ReceiptHandle: currentReceiptHandle,
+            }));
+            currentReceiptHandle = null;
+            continue;
+          }
+          
           // Detect content type from S3 path
           contentType = detectContentType(s3Key);
           
@@ -1194,7 +1228,9 @@ async function startWorker() {
           
           userId = parts[1];
           const fileName = parts[2];
-          contentId = fileName.split('_')[0];
+          // Handle both formats: {contentId}_{filename}.ext and {contentId}.ext
+          const baseName = fileName.replace(path.extname(fileName), '');
+          contentId = baseName.includes('_') ? baseName.split('_')[0] : baseName;
           
         } catch (parseError) {
           console.error('❌ Invalid message:', parseError.message);

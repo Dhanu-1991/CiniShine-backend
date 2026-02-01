@@ -77,7 +77,7 @@ const calculateScore = (item, userPreferences = {}) => {
 export const getMixedFeed = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { page = 1, limit = 20, shortsLimit = 30, audioLimit = 12 } = req.query;
+        const { page = 1, limit = 20, shortsLimit = 5, audioLimit = 5, postsLimit = 5 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const isFirstPage = parseInt(page) === 1;
 
@@ -86,7 +86,7 @@ export const getMixedFeed = async (req, res) => {
         // OPTIMIZATION: Parallel fetch all content types at once
         const fetchPromises = [];
 
-        // 1. Fetch more shorts (for multiple rows, 6 per row)
+        // 1. Fetch exactly 5 shorts per row
         if (isFirstPage) {
             fetchPromises.push(
                 Content.find({
@@ -130,7 +130,7 @@ export const getMixedFeed = async (req, res) => {
                 .lean()
         );
 
-        // 4. Fetch posts
+        // 4. Fetch posts (use postsLimit parameter)
         fetchPromises.push(
             Content.find({
                 contentType: 'post',
@@ -140,7 +140,7 @@ export const getMixedFeed = async (req, res) => {
                 .populate('userId', 'userName channelName channelPicture')
                 .sort({ createdAt: -1 })
                 .skip(isFirstPage ? 0 : skip)
-                .limit(Math.floor(parseInt(limit) / 4))
+                .limit(parseInt(postsLimit))
                 .lean()
         );
 
