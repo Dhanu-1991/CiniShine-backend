@@ -442,3 +442,97 @@ export const likeComment = async (req, res) => {
         res.status(500).json({ message: "Internal server error" });
     }
 };
+
+/**
+ * POST /api/v2/content/:videoId/comments/:commentId/reply
+ * Create a reply to a comment
+ */
+export const replyToComment = async (req, res) => {
+    try {
+        const { videoId, commentId } = req.params;
+        const { text } = req.body;
+        const userId = req.user?.id;
+
+        console.log(`💬 [Reply] Creating reply - videoId: ${videoId}, commentId: ${commentId}, userId: ${userId}`);
+
+        if (!userId) {
+            return res.status(401).json({ message: "Authentication required" });
+        }
+
+        if (!text || text.trim().length === 0) {
+            return res.status(400).json({ message: "Reply text is required" });
+        }
+
+        if (text.length > 5000) {
+            return res.status(400).json({ message: "Reply is too long (max 5000 characters)" });
+        }
+
+        // Validate parent comment exists
+        const parentComment = await Comment.findById(commentId);
+        if (!parentComment) {
+            return res.status(404).json({ message: "Parent comment not found" });
+        }
+
+        // Validate content exists
+        const { item, modelType } = await findVideoOrContent(videoId);
+        if (!item) {
+            return res.status(404).json({ message: "Content not found" });
+        }
+
+        // Get user info
+        const user = await User.findById(userId).select("userName channelName channelPicture");
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // Create reply
+        const newReply = await Comment.create({
+            videoId,
+            onModel: modelType,
+            userId,
+            text: text.trim(),
+            parentCommentId: commentId
+        });
+
+        console.log(`✅ [Reply] Reply created: ${newReply._id}`);
+
+        // Update parent comment's reply count
+        await Comment.findByIdAndUpdate(
+            commentId,
+            {
+                $push: { replies: newReply._id },
+                $inc: { replyCount: 1 }
+            }
+        );
+
+        // Update comment count on the content/video
+        if (modelType === 'Content') {
+            await Content.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
+        } else {
+            await Video.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
+        }
+
+        console.log(`✅ [Reply] Reply count updated for parent comment: ${commentId}`);
+
+        res.status(201).json({
+            message: "Reply created successfully",
+            reply: {
+                _id: newReply._id,
+                videoId: newReply.videoId,
+                userId: newReply.userId,
+                userName: user.channelName || user.userName,
+                userProfilePic: user.channelPicture || null,
+                text: newReply.text,
+                likeCount: 0,
+                likes: 0,
+                isEdited: false,
+                createdAt: newReply.createdAt,
+                userLiked: false,
+                isLiked: false
+            }
+        });
+    } catch (error) {
+        console.error("❌ [Reply] Error creating reply:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+};

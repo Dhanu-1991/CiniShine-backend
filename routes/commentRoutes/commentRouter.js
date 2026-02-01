@@ -5,7 +5,8 @@ import {
     getCommentReplies,
     editComment,
     deleteComment,
-    likeComment
+    likeComment,
+    replyToComment
 } from "../../controllers/comment-controllers/commentController.js";
 import { universalTokenVerifier, optionalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 
@@ -17,6 +18,7 @@ router.get("/", optionalTokenVerifier, getComments);
 
 // Comment replies (optionalTokenVerifier to get userLiked status)
 router.get("/:commentId/replies", optionalTokenVerifier, getCommentReplies);
+router.post("/:commentId/reply", universalTokenVerifier, replyToComment);
 
 // Comment management
 router.put("/:commentId", universalTokenVerifier, editComment);
