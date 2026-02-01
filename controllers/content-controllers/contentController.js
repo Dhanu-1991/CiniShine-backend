@@ -1281,3 +1281,151 @@ export const getSingleContent = async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch content' });
     }
 };
+
+// ============================================
+// GET SUBSCRIPTION POSTS
+// ============================================
+
+/**
+ * Get posts from user's subscriptions
+ * Returns posts from channels the user is subscribed to
+ */
+export const getSubscriptionPosts = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { currentPostId, page = 1, limit = 10 } = req.query;
+
+        if (!userId) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        console.log(`📮 [SubscriptionPosts] Fetching for user: ${userId}, currentPost: ${currentPostId}`);
+
+        // Get user's subscriptions
+        const user = await User.findById(userId).select('subscriptions');
+        const subscriptions = user?.subscriptions || [];
+
+        if (subscriptions.length === 0) {
+            // No subscriptions - return single post if currentPostId provided
+            if (currentPostId && mongoose.Types.ObjectId.isValid(currentPostId)) {
+                const singlePost = await Content.findOne({
+                    _id: currentPostId,
+                    contentType: 'post',
+                    status: 'completed',
+                    visibility: 'public'
+                }).populate('userId', 'userName channelName channelPicture');
+
+                if (singlePost) {
+                    const postData = await formatPostWithUrls(singlePost);
+                    return res.json({
+                        posts: [postData],
+                        currentIndex: 0,
+                        pagination: { hasNextPage: false, totalItems: 1 }
+                    });
+                }
+            }
+            return res.json({
+                posts: [],
+                currentIndex: 0,
+                pagination: { hasNextPage: false, totalItems: 0 }
+            });
+        }
+
+        // Build query for subscription posts
+        const query = {
+            userId: { $in: subscriptions },
+            contentType: 'post',
+            status: 'completed',
+            visibility: 'public'
+        };
+
+        // Get total count
+        const total = await Content.countDocuments(query);
+
+        // Get posts sorted by date
+        let posts = await Content.find(query)
+            .populate('userId', 'userName channelName channelPicture')
+            .sort({ createdAt: -1 })
+            .limit(100); // Get more to find current post index
+
+        // Find current post index if provided
+        let currentIndex = 0;
+        if (currentPostId) {
+            const idx = posts.findIndex(p => p._id.toString() === currentPostId);
+            if (idx !== -1) {
+                currentIndex = idx;
+            } else {
+                // Current post not in subscriptions - add it at the beginning
+                const currentPost = await Content.findOne({
+                    _id: currentPostId,
+                    contentType: 'post',
+                    status: 'completed',
+                    visibility: 'public'
+                }).populate('userId', 'userName channelName channelPicture');
+
+                if (currentPost) {
+                    posts = [currentPost, ...posts];
+                    currentIndex = 0;
+                }
+            }
+        }
+
+        // Format posts with URLs
+        const formattedPosts = await Promise.all(
+            posts.map(post => formatPostWithUrls(post))
+        );
+
+        console.log(`✅ [SubscriptionPosts] Found ${formattedPosts.length} posts, currentIndex: ${currentIndex}`);
+
+        res.json({
+            posts: formattedPosts,
+            currentIndex,
+            pagination: {
+                hasNextPage: posts.length < total,
+                totalItems: total
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error fetching subscription posts:', error);
+        res.status(500).json({ error: 'Failed to fetch subscription posts' });
+    }
+};
+
+/**
+ * Helper to format post with signed URLs
+ */
+async function formatPostWithUrls(post) {
+    const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.thumbnailKey);
+    const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.imageKey);
+
+    // Handle multiple images
+    let imageUrls = [];
+    if (post.imageKeys && post.imageKeys.length > 0) {
+        imageUrls = await Promise.all(
+            post.imageKeys.map(key => getSignedUrlIfExists(process.env.S3_BUCKET, key))
+        );
+        imageUrls = imageUrls.filter(url => url !== null);
+    } else if (imageUrl) {
+        imageUrls = [imageUrl];
+    }
+
+    return {
+        _id: post._id,
+        contentType: post.contentType,
+        title: post.title,
+        description: post.description,
+        postContent: post.postContent,
+        thumbnailUrl,
+        imageUrl: imageUrl || thumbnailUrl,
+        imageUrls,
+        views: post.views,
+        likeCount: post.likeCount || 0,
+        commentCount: post.commentCount || 0,
+        createdAt: post.createdAt,
+        channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
+        channelPicture: post.userId?.channelPicture,
+        userId: post.userId?._id || post.userId,
+        tags: post.tags,
+        visibility: post.visibility
+    };
+}

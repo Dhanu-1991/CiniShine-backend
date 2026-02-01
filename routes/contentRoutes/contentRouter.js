@@ -27,7 +27,8 @@ import {
     getContentEngagementStatus,
     getShortsPlayerFeed,
     getAudioPlayerFeed,
-    getSingleContent
+    getSingleContent,
+    getSubscriptionPosts
 } from '../../controllers/content-controllers/contentController.js';
 import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
@@ -79,6 +80,9 @@ router.get('/shorts/feed', universalTokenVerifier, getShortsPlayerFeed);
 
 // Audio player feed
 router.get('/audio/feed', universalTokenVerifier, getAudioPlayerFeed);
+
+// Subscription posts feed (for post carousel navigation)
+router.get('/posts/subscriptions', universalTokenVerifier, getSubscriptionPosts);
 
 // ============================================
 // WATCH TIME & ENGAGEMENT TRACKING
