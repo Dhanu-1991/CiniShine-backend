@@ -163,6 +163,7 @@ export const getMixedFeed = async (req, res) => {
         // Fetch videos - use WatchHistoryEngine for personalized recommendations
         console.log(`📥 [Feed] Fetching videos...`);
         let videos = [];
+        let videosFromEngine = false; // Track if videos came from WatchHistoryEngine (already have thumbnailUrl)
 
         if (userId) {
             try {
@@ -173,7 +174,8 @@ export const getMixedFeed = async (req, res) => {
                 );
                 if (recommendations?.content?.length > 0) {
                     videos = recommendations.content;
-                    console.log(`✅ [Feed] Got ${videos.length} personalized videos from WatchHistoryEngine`);
+                    videosFromEngine = true; // WatchHistoryEngine already generates thumbnailUrl
+                    console.log(`✅ [Feed] Got ${videos.length} personalized videos from WatchHistoryEngine (thumbnails pre-generated)`);
                 }
             } catch (err) {
                 console.log(`ℹ️ [Feed] WatchHistoryEngine failed for videos, falling back to default`);
@@ -189,9 +191,10 @@ export const getMixedFeed = async (req, res) => {
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit));
+            videosFromEngine = false;
         }
 
-        console.log(`✅ [Feed] Fetched ${videos.length} videos`);
+        console.log(`✅ [Feed] Fetched ${videos.length} videos (from engine: ${videosFromEngine})`);
 
         // Fetch posts
         console.log(`📥 [Feed] Fetching posts...`);
@@ -207,92 +210,99 @@ export const getMixedFeed = async (req, res) => {
 
         console.log(`✅ [Feed] Fetched ${posts.length} posts`);
 
-        // Process shorts with URLs
+        // Process shorts - check if from WatchHistoryEngine (already has thumbnailUrl)
         console.log(`🎬 [Feed] Processing ${shorts.length} shorts...`);
-        const processedShorts = await Promise.all(
-            shorts.map(async (content, idx) => {
-                const thumbnailUrl = await generateSignedUrl(content.thumbnailKey);
-                if (!thumbnailUrl) {
-                    console.warn(`⚠️ [Feed] Short ${idx} (${content._id}): No thumbnail - thumbnailKey: ${content.thumbnailKey || 'MISSING'}`);
-                }
-                return {
-                    _id: content._id,
-                    contentType: 'short',
-                    title: content.title,
-                    description: content.description,
-                    duration: content.duration,
-                    thumbnailUrl,
-                    views: content.views,
-                    likeCount: content.likeCount,
-                    createdAt: content.createdAt,
-                    channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                    channelPicture: content.userId?.channelPicture || null,
-                    status: content.status,
-                    score: calculateScore(content)
-                };
-            })
-        );
-        console.log(`✅ [Feed] Processed ${processedShorts.length} shorts`);
+        const shortsFromEngine = shorts.length > 0 && shorts[0].thumbnailUrl !== undefined;
+        const processedShorts = shortsFromEngine
+            ? shorts.map(s => ({ ...s, score: calculateScore(s) }))
+            : await Promise.all(
+                shorts.map(async (content, idx) => {
+                    const thumbnailUrl = await generateSignedUrl(content.thumbnailKey);
+                    if (!thumbnailUrl) {
+                        console.warn(`⚠️ [Feed] Short ${idx} (${content._id}): No thumbnail - thumbnailKey: ${content.thumbnailKey || 'MISSING'}`);
+                    }
+                    return {
+                        _id: content._id,
+                        contentType: 'short',
+                        title: content.title,
+                        description: content.description,
+                        duration: content.duration,
+                        thumbnailUrl,
+                        views: content.views,
+                        likeCount: content.likeCount,
+                        createdAt: content.createdAt,
+                        channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                        channelPicture: content.userId?.channelPicture || null,
+                        status: content.status,
+                        score: calculateScore(content)
+                    };
+                })
+            );
+        console.log(`✅ [Feed] Processed ${processedShorts.length} shorts (from engine: ${shortsFromEngine})`);
 
-        // Process audio with URLs - use thumbnailKey OR imageKey for album art
-        console.log(`🎵 [Feed] Processing ${audioContent.length} audio tracks with thumbnail URLs...`);
-        const processedAudio = await Promise.all(
-            audioContent.map(async (content, idx) => {
-                // For audio, thumbnailKey is the primary, imageKey is fallback
-                const thumbnailKey = content.thumbnailKey || content.imageKey;
-                const thumbnailUrl = await generateSignedUrl(thumbnailKey);
-                if (!thumbnailUrl) {
-                    console.warn(`⚠️ [Feed] Audio ${idx} (${content._id}): No thumbnail URL - thumbnailKey: ${content.thumbnailKey || 'MISSING'}, imageKey: ${content.imageKey || 'MISSING'}`);
-                }
-                return {
-                    _id: content._id,
-                    contentType: 'audio',
-                    title: content.title,
-                    description: content.description,
-                    duration: content.duration,
-                    thumbnailUrl,
-                    imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
-                    views: content.views,
-                    likeCount: content.likeCount,
-                    createdAt: content.createdAt,
-                    channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                    channelPicture: content.userId?.channelPicture || null,
-                    artist: content.artist,
-                    album: content.album,
-                    audioCategory: content.audioCategory,
-                    status: content.status,
-                    score: calculateScore(content)
-                };
-            })
-        );
-        console.log(`✅ [Feed] Processed ${processedAudio.length} audio tracks`);
+        // Process audio - check if from WatchHistoryEngine (already has thumbnailUrl)
+        console.log(`🎵 [Feed] Processing ${audioContent.length} audio tracks...`);
+        const audioFromEngine = audioContent.length > 0 && audioContent[0].thumbnailUrl !== undefined;
+        const processedAudio = audioFromEngine
+            ? audioContent.map(a => ({ ...a, score: calculateScore(a) }))
+            : await Promise.all(
+                audioContent.map(async (content, idx) => {
+                    const thumbnailKey = content.thumbnailKey || content.imageKey;
+                    const thumbnailUrl = await generateSignedUrl(thumbnailKey);
+                    if (!thumbnailUrl) {
+                        console.warn(`⚠️ [Feed] Audio ${idx} (${content._id}): No thumbnail URL - thumbnailKey: ${content.thumbnailKey || 'MISSING'}, imageKey: ${content.imageKey || 'MISSING'}`);
+                    }
+                    return {
+                        _id: content._id,
+                        contentType: 'audio',
+                        title: content.title,
+                        description: content.description,
+                        duration: content.duration,
+                        thumbnailUrl,
+                        imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                        views: content.views,
+                        likeCount: content.likeCount,
+                        createdAt: content.createdAt,
+                        channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                        channelPicture: content.userId?.channelPicture || null,
+                        artist: content.artist,
+                        album: content.album,
+                        audioCategory: content.audioCategory,
+                        status: content.status,
+                        score: calculateScore(content)
+                    };
+                })
+            );
+        console.log(`✅ [Feed] Processed ${processedAudio.length} audio (from engine: ${audioFromEngine})`);
 
-        // Process videos with URLs
-        console.log(`🎬 [Feed] Processing ${videos.length} videos with thumbnail URLs...`);
-        const processedVideos = await Promise.all(
-            videos.map(async (video, idx) => {
-                const thumbnailUrl = await generateSignedUrl(video.thumbnailKey);
-                if (!thumbnailUrl) {
-                    console.warn(`⚠️ [Feed] Video ${idx} (${video._id}): No thumbnail URL - thumbnailKey: ${video.thumbnailKey || 'MISSING'}`);
-                }
-                return {
-                    _id: video._id,
-                    contentType: 'video',
-                    title: video.title,
-                    description: video.description,
-                    duration: video.duration,
-                    thumbnailUrl,
-                    views: video.views,
-                    likeCount: video.likes?.length || 0,
-                    createdAt: video.createdAt,
-                    channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
-                    channelPicture: video.userId?.channelPicture || null,
-                    status: video.status,
-                    score: calculateScore(video)
-                };
-            })
-        );
-        console.log(`✅ [Feed] Processed ${processedVideos.length} videos`);
+        // Process videos - if from WatchHistoryEngine, thumbnailUrl is already generated!
+        console.log(`🎬 [Feed] Processing ${videos.length} videos...`);
+        const processedVideos = videosFromEngine
+            ? videos.map(v => ({ ...v, score: calculateScore(v) })) // Already has thumbnailUrl from engine
+            : await Promise.all(
+                videos.map(async (video, idx) => {
+                    const thumbnailUrl = await generateSignedUrl(video.thumbnailKey);
+                    if (!thumbnailUrl) {
+                        console.warn(`⚠️ [Feed] Video ${idx} (${video._id}): No thumbnail URL - thumbnailKey: ${video.thumbnailKey || 'MISSING'}`);
+                    }
+                    return {
+                        _id: video._id,
+                        contentType: 'video',
+                        title: video.title,
+                        description: video.description,
+                        duration: video.duration,
+                        thumbnailUrl,
+                        views: video.views,
+                        likeCount: video.likes?.length || 0,
+                        createdAt: video.createdAt,
+                        channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+                        channelPicture: video.userId?.channelPicture || null,
+                        status: video.status,
+                        score: calculateScore(video)
+                    };
+                })
+            );
+        console.log(`✅ [Feed] Processed ${processedVideos.length} videos (from engine: ${videosFromEngine})`);
 
         // Process posts with URLs - use imageKey for post images
         // Also fetch top comment for each post
