@@ -26,8 +26,7 @@ import {
     updateContentEngagement,
     getShortsPlayerFeed,
     getAudioPlayerFeed,
-    getSingleContent,
-    getMixedFeed
+    getSingleContent
 } from '../../controllers/content-controllers/contentController.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
@@ -89,9 +88,6 @@ router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
 // ============================================
 // GET ROUTES
 // ============================================
-// Get mixed feed (YouTube-style interleaved shorts, audio, videos, posts)
-router.get('/mixed/feed', getMixedFeed);
-
 // Get feed (public shorts, audio, posts)
 router.get('/feed', getFeedContent);
 
@@ -100,6 +96,20 @@ router.get('/user/my-content', universalTokenVerifier, getUserContent);
 
 // Get single content by ID (with all URLs)
 router.get('/single/:id', getSingleContent);
+
+// ============================================
+// COMMENTS ROUTES (for shorts, audio, posts)
+// ============================================
+import commentRouter from '../commentRoutes/commentRouter.js';
+
+// Mount comment routes for content
+// POST /api/v2/content/:id/comments - Create comment
+// GET /api/v2/content/:id/comments - Get comments
+router.use('/:contentId/comments', (req, res, next) => {
+    // Map contentId to videoId for comment router compatibility
+    req.params.videoId = req.params.contentId;
+    next();
+}, commentRouter);
 
 // Get specific content by ID (legacy)
 router.get('/:id', universalTokenVerifier, getContent);

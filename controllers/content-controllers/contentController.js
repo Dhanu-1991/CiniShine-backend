@@ -20,9 +20,61 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
+
+// Cache for S3 object existence checks (TTL: 5 minutes)
+const s3ExistenceCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Check if an S3 object exists (with caching)
+ */
+async function s3ObjectExists(bucket, key) {
+    const cacheKey = `${bucket}:${key}`;
+    const cached = s3ExistenceCache.get(cacheKey);
+
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.exists;
+    }
+
+    try {
+        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        s3ExistenceCache.set(cacheKey, { exists: true, timestamp: Date.now() });
+        return true;
+    } catch (err) {
+        if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
+            s3ExistenceCache.set(cacheKey, { exists: false, timestamp: Date.now() });
+            return false;
+        }
+        // For other errors, don't cache and assume it might exist
+        console.error(`Error checking S3 object existence for ${key}:`, err.message);
+        return true; // Optimistically return true to try generating URL
+    }
+}
+
+/**
+ * Generate signed URL only if object exists
+ */
+async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
+    if (!key) return null;
+
+    const exists = await s3ObjectExists(bucket, key);
+    if (!exists) {
+        return null;
+    }
+
+    try {
+        return await getSignedUrl(s3Client, new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+        }), { expiresIn });
+    } catch (err) {
+        console.error(`Error generating signed URL for ${key}:`, err.message);
+        return null;
+    }
+}
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -82,7 +134,7 @@ export const shortUploadInit = async (req, res) => {
             ContentType: fileType,
         });
 
-        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 86400 });
+        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
         console.log(`📤 Short upload initialized: ${fileId} for user ${userId}`);
 
@@ -205,7 +257,7 @@ export const audioUploadInit = async (req, res) => {
             ContentType: fileType,
         });
 
-        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 86400 });
+        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
         console.log(`📤 Audio upload initialized: ${fileId} for user ${userId}`);
 
@@ -314,7 +366,7 @@ export const postImageInit = async (req, res) => {
             ContentType: fileType,
         });
 
-        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 86400 });
+        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
         console.log(`📤 Post image upload initialized: ${fileId} for user ${userId}`);
 
@@ -478,55 +530,16 @@ export const getContent = async (req, res) => {
             return res.status(404).json({ error: 'Content not found' });
         }
 
-        // Generate signed URL for thumbnail if exists
-        let thumbnailUrl = null;
-        if (content.thumbnailKey) {
-            try {
-                thumbnailUrl = await getSignedUrl(
-                    s3Client,
-                    new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: content.thumbnailKey,
-                    }),
-                    { expiresIn: 86400 }
-                );
-            } catch (err) {
-                console.warn('Could not generate thumbnail URL:', err.message);
-            }
-        }
+        // Generate signed URL for thumbnail if exists (with existence check)
+        const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
 
         // Generate signed URL for image (posts)
-        let imageUrl = null;
-        if (content.imageKey) {
-            try {
-                imageUrl = await getSignedUrl(
-                    s3Client,
-                    new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: content.imageKey,
-                    }),
-                    { expiresIn: 86400 }
-                );
-            } catch (err) {
-                console.warn('Could not generate image URL:', err.message);
-            }
-        }
+        const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
 
         // Generate signed URL for audio file
         let audioUrl = null;
         if (content.contentType === 'audio' && content.originalKey) {
-            try {
-                audioUrl = await getSignedUrl(
-                    s3Client,
-                    new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: content.originalKey,
-                    }),
-                    { expiresIn: 86400 }
-                );
-            } catch (err) {
-                console.warn('Could not generate audio URL:', err.message);
-            }
+            audioUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.originalKey);
         }
 
         res.json({
@@ -585,38 +598,8 @@ export const getUserContent = async (req, res) => {
         // Generate signed URLs for thumbnails/images
         const contentsWithUrls = await Promise.all(
             contents.map(async (content) => {
-                let thumbnailUrl = null;
-                let imageUrl = null;
-
-                if (content.thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: content.thumbnailKey,
-                            }),
-                            { expiresIn: 86400 }
-                        );
-                    } catch (err) {
-                        console.warn('Thumbnail URL error:', err.message);
-                    }
-                }
-
-                if (content.imageKey) {
-                    try {
-                        imageUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: content.imageKey,
-                            }),
-                            { expiresIn: 86400 }
-                        );
-                    } catch (err) {
-                        console.warn('Image URL error:', err.message);
-                    }
-                }
+                const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
+                const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
 
                 return {
                     _id: content._id,
@@ -671,34 +654,8 @@ export const getFeedContent = async (req, res) => {
         // Generate URLs
         const contentsWithUrls = await Promise.all(
             contents.map(async (content) => {
-                let thumbnailUrl = null;
-                let imageUrl = null;
-
-                if (content.thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: content.thumbnailKey,
-                            }),
-                            { expiresIn: 86400 }
-                        );
-                    } catch (err) { /* ignore */ }
-                }
-
-                if (content.imageKey) {
-                    try {
-                        imageUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: content.imageKey,
-                            }),
-                            { expiresIn: 86400 }
-                        );
-                    } catch (err) { /* ignore */ }
-                }
+                const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
+                const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
 
                 return {
                     _id: content._id,
@@ -913,20 +870,10 @@ export const getShortsPlayerFeed = async (req, res) => {
                 .populate('userId', 'userName channelName channelPicture');
 
             if (content && content.contentType === 'short') {
-                // Generate URLs for the starting short
-                const thumbnailUrl = content.thumbnailKey
-                    ? await getSignedUrl(s3Client, new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: content.thumbnailKey,
-                    }), { expiresIn: 86400 })
-                    : null;
-
-                const videoUrl = content.hlsKey || content.processedKey || content.originalKey
-                    ? await getSignedUrl(s3Client, new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: content.hlsKey || content.processedKey || content.originalKey,
-                    }), { expiresIn: 86400 })
-                    : null;
+                // Generate URLs for the starting short (with existence check)
+                const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
+                const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+                const videoUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
 
                 startingShort = {
                     _id: content._id,
@@ -974,33 +921,26 @@ export const getShortsPlayerFeed = async (req, res) => {
                 .skip(skip)
                 .limit(parseInt(limit));
 
-            shorts = await Promise.all(contents.map(async (content) => ({
-                _id: content._id,
-                contentType: 'short',
-                title: content.title,
-                description: content.description,
-                duration: content.duration,
-                thumbnailUrl: content.thumbnailKey
-                    ? await getSignedUrl(s3Client, new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: content.thumbnailKey,
-                    }), { expiresIn: 86400 })
-                    : null,
-                videoUrl: content.hlsKey || content.processedKey || content.originalKey
-                    ? await getSignedUrl(s3Client, new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: content.hlsKey || content.processedKey || content.originalKey,
-                    }), { expiresIn: 86400 })
-                    : null,
-                views: content.views,
-                likeCount: content.likeCount || 0,
-                commentCount: content.commentCount || 0,
-                createdAt: content.createdAt,
-                channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
-                channelPicture: content.userId?.channelPicture,
-                userId: content.userId?._id || content.userId,
-                tags: content.tags
-            })));
+            shorts = await Promise.all(contents.map(async (content) => {
+                const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+                return {
+                    _id: content._id,
+                    contentType: 'short',
+                    title: content.title,
+                    description: content.description,
+                    duration: content.duration,
+                    thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
+                    videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
+                    views: content.views,
+                    likeCount: content.likeCount || 0,
+                    commentCount: content.commentCount || 0,
+                    createdAt: content.createdAt,
+                    channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+                    channelPicture: content.userId?.channelPicture,
+                    userId: content.userId?._id || content.userId,
+                    tags: content.tags
+                };
+            }));
         }
 
         // Add starting short at the beginning if provided
@@ -1104,32 +1044,13 @@ export const getAudioPlayerFeed = async (req, res) => {
  */
 async function formatAudioContent(content) {
     // Get thumbnail URL - use thumbnailKey first, then imageKey as fallback
-    let thumbnailUrl = null;
+    // Only generate URL if the object actually exists in S3
     const thumbnailKey = content.thumbnailKey || content.imageKey;
-    if (thumbnailKey) {
-        try {
-            thumbnailUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-                Bucket: process.env.S3_BUCKET,
-                Key: thumbnailKey,
-            }), { expiresIn: 86400 }); // 24 hours
-        } catch (err) {
-            console.error('Error generating thumbnail URL:', err);
-        }
-    }
+    const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, thumbnailKey);
 
     // Get audio URL
-    let audioUrl = null;
     const audioKey = content.processedKey || content.originalKey;
-    if (audioKey) {
-        try {
-            audioUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-                Bucket: process.env.S3_BUCKET,
-                Key: audioKey,
-            }), { expiresIn: 86400 });
-        } catch (err) {
-            console.error('Error generating audio URL:', err);
-        }
-    }
+    const audioUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, audioKey);
 
     return {
         _id: content._id,
@@ -1175,41 +1096,17 @@ export const getSingleContent = async (req, res) => {
             return res.status(404).json({ error: 'Content not found' });
         }
 
-        // Generate URLs based on content type
-        let thumbnailUrl = null;
+        // Generate URLs based on content type (with existence check)
+        const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
+        const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
         let mediaUrl = null;
-        let imageUrl = null;
-
-        if (content.thumbnailKey) {
-            thumbnailUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-                Bucket: process.env.S3_BUCKET,
-                Key: content.thumbnailKey,
-            }), { expiresIn: 86400 });
-        }
-
-        if (content.imageKey) {
-            imageUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-                Bucket: process.env.S3_BUCKET,
-                Key: content.imageKey,
-            }), { expiresIn: 86400 });
-        }
 
         if (content.contentType === 'short') {
             const videoKey = content.hlsKey || content.processedKey || content.originalKey;
-            if (videoKey) {
-                mediaUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-                    Bucket: process.env.S3_BUCKET,
-                    Key: videoKey,
-                }), { expiresIn: 86400 });
-            }
+            mediaUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
         } else if (content.contentType === 'audio') {
             const audioKey = content.processedKey || content.originalKey;
-            if (audioKey) {
-                mediaUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-                    Bucket: process.env.S3_BUCKET,
-                    Key: audioKey,
-                }), { expiresIn: 86400 });
-            }
+            mediaUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, audioKey);
         }
 
         res.json({
@@ -1241,187 +1138,5 @@ export const getSingleContent = async (req, res) => {
     } catch (error) {
         console.error('❌ Error fetching content:', error);
         res.status(500).json({ error: 'Failed to fetch content' });
-    }
-};
-
-// ============================================
-// MIXED FEED (YouTube-style interleaved)
-// ============================================
-
-/**
- * Get mixed feed with interleaved shorts, audio, and posts
- * Mimics YouTube's feed pattern: alternates between content types
- */
-export const getMixedFeed = async (req, res) => {
-    try {
-        const { page = 1, limit = 20 } = req.query;
-        const userId = req.user?.id;
-
-        const pageNum = Math.max(1, parseInt(page));
-        const limitNum = Math.max(1, Math.min(50, parseInt(limit)));
-        const skip = (pageNum - 1) * limitNum;
-
-        // Get all content types with status 'completed'
-        const allContent = await Content.find({
-            status: 'completed',
-            visibility: 'public'
-        })
-            .populate('userId', 'userName channelName channelPicture roles')
-            .sort({ createdAt: -1 })
-            .lean();
-
-        // Format content with signed URLs
-        const formattedContent = await Promise.all(
-            allContent.map(async (content) => {
-                let thumbnailUrl = null;
-                let mediaUrl = null;
-                let imageUrl = null;
-
-                // Thumbnail
-                const thumbnailKey = content.thumbnailKey || content.imageKey;
-                if (thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: thumbnailKey,
-                            }),
-                            { expiresIn: 86400 }
-                        );
-                    } catch (err) {
-                        console.error('Error generating thumbnail URL:', err);
-                    }
-                }
-
-                // Media URL based on content type
-                if (content.contentType === 'short') {
-                    const videoKey = content.hlsKey || content.processedKey || content.originalKey;
-                    if (videoKey) {
-                        try {
-                            mediaUrl = await getSignedUrl(
-                                s3Client,
-                                new GetObjectCommand({
-                                    Bucket: process.env.S3_BUCKET,
-                                    Key: videoKey,
-                                }),
-                                { expiresIn: 86400 }
-                            );
-                        } catch (err) {
-                            console.error('Error generating video URL:', err);
-                        }
-                    }
-                } else if (content.contentType === 'audio') {
-                    const audioKey = content.processedKey || content.originalKey;
-                    if (audioKey) {
-                        try {
-                            mediaUrl = await getSignedUrl(
-                                s3Client,
-                                new GetObjectCommand({
-                                    Bucket: process.env.S3_BUCKET,
-                                    Key: audioKey,
-                                }),
-                                { expiresIn: 86400 }
-                            );
-                        } catch (err) {
-                            console.error('Error generating audio URL:', err);
-                        }
-                    }
-                } else if (content.contentType === 'post') {
-                    if (content.imageKey) {
-                        try {
-                            imageUrl = await getSignedUrl(
-                                s3Client,
-                                new GetObjectCommand({
-                                    Bucket: process.env.S3_BUCKET,
-                                    Key: content.imageKey,
-                                }),
-                                { expiresIn: 86400 }
-                            );
-                        } catch (err) {
-                            console.error('Error generating image URL:', err);
-                        }
-                    }
-                }
-
-                return {
-                    _id: content._id,
-                    contentType: content.contentType,
-                    title: content.title,
-                    description: content.description,
-                    postContent: content.postContent,
-                    duration: content.duration,
-                    thumbnailUrl: thumbnailUrl || imageUrl,
-                    imageUrl,
-                    videoUrl: content.contentType === 'short' ? mediaUrl : null,
-                    audioUrl: content.contentType === 'audio' ? mediaUrl : null,
-                    views: content.views || 0,
-                    likeCount: content.likeCount || 0,
-                    commentCount: content.commentCount || 0,
-                    createdAt: content.createdAt,
-                    channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
-                    channelPicture: content.userId?.channelPicture,
-                    userId: content.userId?._id || content.userId,
-                    tags: content.tags,
-                    category: content.category,
-                    artist: content.artist,
-                    album: content.album,
-                    audioCategory: content.audioCategory
-                };
-            })
-        );
-
-        // Interleave content types in YouTube-like pattern:
-        // Pattern: short, video, audio, post, short, video, audio, post...
-        const typePattern = ['short', 'video', 'audio', 'post'];
-        const interleavedContent = [];
-        const contentByType = {
-            short: formattedContent.filter(c => c.contentType === 'short'),
-            video: formattedContent.filter(c => c.contentType === 'video'),
-            audio: formattedContent.filter(c => c.contentType === 'audio'),
-            post: formattedContent.filter(c => c.contentType === 'post')
-        };
-
-        // Interleave based on pattern until we have enough or run out
-        let indices = { short: 0, video: 0, audio: 0, post: 0 };
-        let patternIndex = 0;
-
-        while (
-            interleavedContent.length < formattedContent.length &&
-            (indices.short < contentByType.short.length ||
-                indices.video < contentByType.video.length ||
-                indices.audio < contentByType.audio.length ||
-                indices.post < contentByType.post.length)
-        ) {
-            const contentType = typePattern[patternIndex % typePattern.length];
-            if (indices[contentType] < contentByType[contentType].length) {
-                interleavedContent.push(contentByType[contentType][indices[contentType]]);
-                indices[contentType]++;
-            }
-            patternIndex++;
-        }
-
-        // Apply pagination
-        const paginatedContent = interleavedContent.slice(skip, skip + limitNum);
-        const totalContent = interleavedContent.length;
-        const hasNextPage = skip + limitNum < totalContent;
-
-        res.json({
-            content: paginatedContent,
-            shorts: paginatedContent.filter(c => c.contentType === 'short'),
-            audio: paginatedContent.filter(c => c.contentType === 'audio'),
-            videos: paginatedContent.filter(c => c.contentType === 'video'),
-            posts: paginatedContent.filter(c => c.contentType === 'post'),
-            pagination: {
-                page: pageNum,
-                limit: limitNum,
-                total: totalContent,
-                hasNextPage,
-                pages: Math.ceil(totalContent / limitNum)
-            }
-        });
-    } catch (error) {
-        console.error('❌ Error fetching mixed feed:', error);
-        res.status(500).json({ error: 'Failed to fetch mixed feed' });
     }
 };
