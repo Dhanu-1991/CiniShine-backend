@@ -208,23 +208,31 @@ export const getMixedFeed = async (req, res) => {
         console.log(`✅ [Feed] Fetched ${posts.length} posts`);
 
         // Process shorts with URLs
+        console.log(`🎬 [Feed] Processing ${shorts.length} shorts...`);
         const processedShorts = await Promise.all(
-            shorts.map(async (content) => ({
-                _id: content._id,
-                contentType: 'short',
-                title: content.title,
-                description: content.description,
-                duration: content.duration,
-                thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
-                views: content.views,
-                likeCount: content.likeCount,
-                createdAt: content.createdAt,
-                channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                channelPicture: content.userId?.channelPicture || null,
-                status: content.status,
-                score: calculateScore(content)
-            }))
+            shorts.map(async (content, idx) => {
+                const thumbnailUrl = await generateSignedUrl(content.thumbnailKey);
+                if (!thumbnailUrl) {
+                    console.warn(`⚠️ [Feed] Short ${idx} (${content._id}): No thumbnail - thumbnailKey: ${content.thumbnailKey || 'MISSING'}`);
+                }
+                return {
+                    _id: content._id,
+                    contentType: 'short',
+                    title: content.title,
+                    description: content.description,
+                    duration: content.duration,
+                    thumbnailUrl,
+                    views: content.views,
+                    likeCount: content.likeCount,
+                    createdAt: content.createdAt,
+                    channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                    channelPicture: content.userId?.channelPicture || null,
+                    status: content.status,
+                    score: calculateScore(content)
+                };
+            })
         );
+        console.log(`✅ [Feed] Processed ${processedShorts.length} shorts`);
 
         // Process audio with URLs - use thumbnailKey OR imageKey for album art
         console.log(`🎵 [Feed] Processing ${audioContent.length} audio tracks with thumbnail URLs...`);
