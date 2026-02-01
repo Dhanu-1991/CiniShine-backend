@@ -26,7 +26,8 @@ import {
     updateContentEngagement,
     getShortsPlayerFeed,
     getAudioPlayerFeed,
-    getSingleContent
+    getSingleContent,
+    getMixedFeed
 } from '../../controllers/content-controllers/contentController.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
@@ -88,6 +89,9 @@ router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
 // ============================================
 // GET ROUTES
 // ============================================
+// Get mixed feed (YouTube-style interleaved shorts, audio, videos, posts)
+router.get('/mixed/feed', getMixedFeed);
+
 // Get feed (public shorts, audio, posts)
 router.get('/feed', getFeedContent);
 

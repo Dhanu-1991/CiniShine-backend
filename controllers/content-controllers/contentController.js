@@ -82,7 +82,7 @@ export const shortUploadInit = async (req, res) => {
             ContentType: fileType,
         });
 
-        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 86400 });
 
         console.log(`📤 Short upload initialized: ${fileId} for user ${userId}`);
 
@@ -205,7 +205,7 @@ export const audioUploadInit = async (req, res) => {
             ContentType: fileType,
         });
 
-        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 86400 });
 
         console.log(`📤 Audio upload initialized: ${fileId} for user ${userId}`);
 
@@ -314,7 +314,7 @@ export const postImageInit = async (req, res) => {
             ContentType: fileType,
         });
 
-        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 86400 });
 
         console.log(`📤 Post image upload initialized: ${fileId} for user ${userId}`);
 
@@ -488,7 +488,7 @@ export const getContent = async (req, res) => {
                         Bucket: process.env.S3_BUCKET,
                         Key: content.thumbnailKey,
                     }),
-                    { expiresIn: 3600 }
+                    { expiresIn: 86400 }
                 );
             } catch (err) {
                 console.warn('Could not generate thumbnail URL:', err.message);
@@ -505,7 +505,7 @@ export const getContent = async (req, res) => {
                         Bucket: process.env.S3_BUCKET,
                         Key: content.imageKey,
                     }),
-                    { expiresIn: 3600 }
+                    { expiresIn: 86400 }
                 );
             } catch (err) {
                 console.warn('Could not generate image URL:', err.message);
@@ -522,7 +522,7 @@ export const getContent = async (req, res) => {
                         Bucket: process.env.S3_BUCKET,
                         Key: content.originalKey,
                     }),
-                    { expiresIn: 3600 }
+                    { expiresIn: 86400 }
                 );
             } catch (err) {
                 console.warn('Could not generate audio URL:', err.message);
@@ -596,7 +596,7 @@ export const getUserContent = async (req, res) => {
                                 Bucket: process.env.S3_BUCKET,
                                 Key: content.thumbnailKey,
                             }),
-                            { expiresIn: 3600 }
+                            { expiresIn: 86400 }
                         );
                     } catch (err) {
                         console.warn('Thumbnail URL error:', err.message);
@@ -611,7 +611,7 @@ export const getUserContent = async (req, res) => {
                                 Bucket: process.env.S3_BUCKET,
                                 Key: content.imageKey,
                             }),
-                            { expiresIn: 3600 }
+                            { expiresIn: 86400 }
                         );
                     } catch (err) {
                         console.warn('Image URL error:', err.message);
@@ -682,7 +682,7 @@ export const getFeedContent = async (req, res) => {
                                 Bucket: process.env.S3_BUCKET,
                                 Key: content.thumbnailKey,
                             }),
-                            { expiresIn: 3600 }
+                            { expiresIn: 86400 }
                         );
                     } catch (err) { /* ignore */ }
                 }
@@ -695,7 +695,7 @@ export const getFeedContent = async (req, res) => {
                                 Bucket: process.env.S3_BUCKET,
                                 Key: content.imageKey,
                             }),
-                            { expiresIn: 3600 }
+                            { expiresIn: 86400 }
                         );
                     } catch (err) { /* ignore */ }
                 }
@@ -918,14 +918,14 @@ export const getShortsPlayerFeed = async (req, res) => {
                     ? await getSignedUrl(s3Client, new GetObjectCommand({
                         Bucket: process.env.S3_BUCKET,
                         Key: content.thumbnailKey,
-                    }), { expiresIn: 3600 })
+                    }), { expiresIn: 86400 })
                     : null;
 
                 const videoUrl = content.hlsKey || content.processedKey || content.originalKey
                     ? await getSignedUrl(s3Client, new GetObjectCommand({
                         Bucket: process.env.S3_BUCKET,
                         Key: content.hlsKey || content.processedKey || content.originalKey,
-                    }), { expiresIn: 3600 })
+                    }), { expiresIn: 86400 })
                     : null;
 
                 startingShort = {
@@ -984,13 +984,13 @@ export const getShortsPlayerFeed = async (req, res) => {
                     ? await getSignedUrl(s3Client, new GetObjectCommand({
                         Bucket: process.env.S3_BUCKET,
                         Key: content.thumbnailKey,
-                    }), { expiresIn: 3600 })
+                    }), { expiresIn: 86400 })
                     : null,
                 videoUrl: content.hlsKey || content.processedKey || content.originalKey
                     ? await getSignedUrl(s3Client, new GetObjectCommand({
                         Bucket: process.env.S3_BUCKET,
                         Key: content.hlsKey || content.processedKey || content.originalKey,
-                    }), { expiresIn: 3600 })
+                    }), { expiresIn: 86400 })
                     : null,
                 views: content.views,
                 likeCount: content.likeCount || 0,
@@ -1111,7 +1111,7 @@ async function formatAudioContent(content) {
             thumbnailUrl = await getSignedUrl(s3Client, new GetObjectCommand({
                 Bucket: process.env.S3_BUCKET,
                 Key: thumbnailKey,
-            }), { expiresIn: 3600 });
+            }), { expiresIn: 86400 }); // 24 hours
         } catch (err) {
             console.error('Error generating thumbnail URL:', err);
         }
@@ -1125,7 +1125,7 @@ async function formatAudioContent(content) {
             audioUrl = await getSignedUrl(s3Client, new GetObjectCommand({
                 Bucket: process.env.S3_BUCKET,
                 Key: audioKey,
-            }), { expiresIn: 3600 });
+            }), { expiresIn: 86400 });
         } catch (err) {
             console.error('Error generating audio URL:', err);
         }
@@ -1184,14 +1184,14 @@ export const getSingleContent = async (req, res) => {
             thumbnailUrl = await getSignedUrl(s3Client, new GetObjectCommand({
                 Bucket: process.env.S3_BUCKET,
                 Key: content.thumbnailKey,
-            }), { expiresIn: 3600 });
+            }), { expiresIn: 86400 });
         }
 
         if (content.imageKey) {
             imageUrl = await getSignedUrl(s3Client, new GetObjectCommand({
                 Bucket: process.env.S3_BUCKET,
                 Key: content.imageKey,
-            }), { expiresIn: 3600 });
+            }), { expiresIn: 86400 });
         }
 
         if (content.contentType === 'short') {
@@ -1200,7 +1200,7 @@ export const getSingleContent = async (req, res) => {
                 mediaUrl = await getSignedUrl(s3Client, new GetObjectCommand({
                     Bucket: process.env.S3_BUCKET,
                     Key: videoKey,
-                }), { expiresIn: 3600 });
+                }), { expiresIn: 86400 });
             }
         } else if (content.contentType === 'audio') {
             const audioKey = content.processedKey || content.originalKey;
@@ -1208,7 +1208,7 @@ export const getSingleContent = async (req, res) => {
                 mediaUrl = await getSignedUrl(s3Client, new GetObjectCommand({
                     Bucket: process.env.S3_BUCKET,
                     Key: audioKey,
-                }), { expiresIn: 3600 });
+                }), { expiresIn: 86400 });
             }
         }
 
@@ -1241,5 +1241,187 @@ export const getSingleContent = async (req, res) => {
     } catch (error) {
         console.error('❌ Error fetching content:', error);
         res.status(500).json({ error: 'Failed to fetch content' });
+    }
+};
+
+// ============================================
+// MIXED FEED (YouTube-style interleaved)
+// ============================================
+
+/**
+ * Get mixed feed with interleaved shorts, audio, and posts
+ * Mimics YouTube's feed pattern: alternates between content types
+ */
+export const getMixedFeed = async (req, res) => {
+    try {
+        const { page = 1, limit = 20 } = req.query;
+        const userId = req.user?.id;
+
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.max(1, Math.min(50, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
+
+        // Get all content types with status 'completed'
+        const allContent = await Content.find({
+            status: 'completed',
+            visibility: 'public'
+        })
+            .populate('userId', 'userName channelName channelPicture roles')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Format content with signed URLs
+        const formattedContent = await Promise.all(
+            allContent.map(async (content) => {
+                let thumbnailUrl = null;
+                let mediaUrl = null;
+                let imageUrl = null;
+
+                // Thumbnail
+                const thumbnailKey = content.thumbnailKey || content.imageKey;
+                if (thumbnailKey) {
+                    try {
+                        thumbnailUrl = await getSignedUrl(
+                            s3Client,
+                            new GetObjectCommand({
+                                Bucket: process.env.S3_BUCKET,
+                                Key: thumbnailKey,
+                            }),
+                            { expiresIn: 86400 }
+                        );
+                    } catch (err) {
+                        console.error('Error generating thumbnail URL:', err);
+                    }
+                }
+
+                // Media URL based on content type
+                if (content.contentType === 'short') {
+                    const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+                    if (videoKey) {
+                        try {
+                            mediaUrl = await getSignedUrl(
+                                s3Client,
+                                new GetObjectCommand({
+                                    Bucket: process.env.S3_BUCKET,
+                                    Key: videoKey,
+                                }),
+                                { expiresIn: 86400 }
+                            );
+                        } catch (err) {
+                            console.error('Error generating video URL:', err);
+                        }
+                    }
+                } else if (content.contentType === 'audio') {
+                    const audioKey = content.processedKey || content.originalKey;
+                    if (audioKey) {
+                        try {
+                            mediaUrl = await getSignedUrl(
+                                s3Client,
+                                new GetObjectCommand({
+                                    Bucket: process.env.S3_BUCKET,
+                                    Key: audioKey,
+                                }),
+                                { expiresIn: 86400 }
+                            );
+                        } catch (err) {
+                            console.error('Error generating audio URL:', err);
+                        }
+                    }
+                } else if (content.contentType === 'post') {
+                    if (content.imageKey) {
+                        try {
+                            imageUrl = await getSignedUrl(
+                                s3Client,
+                                new GetObjectCommand({
+                                    Bucket: process.env.S3_BUCKET,
+                                    Key: content.imageKey,
+                                }),
+                                { expiresIn: 86400 }
+                            );
+                        } catch (err) {
+                            console.error('Error generating image URL:', err);
+                        }
+                    }
+                }
+
+                return {
+                    _id: content._id,
+                    contentType: content.contentType,
+                    title: content.title,
+                    description: content.description,
+                    postContent: content.postContent,
+                    duration: content.duration,
+                    thumbnailUrl: thumbnailUrl || imageUrl,
+                    imageUrl,
+                    videoUrl: content.contentType === 'short' ? mediaUrl : null,
+                    audioUrl: content.contentType === 'audio' ? mediaUrl : null,
+                    views: content.views || 0,
+                    likeCount: content.likeCount || 0,
+                    commentCount: content.commentCount || 0,
+                    createdAt: content.createdAt,
+                    channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+                    channelPicture: content.userId?.channelPicture,
+                    userId: content.userId?._id || content.userId,
+                    tags: content.tags,
+                    category: content.category,
+                    artist: content.artist,
+                    album: content.album,
+                    audioCategory: content.audioCategory
+                };
+            })
+        );
+
+        // Interleave content types in YouTube-like pattern:
+        // Pattern: short, video, audio, post, short, video, audio, post...
+        const typePattern = ['short', 'video', 'audio', 'post'];
+        const interleavedContent = [];
+        const contentByType = {
+            short: formattedContent.filter(c => c.contentType === 'short'),
+            video: formattedContent.filter(c => c.contentType === 'video'),
+            audio: formattedContent.filter(c => c.contentType === 'audio'),
+            post: formattedContent.filter(c => c.contentType === 'post')
+        };
+
+        // Interleave based on pattern until we have enough or run out
+        let indices = { short: 0, video: 0, audio: 0, post: 0 };
+        let patternIndex = 0;
+
+        while (
+            interleavedContent.length < formattedContent.length &&
+            (indices.short < contentByType.short.length ||
+                indices.video < contentByType.video.length ||
+                indices.audio < contentByType.audio.length ||
+                indices.post < contentByType.post.length)
+        ) {
+            const contentType = typePattern[patternIndex % typePattern.length];
+            if (indices[contentType] < contentByType[contentType].length) {
+                interleavedContent.push(contentByType[contentType][indices[contentType]]);
+                indices[contentType]++;
+            }
+            patternIndex++;
+        }
+
+        // Apply pagination
+        const paginatedContent = interleavedContent.slice(skip, skip + limitNum);
+        const totalContent = interleavedContent.length;
+        const hasNextPage = skip + limitNum < totalContent;
+
+        res.json({
+            content: paginatedContent,
+            shorts: paginatedContent.filter(c => c.contentType === 'short'),
+            audio: paginatedContent.filter(c => c.contentType === 'audio'),
+            videos: paginatedContent.filter(c => c.contentType === 'video'),
+            posts: paginatedContent.filter(c => c.contentType === 'post'),
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: totalContent,
+                hasNextPage,
+                pages: Math.ceil(totalContent / limitNum)
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error fetching mixed feed:', error);
+        res.status(500).json({ error: 'Failed to fetch mixed feed' });
     }
 };
