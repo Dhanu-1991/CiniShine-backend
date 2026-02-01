@@ -24,11 +24,12 @@ import {
     // New endpoints
     updateContentWatchTime,
     updateContentEngagement,
+    getContentEngagementStatus,
     getShortsPlayerFeed,
     getAudioPlayerFeed,
     getSingleContent
 } from '../../controllers/content-controllers/contentController.js';
-import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
+import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
 const router = express.Router();
 
@@ -84,6 +85,7 @@ router.get('/audio/feed', universalTokenVerifier, getAudioPlayerFeed);
 // ============================================
 router.post('/:id/watch-time', universalTokenVerifier, updateContentWatchTime);
 router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
+router.get('/:id/engagement-status', optionalTokenVerifier, getContentEngagementStatus);
 
 // ============================================
 // GET ROUTES

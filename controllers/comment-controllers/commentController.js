@@ -39,23 +39,31 @@ export const createComment = async (req, res) => {
         const { text, parentCommentId } = req.body;
         const userId = req.user?.id;
 
+        console.log(`💬 [Comment] Creating comment - videoId: ${videoId}, userId: ${userId}`);
+
         if (!userId) {
+            console.log(`❌ [Comment] No userId - authentication required`);
             return res.status(401).json({ message: "Authentication required" });
         }
 
         if (!text || text.trim().length === 0) {
+            console.log(`❌ [Comment] Empty comment text`);
             return res.status(400).json({ message: "Comment text is required" });
         }
 
         if (text.length > 5000) {
+            console.log(`❌ [Comment] Comment too long`);
             return res.status(400).json({ message: "Comment is too long (max 5000 characters)" });
         }
 
         // Validate video/content exists - check both models
         const { item, modelType } = await findVideoOrContent(videoId);
         if (!item) {
+            console.log(`❌ [Comment] Video/Content not found: ${videoId}`);
             return res.status(404).json({ message: "Video or content not found" });
         }
+
+        console.log(`✅ [Comment] Found ${modelType}: ${videoId}`);
 
         // If reply, validate parent comment exists
         if (parentCommentId) {
@@ -71,6 +79,7 @@ export const createComment = async (req, res) => {
         // Get user info (channelName for display, channelPicture for avatar)
         const user = await User.findById(userId).select("userName channelName channelPicture");
         if (!user) {
+            console.log(`❌ [Comment] User not found: ${userId}`);
             return res.status(404).json({ message: "User not found" });
         }
 
@@ -82,6 +91,8 @@ export const createComment = async (req, res) => {
             text: text.trim(),
             parentCommentId: parentCommentId || null
         });
+
+        console.log(`✅ [Comment] Comment created: ${newComment._id}`);
 
         // If it's a reply, update parent's reply count
         if (parentCommentId) {
@@ -101,6 +112,8 @@ export const createComment = async (req, res) => {
             await Video.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
         }
 
+        console.log(`✅ [Comment] Comment count updated for ${modelType}: ${videoId}`);
+
         // Return with current user data (channelName and channelPicture fetched live)
         res.status(201).json({
             message: "Comment created successfully",
@@ -119,7 +132,7 @@ export const createComment = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error("Error creating comment:", error);
+        console.error("❌ [Comment] Error creating comment:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 };

@@ -711,12 +711,16 @@ export const updateContentWatchTime = async (req, res) => {
         const { watchTime, totalDuration, sessionId } = req.body;
         const userId = req.user?.id;
 
+        console.log(`⏱️ [WatchTime] Tracking - contentId: ${contentId}, userId: ${userId}, watchTime: ${watchTime}s, session: ${sessionId}`);
+
         if (!mongoose.Types.ObjectId.isValid(contentId)) {
+            console.log(`❌ [WatchTime] Invalid content ID: ${contentId}`);
             return res.status(400).json({ error: 'Invalid content ID' });
         }
 
         const content = await Content.findById(contentId);
         if (!content) {
+            console.log(`❌ [WatchTime] Content not found: ${contentId}`);
             return res.status(404).json({ error: 'Content not found' });
         }
 
@@ -724,6 +728,8 @@ export const updateContentWatchTime = async (req, res) => {
             ? Math.min((watchTime / totalDuration) * 100, 100)
             : 0;
         const completedWatch = watchPercentage >= 90;
+
+        console.log(`📊 [WatchTime] Stats - type: ${content.contentType}, percentage: ${watchPercentage.toFixed(1)}%, completed: ${completedWatch}`);
 
         // Update or create watch history for authenticated users
         if (userId) {
@@ -759,6 +765,7 @@ export const updateContentWatchTime = async (req, res) => {
                 }
 
                 await existingHistory.save();
+                console.log(`✅ [WatchTime] Updated existing history - watchCount: ${existingHistory.watchCount}`);
             } else {
                 // Create new history record
                 await WatchHistory.create({
@@ -783,23 +790,22 @@ export const updateContentWatchTime = async (req, res) => {
                         endedAt: new Date()
                     }]
                 });
+                console.log(`✅ [WatchTime] Created new history record for user: ${userId}`);
             }
         }
 
-        // Update content view count if watched for at least 5 seconds
-        // Use rate limiting for view count updates
+        // Update content view count if watched for at least X seconds
+        // Shorts: 3 seconds, Posts: 5 seconds, Audio: 5 seconds
         const viewThreshold = content.contentType === 'short' ? 3 : 5;
 
         if (watchTime >= viewThreshold) {
-            // Check if this session already counted as a view
-            const sessionKey = `content_view_${contentId}_${sessionId || 'anon'}`;
-            const viewCounted = req.headers['x-view-counted'];
-
-            if (!viewCounted) {
-                await Content.findByIdAndUpdate(contentId, {
-                    $inc: { views: 1 }
-                });
-            }
+            // Increment view count
+            const updatedContent = await Content.findByIdAndUpdate(
+                contentId,
+                { $inc: { views: 1 } },
+                { new: true }
+            );
+            console.log(`👁️ [WatchTime] View counted for ${content.contentType}: ${contentId} - total views: ${updatedContent.views}`);
         }
 
         res.json({
@@ -816,6 +822,7 @@ export const updateContentWatchTime = async (req, res) => {
 
 /**
  * Update engagement signals (like, dislike, comment, share)
+ * Also updates likeCount/dislikeCount on the Content model
  */
 export const updateContentEngagement = async (req, res) => {
     try {
@@ -823,18 +830,28 @@ export const updateContentEngagement = async (req, res) => {
         const { action, value } = req.body; // action: 'like', 'dislike', 'comment', 'share'
         const userId = req.user?.id;
 
+        console.log(`📊 [Engagement] Action: ${action}, Value: ${value}, ContentId: ${contentId}, UserId: ${userId}`);
+
         if (!userId) {
+            console.log(`❌ [Engagement] No userId - authentication required`);
             return res.status(401).json({ error: 'Authentication required' });
         }
 
         if (!mongoose.Types.ObjectId.isValid(contentId)) {
+            console.log(`❌ [Engagement] Invalid content ID: ${contentId}`);
             return res.status(400).json({ error: 'Invalid content ID' });
         }
 
         const content = await Content.findById(contentId);
         if (!content) {
+            console.log(`❌ [Engagement] Content not found: ${contentId}`);
             return res.status(404).json({ error: 'Content not found' });
         }
+
+        // Get existing engagement from WatchHistory
+        const existingHistory = await WatchHistory.findOne({ userId, contentId, contentType: content.contentType });
+        const wasLiked = existingHistory?.liked || false;
+        const wasDisliked = existingHistory?.disliked || false;
 
         // Update watch history with engagement
         const updateField = {};
@@ -849,10 +866,94 @@ export const updateContentEngagement = async (req, res) => {
             { upsert: true }
         );
 
+        // Update like/dislike count on Content model
+        const contentUpdate = {};
+        if (action === 'like') {
+            if (value && !wasLiked) {
+                contentUpdate.$inc = { likeCount: 1 };
+                // If was disliked, also remove dislike
+                if (wasDisliked) {
+                    contentUpdate.$inc.dislikeCount = -1;
+                    await WatchHistory.findOneAndUpdate(
+                        { userId, contentId },
+                        { $set: { disliked: false } }
+                    );
+                }
+            } else if (!value && wasLiked) {
+                contentUpdate.$inc = { likeCount: -1 };
+            }
+        }
+        if (action === 'dislike') {
+            if (value && !wasDisliked) {
+                contentUpdate.$inc = { dislikeCount: 1 };
+                // If was liked, also remove like
+                if (wasLiked) {
+                    contentUpdate.$inc.likeCount = -1;
+                    await WatchHistory.findOneAndUpdate(
+                        { userId, contentId },
+                        { $set: { liked: false } }
+                    );
+                }
+            } else if (!value && wasDisliked) {
+                contentUpdate.$inc = { dislikeCount: -1 };
+            }
+        }
+        if (action === 'comment') {
+            // Comment count is updated in commentController
+        }
+
+        if (contentUpdate.$inc) {
+            await Content.findByIdAndUpdate(contentId, contentUpdate);
+            console.log(`✅ [Engagement] Updated content counts:`, contentUpdate.$inc);
+        }
+
+        console.log(`✅ [Engagement] ${action} updated for content: ${contentId}`);
         res.json({ success: true, message: `${action} updated` });
     } catch (error) {
-        console.error('❌ Error updating engagement:', error);
+        console.error('❌ [Engagement] Error updating engagement:', error);
         res.status(500).json({ error: 'Failed to update engagement' });
+    }
+};
+
+/**
+ * Get engagement status for a content item (isLiked, isDisliked, isSubscribed)
+ */
+export const getContentEngagementStatus = async (req, res) => {
+    try {
+        const { id: contentId } = req.params;
+        const userId = req.user?.id;
+
+        console.log(`📊 [EngagementStatus] Fetching for ContentId: ${contentId}, UserId: ${userId}`);
+
+        if (!userId) {
+            return res.json({ isLiked: false, isDisliked: false, isSubscribed: false });
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(contentId)) {
+            return res.status(400).json({ error: 'Invalid content ID' });
+        }
+
+        const content = await Content.findById(contentId).populate('userId', '_id');
+        if (!content) {
+            return res.status(404).json({ error: 'Content not found' });
+        }
+
+        // Check like/dislike status from WatchHistory
+        const history = await WatchHistory.findOne({ userId, contentId });
+        const isLiked = history?.liked || false;
+        const isDisliked = history?.disliked || false;
+
+        // Check subscription status
+        const user = await User.findById(userId).select('subscriptions');
+        const channelUserId = content.userId?._id || content.userId;
+        const isSubscribed = user?.subscriptions?.includes(channelUserId.toString()) || false;
+
+        console.log(`✅ [EngagementStatus] Result:`, { isLiked, isDisliked, isSubscribed });
+
+        res.json({ isLiked, isDisliked, isSubscribed });
+    } catch (error) {
+        console.error('❌ [EngagementStatus] Error:', error);
+        res.status(500).json({ error: 'Failed to get engagement status' });
     }
 };
 
@@ -869,9 +970,13 @@ export const getShortsPlayerFeed = async (req, res) => {
         const userId = req.user?.id;
         const { page = 1, limit = 10, currentShortId } = req.query;
 
+        console.log(`📥 [ShortsPlayerFeed] Request - userId: ${userId}, page: ${page}, currentShortId: ${currentShortId}`);
+
         // If starting from a specific short, fetch that first
         let startingShort = null;
         if (currentShortId && mongoose.Types.ObjectId.isValid(currentShortId)) {
+            console.log(`📥 [ShortsPlayerFeed] Fetching starting short: ${currentShortId}`);
+
             const content = await Content.findById(currentShortId)
                 .populate('userId', 'userName channelName channelPicture');
 
@@ -898,6 +1003,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                     userId: content.userId?._id || content.userId,
                     tags: content.tags
                 };
+
+                console.log(`✅ [ShortsPlayerFeed] Starting short found - views: ${content.views}, likes: ${content.likeCount}`);
             }
         }
 
@@ -906,6 +1013,7 @@ export const getShortsPlayerFeed = async (req, res) => {
         const excludeIds = currentShortId ? [currentShortId] : [];
 
         if (userId) {
+            console.log(`📥 [ShortsPlayerFeed] Getting personalized recommendations for user: ${userId}`);
             // Personalized recommendations
             const recommendations = await watchHistoryEngine.getRecommendations(
                 userId,
@@ -913,7 +1021,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                 { page: parseInt(page), limit: parseInt(limit), excludeIds }
             );
             shorts = recommendations.content;
+            console.log(`✅ [ShortsPlayerFeed] Got ${shorts.length} personalized shorts`);
         } else {
+            console.log(`📥 [ShortsPlayerFeed] Fetching default shorts (no user)`);
             // Fallback to popular/recent shorts
             const skip = (parseInt(page) - 1) * parseInt(limit);
             const contents = await Content.find({
@@ -947,6 +1057,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                     tags: content.tags
                 };
             }));
+
+            console.log(`✅ [ShortsPlayerFeed] Fetched ${shorts.length} default shorts`);
         }
 
         // Add starting short at the beginning if provided

@@ -66,6 +66,7 @@ const calculateScore = (item, userPreferences = {}) => {
 /**
  * Get mixed feed content (videos, shorts, audio, posts)
  * Returns shorts and audio separately for horizontal display rows
+ * Uses WatchHistoryEngine for personalized recommendations when user is logged in
  */
 export const getMixedFeed = async (req, res) => {
     try {
@@ -74,46 +75,121 @@ export const getMixedFeed = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const isFirstPage = parseInt(page) === 1;
 
+        console.log(`📥 [Feed] getMixedFeed called - userId: ${userId}, page: ${page}, limit: ${limit}`);
+
         // Fetch shorts (for horizontal row - only on first page)
         let shorts = [];
         if (isFirstPage || req.query.includeShorts === 'true') {
-            const shortsQuery = {
-                contentType: 'short',
-                status: 'completed',
-                visibility: 'public'
-            };
+            console.log(`📥 [Feed] Fetching shorts...`);
 
-            shorts = await Content.find(shortsQuery)
-                .populate('userId', 'userName channelName channelPicture')
-                .sort({ createdAt: -1 })
-                .limit(parseInt(shortsLimit));
+            // Use WatchHistoryEngine for personalized shorts if user is logged in
+            if (userId) {
+                try {
+                    const recommendations = await watchHistoryEngine.getRecommendations(
+                        userId,
+                        'short',
+                        { limit: parseInt(shortsLimit) }
+                    );
+                    if (recommendations?.content?.length > 0) {
+                        shorts = recommendations.content;
+                        console.log(`✅ [Feed] Got ${shorts.length} personalized shorts from WatchHistoryEngine`);
+                    }
+                } catch (err) {
+                    console.log(`ℹ️ [Feed] WatchHistoryEngine failed for shorts, falling back to default`);
+                }
+            }
+
+            // Fallback to recent shorts if no personalized results
+            if (shorts.length === 0) {
+                const shortsQuery = {
+                    contentType: 'short',
+                    status: 'completed',
+                    visibility: 'public'
+                };
+
+                shorts = await Content.find(shortsQuery)
+                    .populate('userId', 'userName channelName channelPicture')
+                    .sort({ createdAt: -1 })
+                    .limit(parseInt(shortsLimit));
+            }
+
+            console.log(`✅ [Feed] Fetched ${shorts.length} shorts`);
         }
 
         // Fetch audio (for horizontal row - only on first page)
         let audioContent = [];
         if (isFirstPage || req.query.includeAudio === 'true') {
-            const audioQuery = {
-                contentType: 'audio',
-                status: 'completed',
-                visibility: 'public'
-            };
+            console.log(`📥 [Feed] Fetching audio...`);
 
-            audioContent = await Content.find(audioQuery)
-                .populate('userId', 'userName channelName channelPicture')
-                .sort({ createdAt: -1 })
-                .limit(parseInt(audioLimit));
+            // Use WatchHistoryEngine for personalized audio if user is logged in
+            if (userId) {
+                try {
+                    const recommendations = await watchHistoryEngine.getRecommendations(
+                        userId,
+                        'audio',
+                        { limit: parseInt(audioLimit) }
+                    );
+                    if (recommendations?.content?.length > 0) {
+                        audioContent = recommendations.content;
+                        console.log(`✅ [Feed] Got ${audioContent.length} personalized audio from WatchHistoryEngine`);
+                    }
+                } catch (err) {
+                    console.log(`ℹ️ [Feed] WatchHistoryEngine failed for audio, falling back to default`);
+                }
+            }
+
+            // Fallback to recent audio if no personalized results
+            if (audioContent.length === 0) {
+                const audioQuery = {
+                    contentType: 'audio',
+                    status: 'completed',
+                    visibility: 'public'
+                };
+
+                audioContent = await Content.find(audioQuery)
+                    .populate('userId', 'userName channelName channelPicture')
+                    .sort({ createdAt: -1 })
+                    .limit(parseInt(audioLimit));
+            }
+
+            console.log(`✅ [Feed] Fetched ${audioContent.length} audio tracks`);
         }
 
-        // Fetch videos
-        const videos = await Video.find({
-            status: 'completed'
-        })
-            .populate('userId', 'userName channelName channelPicture')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit));
+        // Fetch videos - use WatchHistoryEngine for personalized recommendations
+        console.log(`📥 [Feed] Fetching videos...`);
+        let videos = [];
+
+        if (userId) {
+            try {
+                const recommendations = await watchHistoryEngine.getRecommendations(
+                    userId,
+                    'video',
+                    { page: parseInt(page), limit: parseInt(limit) }
+                );
+                if (recommendations?.content?.length > 0) {
+                    videos = recommendations.content;
+                    console.log(`✅ [Feed] Got ${videos.length} personalized videos from WatchHistoryEngine`);
+                }
+            } catch (err) {
+                console.log(`ℹ️ [Feed] WatchHistoryEngine failed for videos, falling back to default`);
+            }
+        }
+
+        // Fallback to recent videos if no personalized results
+        if (videos.length === 0) {
+            videos = await Video.find({
+                status: 'completed'
+            })
+                .populate('userId', 'userName channelName channelPicture')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit));
+        }
+
+        console.log(`✅ [Feed] Fetched ${videos.length} videos`);
 
         // Fetch posts
+        console.log(`📥 [Feed] Fetching posts...`);
         const posts = await Content.find({
             contentType: 'post',
             status: 'completed',
@@ -123,6 +199,8 @@ export const getMixedFeed = async (req, res) => {
             .sort({ createdAt: -1 })
             .skip(isFirstPage ? 0 : skip)
             .limit(Math.floor(parseInt(limit) / 4));
+
+        console.log(`✅ [Feed] Fetched ${posts.length} posts`);
 
         // Process shorts with URLs
         const processedShorts = await Promise.all(
