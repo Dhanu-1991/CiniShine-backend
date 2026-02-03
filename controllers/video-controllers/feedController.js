@@ -58,8 +58,8 @@ const calculateScore = (item, userPreferences = {}) => {
 
     // Engagement score (25%)
     const likes = item.likeCount || item.likes || 0;
-    const comments = item.commentCount || 0;
-    const engagement = (likes + comments * 2) / Math.max(item.views || 1, 1);
+    // Note: commentCount is no longer stored - for feed scoring, we use only likes
+    const engagement = likes / Math.max(item.views || 1, 1);
     score += Math.min(engagement * 10, 1) * 0.25;
 
     // Random factor for diversity (20%)
@@ -254,7 +254,6 @@ export const getMixedFeed = async (req, res) => {
                 imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
                 views: content.views,
                 likeCount: content.likeCount,
-                commentCount: content.commentCount || 0,
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelPicture: content.userId?.channelPicture || null,

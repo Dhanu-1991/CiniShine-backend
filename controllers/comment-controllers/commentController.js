@@ -103,16 +103,9 @@ export const createComment = async (req, res) => {
                     $inc: { replyCount: 1 }
                 }
             );
+            console.log(`✅ [Comment] Reply count updated for parent comment: ${parentCommentId}`);
         }
-
-        // Update comment count on the content/video
-        if (modelType === 'Content') {
-            await Content.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
-        } else {
-            await Video.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
-        }
-
-        console.log(`✅ [Comment] Comment count updated for ${modelType}: ${videoId}`);
+        // Note: commentCount is no longer stored - it's calculated from actual comments count
 
         // Return with current user data (channelName and channelPicture fetched live)
         res.status(201).json({
@@ -386,6 +379,7 @@ export const deleteComment = async (req, res) => {
             );
         } else {
             // If it's a top-level comment, delete all its replies
+            // Note: commentCount is no longer stored - it's calculated from actual comments
             await Comment.deleteMany({
                 parentCommentId: commentId
             });
@@ -505,12 +499,7 @@ export const replyToComment = async (req, res) => {
             }
         );
 
-        // Update comment count on the content/video
-        if (modelType === 'Content') {
-            await Content.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
-        } else {
-            await Video.findByIdAndUpdate(videoId, { $inc: { commentCount: 1 } });
-        }
+        // Note: Do NOT update commentCount for replies - only main comments count
 
         console.log(`✅ [Reply] Reply count updated for parent comment: ${commentId}`);
 
