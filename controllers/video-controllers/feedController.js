@@ -70,87 +70,115 @@ const calculateScore = (item, userPreferences = {}) => {
 
 /**
  * Get mixed feed content (videos, shorts, audio, posts)
- * Returns shorts and audio separately for horizontal display rows
- * OPTIMIZED: Parallel fetching, reduced S3 calls, lean queries
- * More shorts slots with fewer per row
+ * Returns content according to dashboard layout requirements:
+ * - 5 shorts, 5 audio, 12 videos, 1 post per fetch
+ * - Posts only from subscribed creators
+ * - First fetch: fixed order, subsequent fetches: randomized
  */
 export const getMixedFeed = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { page = 1, limit = 20, shortsLimit = 5, audioLimit = 5, postsLimit = 5 } = req.query;
-        const skip = (parseInt(page) - 1) * parseInt(limit);
-        const isFirstPage = parseInt(page) === 1;
+        const {
+            page = 1,
+            shortsLimit = 5,
+            audioLimit = 5,
+            videosLimit = 12,
+            postsLimit = 1
+        } = req.query;
 
-        console.log(`📥 [Feed] getMixedFeed called - userId: ${userId}, page: ${page}, limit: ${limit}`);
+        const pageNum = parseInt(page);
+        const isFirstPage = pageNum === 1;
+
+        // Calculate skip for each content type based on page
+        const shortsSkip = (pageNum - 1) * parseInt(shortsLimit);
+        const audioSkip = (pageNum - 1) * parseInt(audioLimit);
+        const videosSkip = (pageNum - 1) * parseInt(videosLimit);
+        const postsSkip = (pageNum - 1) * parseInt(postsLimit);
+
+        console.log(`📥 [Feed] getMixedFeed called - userId: ${userId}, page: ${page}`);
+
+        // Get user's subscriptions for posts filtering
+        let subscribedCreatorIds = [];
+        if (userId) {
+            const user = await User.findById(userId).select('subscriptions').lean();
+            subscribedCreatorIds = user?.subscriptions || [];
+        }
 
         // OPTIMIZATION: Parallel fetch all content types at once
         const fetchPromises = [];
 
-        // 1. Fetch exactly 5 shorts per row
-        if (isFirstPage) {
-            fetchPromises.push(
-                Content.find({
-                    contentType: 'short',
-                    status: 'completed',
-                    visibility: 'public'
-                })
-                    .populate('userId', 'userName channelName channelPicture')
-                    .sort({ createdAt: -1 })
-                    .limit(parseInt(shortsLimit))
-                    .lean() // OPTIMIZATION: Use lean for read-only data
-            );
-        } else {
-            fetchPromises.push(Promise.resolve([]));
-        }
-
-        // 2. Fetch audio (only on first page)
-        if (isFirstPage) {
-            fetchPromises.push(
-                Content.find({
-                    contentType: 'audio',
-                    status: 'completed',
-                    visibility: 'public'
-                })
-                    .populate('userId', 'userName channelName channelPicture')
-                    .sort({ createdAt: -1 })
-                    .limit(parseInt(audioLimit))
-                    .lean()
-            );
-        } else {
-            fetchPromises.push(Promise.resolve([]));
-        }
-
-        // 3. Fetch videos
-        fetchPromises.push(
-            Video.find({ status: 'completed' })
-                .populate('userId', 'userName channelName channelPicture')
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean()
-        );
-
-        // 4. Fetch posts (use postsLimit parameter)
+        // 1. Fetch shorts (5 per page)
         fetchPromises.push(
             Content.find({
-                contentType: 'post',
+                contentType: 'short',
                 status: 'completed',
                 visibility: 'public'
             })
                 .populate('userId', 'userName channelName channelPicture')
                 .sort({ createdAt: -1 })
-                .skip(isFirstPage ? 0 : skip)
+                .skip(shortsSkip)
+                .limit(parseInt(shortsLimit))
+                .lean()
+        );
+
+        // 2. Fetch audio (5 per page)
+        fetchPromises.push(
+            Content.find({
+                contentType: 'audio',
+                status: 'completed',
+                visibility: 'public'
+            })
+                .populate('userId', 'userName channelName channelPicture')
+                .sort({ createdAt: -1 })
+                .skip(audioSkip)
+                .limit(parseInt(audioLimit))
+                .lean()
+        );
+
+        // 3. Fetch videos (12 per page)
+        fetchPromises.push(
+            Video.find({ status: 'completed' })
+                .populate('userId', 'userName channelName channelPicture')
+                .sort({ createdAt: -1 })
+                .skip(videosSkip)
+                .limit(parseInt(videosLimit))
+                .lean()
+        );
+
+        // 4. Fetch posts ONLY from subscribed creators (1 per page)
+        const postsQuery = {
+            contentType: 'post',
+            status: 'completed',
+            visibility: 'public'
+        };
+
+        // Only filter by subscriptions if user has subscriptions
+        if (subscribedCreatorIds.length > 0) {
+            postsQuery.userId = { $in: subscribedCreatorIds };
+        }
+
+        fetchPromises.push(
+            Content.find(postsQuery)
+                .populate('userId', 'userName channelName channelPicture')
+                .sort({ createdAt: -1 })
+                .skip(postsSkip)
                 .limit(parseInt(postsLimit))
                 .lean()
         );
 
         // 5. Get counts in parallel (for pagination)
-        fetchPromises.push(Video.countDocuments({ status: 'completed' }));
-        fetchPromises.push(Content.countDocuments({ contentType: 'post', status: 'completed', visibility: 'public' }));
+        fetchPromises.push(Content.countDocuments({ contentType: 'short', status: 'completed', visibility: 'public' }));
         fetchPromises.push(Content.countDocuments({ contentType: 'audio', status: 'completed', visibility: 'public' }));
+        fetchPromises.push(Video.countDocuments({ status: 'completed' }));
+
+        // Count posts from subscribed creators only
+        const postsCountQuery = subscribedCreatorIds.length > 0
+            ? { contentType: 'post', status: 'completed', visibility: 'public', userId: { $in: subscribedCreatorIds } }
+            : { contentType: 'post', status: 'completed', visibility: 'public' };
+        fetchPromises.push(Content.countDocuments(postsCountQuery));
 
         // Wait for all fetches to complete
-        const [shorts, audioContent, videos, posts, totalVideos, totalPosts, totalAudio] = await Promise.all(fetchPromises);
+        const [shorts, audioContent, videos, posts, totalShorts, totalAudio, totalVideos, totalPosts] = await Promise.all(fetchPromises);
 
         console.log(`✅ [Feed] Fetched: ${shorts.length} shorts, ${audioContent.length} audio, ${videos.length} videos, ${posts.length} posts`);
 
@@ -170,6 +198,7 @@ export const getMixedFeed = async (req, res) => {
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelPicture: content.userId?.channelPicture || null,
+                userId: content.userId?._id,
                 status: content.status,
                 score: calculateScore(content)
             }))),
@@ -188,6 +217,7 @@ export const getMixedFeed = async (req, res) => {
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelPicture: content.userId?.channelPicture || null,
+                userId: content.userId?._id,
                 artist: content.artist,
                 album: content.album,
                 audioCategory: content.audioCategory,
@@ -208,11 +238,12 @@ export const getMixedFeed = async (req, res) => {
                 createdAt: video.createdAt,
                 channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
                 channelPicture: video.userId?.channelPicture || null,
+                userId: video.userId?._id,
                 status: video.status,
                 score: calculateScore(video)
             }))),
 
-            // Process posts (skip fetching top comment for speed - can be loaded on demand)
+            // Process posts
             Promise.all(posts.map(async (content) => ({
                 _id: content._id,
                 contentType: 'post',
@@ -227,30 +258,46 @@ export const getMixedFeed = async (req, res) => {
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelPicture: content.userId?.channelPicture || null,
+                userId: content.userId?._id,
                 status: content.status,
                 score: calculateScore(content)
             })))
         ]);
 
-        // Sort by score
+        // Sort by score for better recommendations
         processedShorts.sort((a, b) => b.score - a.score);
         processedAudio.sort((a, b) => b.score - a.score);
         processedVideos.sort((a, b) => b.score - a.score);
         processedPosts.sort((a, b) => b.score - a.score);
 
-        const total = totalVideos + totalPosts + totalAudio;
+        // Calculate if there's more content available
+        const hasMoreShorts = shortsSkip + shorts.length < totalShorts;
+        const hasMoreAudio = audioSkip + audioContent.length < totalAudio;
+        const hasMoreVideos = videosSkip + videos.length < totalVideos;
+        const hasMorePosts = postsSkip + posts.length < totalPosts;
+
+        // Continue pagination if ANY content type has more
+        const hasNextPage = hasMoreShorts || hasMoreAudio || hasMoreVideos || hasMorePosts;
 
         res.json({
-            shorts: isFirstPage ? processedShorts : [],
+            shorts: processedShorts,
             videos: processedVideos,
-            audio: isFirstPage ? processedAudio : [],
+            audio: processedAudio,
             posts: processedPosts,
-            content: processedVideos,
+            isFirstPage,
             pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / parseInt(limit)),
-                totalItems: total,
-                hasNextPage: skip + parseInt(limit) < total
+                currentPage: pageNum,
+                hasNextPage,
+                hasMoreShorts,
+                hasMoreAudio,
+                hasMoreVideos,
+                hasMorePosts,
+                totals: {
+                    shorts: totalShorts,
+                    audio: totalAudio,
+                    videos: totalVideos,
+                    posts: totalPosts
+                }
             }
         });
 
