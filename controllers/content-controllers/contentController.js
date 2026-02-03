@@ -1008,6 +1008,13 @@ export const getShortsPlayerFeed = async (req, res) => {
                 const videoKey = content.hlsKey || content.processedKey || content.originalKey;
                 const videoUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
 
+                // ✅ ADD: Get comment count for starting short
+                const Comment = (await import('../../models/comment.model.js')).default;
+                const commentCount = await Comment.countDocuments({
+                    contentId: content._id,
+                    parentCommentId: { $exists: false }
+                });
+
                 startingShort = {
                     _id: content._id,
                     contentType: 'short',
@@ -1018,7 +1025,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     videoUrl,
                     views: content.views,
                     likeCount: content.likeCount || 0,
-                    commentCount: 0, // Will be updated
+                    commentCount, // ✅ ADD
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelPicture: content.userId?.channelPicture,
@@ -1063,8 +1070,17 @@ export const getShortsPlayerFeed = async (req, res) => {
                 .skip(skip)
                 .limit(parseInt(limit));
 
+            // ✅ ADD: Import Comment model once at the top
+            const Comment = (await import('../../models/comment.model.js')).default;
+
             shorts = await Promise.all(contents.map(async (content) => {
                 const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+
+                // ✅ GET comment count for each short
+                const commentCount = await Comment.countDocuments({
+                    contentId: content._id,
+                    parentCommentId: { $exists: false }
+                });
 
                 return {
                     _id: content._id,
@@ -1076,7 +1092,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
                     views: content.views,
                     likeCount: content.likeCount || 0,
-                    commentCount: 0, // Will be updated
+                    commentCount, // ✅ ADD
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelPicture: content.userId?.channelPicture,
                     userId: content.userId?._id || content.userId,
@@ -1085,6 +1101,11 @@ export const getShortsPlayerFeed = async (req, res) => {
             }));
 
             console.log(`✅ [ShortsPlayerFeed] Fetched ${shorts.length} default shorts`);
+        }
+
+        // ✅ ADD: Attach comment counts for personalized shorts too (if using recommendations)
+        if (userId && shorts.length > 0) {
+            shorts = await attachCommentCounts(shorts);
         }
 
         // Add starting short at the beginning if provided
@@ -1499,6 +1520,3 @@ async function attachCommentCounts(contents) {
         commentCount: countMap.get(content._id.toString()) || 0
     }));
 }
-
-// Use in getShortsPlayerFeed:
-shorts = await attachCommentCounts(shorts);
