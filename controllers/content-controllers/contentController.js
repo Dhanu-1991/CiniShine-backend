@@ -662,6 +662,12 @@ export const getFeedContent = async (req, res) => {
                 const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
                 const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
 
+                // ✅ ADD: Get comment count
+                const commentCount = await Comment.countDocuments({
+                    contentId: content._id,
+                    parentCommentId: { $exists: false }
+                });
+
                 return {
                     _id: content._id,
                     contentType: content.contentType,
@@ -673,6 +679,7 @@ export const getFeedContent = async (req, res) => {
                     imageUrl,
                     views: content.views,
                     likeCount: content.likeCount,
+                    commentCount, // ✅ ADD
                     createdAt: content.createdAt,
                     user: content.userId,
                     channelName: content.channelName
@@ -923,10 +930,6 @@ export const getContentEngagementStatus = async (req, res) => {
 
         console.log(`📊 [EngagementStatus] Fetching for ContentId: ${contentId}, UserId: ${userId}`);
 
-        if (!userId) {
-            return res.json({ isLiked: false, isDisliked: false, isSubscribed: false });
-        }
-
         if (!mongoose.Types.ObjectId.isValid(contentId)) {
             return res.status(400).json({ error: 'Invalid content ID' });
         }
@@ -942,13 +945,28 @@ export const getContentEngagementStatus = async (req, res) => {
         const isDisliked = history?.disliked || false;
 
         // Check subscription status
-        const user = await User.findById(userId).select('subscriptions');
-        const channelUserId = content.userId?._id || content.userId;
-        const isSubscribed = user?.subscriptions?.includes(channelUserId.toString()) || false;
+        let isSubscribed = false;
+        if (userId) {
+            const user = await User.findById(userId).select('subscriptions');
+            const channelUserId = content.userId?._id || content.userId;
+            isSubscribed = user?.subscriptions?.includes(channelUserId.toString()) || false;
+        }
 
-        console.log(`✅ [EngagementStatus] Result:`, { isLiked, isDisliked, isSubscribed });
+        // ✅ ADD: Get comment count
+        const Comment = (await import('../../models/comment.model.js')).default;
+        const commentCount = await Comment.countDocuments({
+            contentId: content._id,
+            parentCommentId: { $exists: false } // Only count top-level comments
+        });
 
-        res.json({ isLiked, isDisliked, isSubscribed });
+        console.log(`✅ [EngagementStatus] Result:`, { isLiked, isDisliked, isSubscribed, commentCount });
+
+        res.json({
+            isLiked,
+            isDisliked,
+            isSubscribed,
+            commentCount
+        });
     } catch (error) {
         console.error('❌ [EngagementStatus] Error:', error);
         res.status(500).json({ error: 'Failed to get engagement status' });
@@ -1000,6 +1018,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     videoUrl,
                     views: content.views,
                     likeCount: content.likeCount || 0,
+                    commentCount: 0, // Will be updated
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelPicture: content.userId?.channelPicture,
@@ -1046,6 +1065,7 @@ export const getShortsPlayerFeed = async (req, res) => {
 
             shorts = await Promise.all(contents.map(async (content) => {
                 const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+
                 return {
                     _id: content._id,
                     contentType: 'short',
@@ -1056,6 +1076,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
                     views: content.views,
                     likeCount: content.likeCount || 0,
+                    commentCount: 0, // Will be updated
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelPicture: content.userId?.channelPicture,
                     userId: content.userId?._id || content.userId,
@@ -1166,14 +1187,19 @@ export const getAudioPlayerFeed = async (req, res) => {
  * Helper function to format audio content with signed URLs
  */
 async function formatAudioContent(content) {
-    // Get thumbnail URL - use thumbnailKey first, then imageKey as fallback
-    // Only generate URL if the object actually exists in S3
+    // ✅ ADD: Import Comment model
+    const Comment = (await import('../../models/comment.model.js')).default;
+
     const thumbnailKey = content.thumbnailKey || content.imageKey;
     const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, thumbnailKey);
-
-    // Get audio URL
     const audioKey = content.processedKey || content.originalKey;
     const audioUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, audioKey);
+
+    // ✅ ADD: Get comment count
+    const commentCount = await Comment.countDocuments({
+        contentId: content._id,
+        parentCommentId: { $exists: false }
+    });
 
     return {
         _id: content._id,
@@ -1185,6 +1211,7 @@ async function formatAudioContent(content) {
         audioUrl,
         views: content.views || 0,
         likeCount: content.likeCount || 0,
+        commentCount, // ✅ ADD
         createdAt: content.createdAt,
         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
         channelPicture: content.userId?.channelPicture,
@@ -1217,6 +1244,13 @@ export const getSingleContent = async (req, res) => {
         if (!content) {
             return res.status(404).json({ error: 'Content not found' });
         }
+
+        // ✅ ADD: Get comment count
+        const Comment = (await import('../../models/comment.model.js')).default;
+        const commentCount = await Comment.countDocuments({
+            contentId: content._id,
+            parentCommentId: { $exists: false }
+        });
 
         // Generate URLs based on content type (with existence check)
         const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
@@ -1257,6 +1291,7 @@ export const getSingleContent = async (req, res) => {
             audioUrl: content.contentType === 'audio' ? mediaUrl : null,
             views: content.views,
             likeCount: content.likeCount || 0,
+            commentCount, // ✅ ADD
             createdAt: content.createdAt,
             channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
             channelPicture: content.userId?.channelPicture,
@@ -1388,10 +1423,12 @@ export const getSubscriptionPosts = async (req, res) => {
  * Helper to format post with signed URLs
  */
 async function formatPostWithUrls(post) {
+    // ✅ ADD: Import Comment model
+    const Comment = (await import('../../models/comment.model.js')).default;
+
     const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.thumbnailKey);
     const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.imageKey);
 
-    // Handle multiple images
     let imageUrls = [];
     if (post.imageKeys && post.imageKeys.length > 0) {
         imageUrls = await Promise.all(
@@ -1401,6 +1438,12 @@ async function formatPostWithUrls(post) {
     } else if (imageUrl) {
         imageUrls = [imageUrl];
     }
+
+    // ✅ ADD: Get comment count
+    const commentCount = await Comment.countDocuments({
+        contentId: post._id,
+        parentCommentId: { $exists: false }
+    });
 
     return {
         _id: post._id,
@@ -1413,6 +1456,7 @@ async function formatPostWithUrls(post) {
         imageUrls,
         views: post.views,
         likeCount: post.likeCount || 0,
+        commentCount, // ✅ ADD
         createdAt: post.createdAt,
         channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
         channelPicture: post.userId?.channelPicture,
@@ -1421,3 +1465,40 @@ async function formatPostWithUrls(post) {
         visibility: post.visibility
     };
 }
+
+// Helper function to batch fetch comment counts
+async function attachCommentCounts(contents) {
+    const Comment = (await import('../../models/comment.model.js')).default;
+
+    const contentIds = contents.map(c => c._id);
+
+    // Single aggregation query instead of N queries
+    const commentCounts = await Comment.aggregate([
+        {
+            $match: {
+                contentId: { $in: contentIds },
+                parentCommentId: { $exists: false }
+            }
+        },
+        {
+            $group: {
+                _id: '$contentId',
+                count: { $sum: 1 }
+            }
+        }
+    ]);
+
+    // Create lookup map
+    const countMap = new Map(
+        commentCounts.map(item => [item._id.toString(), item.count])
+    );
+
+    // Attach counts to contents
+    return contents.map(content => ({
+        ...content,
+        commentCount: countMap.get(content._id.toString()) || 0
+    }));
+}
+
+// Use in getShortsPlayerFeed:
+shorts = await attachCommentCounts(shorts);
