@@ -3,7 +3,7 @@ set -e
 
 # Production Media Processing Worker Setup - SUPPORTS VIDEOS, SHORTS, AUDIO
 # Handles multiple content types with appropriate processing pipelines
-# Version 4.0
+# Version 4.1 - UNIFIED CONTENT MODEL (No separate Video model)
 
 REGION="us-east-1"
 BUCKET_NAME="cini-shine"
@@ -74,7 +74,7 @@ cd $APP_DIR
 cat > package.json << 'EOF'
 {
   "name": "cinishine-worker",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "type": "module",
   "scripts": {
     "worker": "node workers/worker.js"
@@ -109,82 +109,40 @@ INSTANCE_ID=$INSTANCE_ID
 INSTANCE_TYPE=$INSTANCE_TYPE
 ASG_NAME=$ASG_NAME
 MAX_CONCURRENT_JOBS=1
-VISIBILITY_TIMEOUT=3600
+VISIBILITY_TIMEOUT=600
 NODE_ENV=production
 LOG_LEVEL=info
 EOF
 
 mkdir -p models
 
-# Video model (for long-form videos)
-cat > models/video.model.js << 'JSEOF'
-import mongoose from 'mongoose';
-
-const videoSchema = new mongoose.Schema({
-  title: String,
-  originalKey: String,
-  userId: String,
-  status: {
-    type: String,
-    enum: ['uploaded', 'processing', 'completed', 'failed'],
-    default: 'uploaded'
-  },
-  hlsMasterKey: String,
-  thumbnailKey: String,
-  thumbnailSource: {
-    type: String,
-    enum: ['auto', 'custom'],
-    default: 'auto'
-  },
-  duration: Number,
-  renditions: [{
-    resolution: String,
-    bitrate: Number,
-    name: String,
-    playlistKey: String,
-    codecs: String
-  }],
-  processingStart: Date,
-  processingEnd: Date,
-  error: String,
-  metadata: {
-    originalResolution: String,
-    originalCodec: String,
-    hasAudio: Boolean,
-    videoCodec: String,
-    audioCodec: String
-  },
-  sizes: {
-    original: Number,
-    processed: Number
-  }
-}, {
-  timestamps: true
-});
-
-export default mongoose.model('Video', videoSchema);
-JSEOF
-
-# Content model (for shorts, audio, posts)
+# ============================================================================
+# UNIFIED CONTENT MODEL - Replaces old Video + Content split
+# Includes ALL fields for backward compatibility
+# ============================================================================
 cat > models/content.model.js << 'JSEOF'
 import mongoose from 'mongoose';
 
 const contentSchema = new mongoose.Schema({
+  // Content type discriminator
   contentType: {
     type: String,
-    enum: ['short', 'audio', 'post'],
+    enum: ['video', 'short', 'audio', 'post'],
     required: true,
     index: true
   },
+  
+  // Creator reference
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
     index: true
   },
+  
+  // Basic metadata
   title: {
     type: String,
-    required: true,
     trim: true,
     maxlength: 200
   },
@@ -194,32 +152,70 @@ const contentSchema = new mongoose.Schema({
     maxlength: 5000
   },
   channelName: String,
-  tags: [String],
-  category: String,
+  
+  // Tags and categorization
+  tags: [{
+    type: String,
+    trim: true
+  }],
+  category: {
+    type: String,
+    trim: true
+  },
+  
+  // Content settings
   visibility: {
     type: String,
     enum: ['public', 'unlisted', 'private'],
     default: 'public'
   },
+  isAgeRestricted: {
+    type: Boolean,
+    default: false
+  },
+  commentsEnabled: {
+    type: Boolean,
+    default: true
+  },
+  selectedRoles: [{
+    type: String,
+    trim: true
+  }],
   
-  // Media files (S3 keys)
+  // ============================================
+  // MEDIA FILES (S3 keys)
+  // ============================================
   originalKey: String,
   hlsMasterKey: String,
   processedKey: String,      // For audio: processed AAC file
   thumbnailKey: String,
-  thumbnailSource: {         // Track if thumbnail is auto or custom
+  thumbnailSource: {
     type: String,
     enum: ['auto', 'custom'],
     default: 'auto'
   },
-  imageKey: String,          // For posts
+  imageKey: String,
+  imageKeys: [{
+    type: String,
+    trim: true
+  }],
   
-  // Media metadata
+  // ============================================
+  // MEDIA METADATA
+  // ============================================
   duration: Number,
   fileSize: Number,
   mimeType: String,
   
-  // Processing status
+  // File sizes (for backward compatibility with old Video model)
+  sizes: {
+    original: Number,
+    processed: Number
+  },
+  
+  // ============================================
+  // PROCESSING STATUS
+  // ============================================
   status: {
     type: String,
     enum: ['uploading', 'processing', 'completed', 'failed'],
@@ -228,34 +224,91 @@ const contentSchema = new mongoose.Schema({
   processingStart: Date,
   processingEnd: Date,
   processingError: String,
+  error: String,  // Legacy field for backward compatibility
   
-  // Renditions (for shorts)
+  // ============================================
+  // RENDITIONS (for video/shorts)
+  // ============================================
   renditions: [{
     resolution: String,
     bitrate: Number,
+    name: String,           // Added for backward compatibility
     playlistKey: String,
     codecs: String
   }],
   
-  // Audio-specific
+  // ============================================
+  // VIDEO METADATA (for backward compatibility)
+  // ============================================
+  metadata: {
+    originalResolution: String,
+    originalCodec: String,
+    hasAudio: Boolean,
+    videoCodec: String,
+    audioCodec: String
+  },
+  
+  // ============================================
+  // AUDIO-SPECIFIC
+  // ============================================
   audioMetadata: {
     bitrate: Number,
     sampleRate: Number,
     channels: Number,
     codec: String
   },
+  audioCategory: {
+    type: String,
+    enum: ['music', 'podcast', 'audiobook', 'sound-effect', 'other'],
+    default: 'music'
+  },
+  artist: String,
+  album: String,
   
-  // Engagement
+  // ============================================
+  // ENGAGEMENT METRICS
+  // ============================================
   views: { type: Number, default: 0 },
   likeCount: { type: Number, default: 0 },
   dislikeCount: { type: Number, default: 0 },
-  commentCount: { type: Number, default: 0 }
+  commentCount: { type: Number, default: 0 },
+  shareCount: { type: Number, default: 0 },
+  
+  // ============================================
+  // ANALYTICS
+  // ============================================
+  lastViewedAt: Date,
+  averageWatchTime: { type: Number, default: 0 },
+  watchCount: { type: Number, default: 0 },
+  totalWatchTime: { type: Number, default: 0 },
+  
+  // ============================================
+  // POST-SPECIFIC
+  // ============================================
+  postContent: String,
+  
+  // ============================================
+  // TIMESTAMPS
+  // ============================================
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  },
+  publishedAt: Date
 }, {
   timestamps: true
 });
 
+// Indexes
 contentSchema.index({ contentType: 1, status: 1, createdAt: -1 });
 contentSchema.index({ userId: 1, contentType: 1 });
+contentSchema.index({ tags: 1 });
+contentSchema.index({ visibility: 1, status: 1 });
+contentSchema.index({ contentType: 1, status: 1, views: -1 });
 
 export default mongoose.model('Content', contentSchema);
 JSEOF
@@ -264,7 +317,6 @@ mkdir -p workers
 cat > workers/worker.js << 'JSEOF'
 import 'dotenv/config';
 import { spawn, execSync } from 'child_process';
-import Video from '../models/video.model.js';
 import Content from '../models/content.model.js';
 import fs from 'fs';
 import path from 'path';
@@ -290,7 +342,7 @@ import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
 const ffprobePath = ffprobeInstaller.path;
 
-console.log("🎬 CiniShine Media Processing Worker v4.0 - VIDEOS, SHORTS, AUDIO");
+console.log("🎬 CiniShine Media Processing Worker v4.1 - UNIFIED CONTENT MODEL");
 console.log("📊 Configuration:");
 console.log("   MONGO_URI:", process.env.MONGO_URI ? "✔" : "✗");
 console.log("   AWS_REGION:", process.env.AWS_REGION);
@@ -316,7 +368,6 @@ const asgClient = new AutoScalingClient({
 // RENDITION PROFILES
 // ============================================================================
 
-// Full renditions for long-form videos (horizontal)
 const VIDEO_RENDITIONS = [
   { resolution: '256x144', bitrate: 200000, audioBitrate: '128k', name: '144p', width: 256, height: 144 },
   { resolution: '426x240', bitrate: 400000, audioBitrate: '128k', name: '240p', width: 426, height: 240 },
@@ -326,7 +377,6 @@ const VIDEO_RENDITIONS = [
   { resolution: '1920x1080', bitrate: 5000000, audioBitrate: '128k', name: '1080p', width: 1920, height: 1080 }
 ];
 
-// Optimized renditions for shorts (vertical, mobile-first)
 const SHORT_RENDITIONS = [
   { resolution: '480x854', bitrate: 1500000, audioBitrate: '128k', name: '480p', width: 480, height: 854 },
   { resolution: '720x1280', bitrate: 3000000, audioBitrate: '128k', name: '720p', width: 720, height: 1280 },
@@ -338,11 +388,6 @@ const SHORT_RENDITIONS = [
 // ============================================================================
 
 function detectContentType(s3Key) {
-  // S3 key patterns:
-  // uploads/{userId}/{fileId}_*.mp4 → video
-  // shorts/{userId}/{fileId}_*.mp4 → short
-  // audio/{userId}/{fileId}_*.* → audio
-  
   const parts = s3Key.split('/');
   const folder = parts[0].toLowerCase();
   
@@ -350,13 +395,12 @@ function detectContentType(s3Key) {
   if (folder === 'shorts') return 'short';
   if (folder === 'audio') return 'audio';
   
-  // Fallback: check file extension
   const ext = path.extname(s3Key).toLowerCase();
   if (['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg'].includes(ext)) {
     return 'audio';
   }
   
-  return 'video'; // default
+  return 'video';
 }
 
 function getAppropriateRenditions(inputWidth, inputHeight, contentType) {
@@ -366,7 +410,6 @@ function getAppropriateRenditions(inputWidth, inputHeight, contentType) {
   console.log(`📐 Input: ${inputWidth}x${inputHeight} (${contentType}, ${isVertical ? 'vertical' : 'horizontal'})`);
   
   const inputPixels = inputWidth * inputHeight;
-  
   const appropriate = renditions.filter(r => {
     const targetPixels = r.width * r.height;
     return targetPixels <= (inputPixels * 1.1);
@@ -608,7 +651,7 @@ async function extendVisibility(receiptHandle) {
     await sqsClient.send(new ChangeMessageVisibilityCommand({
       QueueUrl: process.env.QUEUE_URL,
       ReceiptHandle: receiptHandle,
-      VisibilityTimeout: parseInt(process.env.VISIBILITY_TIMEOUT || '3600', 10)
+      VisibilityTimeout: parseInt(process.env.VISIBILITY_TIMEOUT || '600', 10)
     }));
     console.log('⏰ Extended visibility');
   } catch (err) {
@@ -617,7 +660,7 @@ async function extendVisibility(receiptHandle) {
 }
 
 // ============================================================================
-// VIDEO PROCESSING (Long-form videos from /uploads)
+// VIDEO PROCESSING - Uses Content model with contentType='video'
 // ============================================================================
 
 async function processVideo(fileId, userId, s3Key, receiptHandle) {
@@ -629,16 +672,33 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
   const processStart = Date.now();
 
   try {
-    const video = await Video.findById(fileId);
-    if (!video) throw new Error(`Video ${fileId} not found`);
+    // ✅ Use Content model instead of Video
+    const video = await Content.findById(fileId);
+    if (!video) {
+      console.error(`❌ Content ${fileId} NOT FOUND in database`);
+      console.error(`   S3 Key: ${s3Key}`);
+      console.error(`   userId: ${userId}`);
+      throw new Error(`Content ${fileId} not found`);
+    }
 
-    // 🛡️ Idempotency check - skip if already completed
+    // Verify it's actually a video
+    if (video.contentType && video.contentType !== 'video') {
+      console.warn(`⚠️  Content ${fileId} is type '${video.contentType}', expected 'video'`);
+    }
+
+    // Idempotency check
     if (video.status === 'completed') {
-      console.log(`⚠️ Video ${fileId} already completed - skipping`);
+      console.log(`⚠️  Video ${fileId} already completed - skipping`);
       return { success: true, skipped: true };
     }
 
-    await Video.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), error: null });
+    await Content.findByIdAndUpdate(fileId, { 
+      status: 'processing', 
+      processingStart: new Date(), 
+      error: null,
+      processingError: null
+    });
+    
     visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
 
     tempDir = getTempDir(fileId);
@@ -667,7 +727,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     const metadata = await getMediaMetadata(inputPath);
     const { duration, videoStream, hasAudio } = metadata;
 
-    // Check if custom thumbnail already exists (don't overwrite user-uploaded thumbnails)
+    // Thumbnail logic
     let shouldGenerateThumbnail = true;
     let existingThumbnailKey = video.thumbnailKey;
     
@@ -676,7 +736,6 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       shouldGenerateThumbnail = false;
     }
 
-    // Generate thumbnail only if no custom one exists
     if (shouldGenerateThumbnail) {
       console.log('🖼️  Generating auto thumbnail...');
       const thumbTime = Math.min(5, duration / 2);
@@ -759,14 +818,14 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       }
     }
 
-    // Only upload auto-generated thumbnail if we created one
+    // Upload thumbnail if generated
     let thumbnailKey = existingThumbnailKey;
     if (shouldGenerateThumbnail) {
       thumbnailKey = `thumbnails/videos/${userId}/${fileId}.jpg`;
       await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
     }
 
-    // Update DB - preserve existing thumbnailSource if custom
+    // ✅ Update Content model with all fields
     const updateData = {
       status: 'completed',
       hlsMasterKey: masterKey,
@@ -783,15 +842,16 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       'metadata.originalResolution': `${videoStream.width}x${videoStream.height}`,
       'metadata.originalCodec': videoStream.codec_name,
       'metadata.hasAudio': hasAudio,
-      'sizes.original': fileStats.size
+      'sizes.original': fileStats.size,
+      error: null,
+      processingError: null
     };
     
-    // Only set thumbnailSource to 'auto' if we generated it
     if (shouldGenerateThumbnail) {
       updateData.thumbnailSource = 'auto';
     }
 
-    await Video.findByIdAndUpdate(fileId, updateData);
+    await Content.findByIdAndUpdate(fileId, updateData);
 
     const totalMinutes = ((Date.now() - processStart) / 1000 / 60).toFixed(2);
     console.log(`✅ VIDEO COMPLETE: ${fileId} in ${totalMinutes} min`);
@@ -799,8 +859,11 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
 
   } catch (error) {
     console.error('❌ ERROR:', error.message);
-    await Video.findByIdAndUpdate(fileId, {
-      status: 'failed', error: error.message, processingEnd: new Date()
+    await Content.findByIdAndUpdate(fileId, {
+      status: 'failed', 
+      error: error.message,
+      processingError: error.message, 
+      processingEnd: new Date()
     }).catch(e => console.error('DB update failed:', e));
     throw error;
   } finally {
@@ -812,7 +875,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
 }
 
 // ============================================================================
-// SHORT PROCESSING (Vertical videos ≤60s from /shorts)
+// SHORT PROCESSING
 // ============================================================================
 
 async function processShort(fileId, userId, s3Key, receiptHandle) {
@@ -827,13 +890,16 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     const content = await Content.findById(fileId);
     if (!content) throw new Error(`Short ${fileId} not found`);
 
-    // 🛡️ Idempotency check - skip if already completed
     if (content.status === 'completed') {
-      console.log(`⚠️ Short ${fileId} already completed - skipping`);
+      console.log(`⚠️  Short ${fileId} already completed - skipping`);
       return { success: true, skipped: true };
     }
 
-    await Content.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), processingError: null });
+    await Content.findByIdAndUpdate(fileId, { 
+      status: 'processing', 
+      processingStart: new Date(), 
+      processingError: null 
+    });
     visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
 
     tempDir = getTempDir(fileId);
@@ -844,7 +910,6 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     ensureDirectoryExists(tempDir);
     ensureDirectoryExists(outputDir);
 
-    // Download
     console.log('📥 Downloading from S3...');
     const { Body } = await s3Client.send(new GetObjectCommand({
       Bucket: process.env.S3_BUCKET,
@@ -862,12 +927,10 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     const metadata = await getMediaMetadata(inputPath);
     const { duration, videoStream, hasAudio } = metadata;
 
-    // Validate duration (shorts should be ≤60s)
     if (duration > 65) {
       console.warn(`⚠️  Short duration ${duration}s exceeds 60s limit`);
     }
 
-    // Check if custom thumbnail already exists (don't overwrite user-uploaded thumbnails)
     let shouldGenerateThumbnail = true;
     let existingThumbnailKey = content.thumbnailKey;
     
@@ -876,7 +939,6 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       shouldGenerateThumbnail = false;
     }
 
-    // Generate thumbnail only if no custom one exists (first frame for shorts)
     if (shouldGenerateThumbnail) {
       console.log('🖼️  Generating auto thumbnail...');
       await runFFmpeg([
@@ -891,15 +953,12 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       ]);
     }
 
-    // Detect orientation
     const isVertical = videoStream.height > videoStream.width;
     const renditions = getAppropriateRenditions(videoStream.width, videoStream.height, 'short');
     
     console.log(`📱 Transcoding ${renditions.length} renditions (vertical: ${isVertical})...`);
 
-    // Build FFmpeg command - handle vertical scaling
     const scaleFilter = renditions.map((r, i) => {
-      // For vertical videos, swap width/height in scale
       const scale = isVertical 
         ? `scale=${r.height}:${r.width}` 
         : `scale=${r.resolution}`;
@@ -920,7 +979,7 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
         '-b:v:' + i, rendition.bitrate.toString(),
         '-maxrate:v:' + i, Math.round(rendition.bitrate * 1.5).toString(),
         '-bufsize:v:' + i, Math.round(rendition.bitrate * 2).toString(),
-        '-preset', 'fast', '-crf', '21',  // Faster preset, better quality for shorts
+        '-preset', 'fast', '-crf', '21',
         '-profile:v:' + i, 'high',
         '-g:v:' + i, '30', '-keyint_min:v:' + i, '30', '-sc_threshold:v:' + i, '0'
       );
@@ -935,7 +994,7 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     });
 
     ffmpegArgs.push(
-      '-f', 'hls', '-hls_time', '2', '-hls_list_size', '0',  // Shorter segments for shorts
+      '-f', 'hls', '-hls_time', '2', '-hls_list_size', '0',
       '-hls_playlist_type', 'vod', '-hls_flags', 'independent_segments',
       '-hls_segment_type', 'mpegts',
       '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts'),
@@ -947,11 +1006,9 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
 
     await runFFmpeg(ffmpegArgs);
 
-    // Validate and upload
     const validation = await validateHLSOutput(outputDir, renditions.length);
 
     console.log('☁️  Uploading to S3...');
-    // Upload to hls/shorts/ folder
     const masterKey = `hls/shorts/${userId}/${fileId}/master.m3u8`;
     await uploadToS3WithRetry(path.join(outputDir, 'master.m3u8'), masterKey, 'application/vnd.apple.mpegurl', 'max-age=300');
 
@@ -967,14 +1024,12 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       }
     }
 
-    // Only upload auto-generated thumbnail if we created one
     let thumbnailKey = existingThumbnailKey;
     if (shouldGenerateThumbnail) {
       thumbnailKey = `thumbnails/shorts/${userId}/${fileId}.jpg`;
       await uploadToS3WithRetry(thumbnailPath, thumbnailKey, 'image/jpeg', 'max-age=31536000');
     }
 
-    // Update DB - preserve existing thumbnailSource if custom
     const updateData = {
       status: 'completed',
       hlsMasterKey: masterKey,
@@ -990,7 +1045,6 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       processingEnd: new Date()
     };
     
-    // Only set thumbnailSource to 'auto' if we generated it
     if (shouldGenerateThumbnail) {
       updateData.thumbnailSource = 'auto';
     }
@@ -1016,7 +1070,7 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
 }
 
 // ============================================================================
-// AUDIO PROCESSING (from /audio folder)
+// AUDIO PROCESSING
 // ============================================================================
 
 async function processAudio(fileId, userId, s3Key, receiptHandle) {
@@ -1031,25 +1085,27 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
     const content = await Content.findById(fileId);
     if (!content) throw new Error(`Audio ${fileId} not found`);
 
-    // 🛡️ Idempotency check - skip if already completed
     if (content.status === 'completed') {
-      console.log(`⚠️ Audio ${fileId} already completed - skipping`);
+      console.log(`⚠️  Audio ${fileId} already completed - skipping`);
       return { success: true, skipped: true };
     }
 
-    await Content.findByIdAndUpdate(fileId, { status: 'processing', processingStart: new Date(), processingError: null });
+    await Content.findByIdAndUpdate(fileId, { 
+      status: 'processing', 
+      processingStart: new Date(), 
+      processingError: null 
+    });
     visibilityExtender = setInterval(() => extendVisibility(receiptHandle), 300000);
 
     tempDir = getTempDir(fileId);
     const ext = path.extname(s3Key).toLowerCase() || '.mp3';
     const inputPath = path.join(tempDir, `input${ext}`);
-    const outputPath = path.join(tempDir, 'output.m4a');  // AAC in M4A container
+    const outputPath = path.join(tempDir, 'output.m4a');
     const hlsDir = path.join(tempDir, 'hls');
 
     ensureDirectoryExists(tempDir);
     ensureDirectoryExists(hlsDir);
 
-    // Download
     console.log('📥 Downloading from S3...');
     const { Body } = await s3Client.send(new GetObjectCommand({
       Bucket: process.env.S3_BUCKET,
@@ -1071,11 +1127,10 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
       throw new Error('No audio stream found in file');
     }
 
-    // Convert to AAC 256kbps
     console.log('🎵 Converting to AAC...');
     await runFFmpeg([
       '-i', inputPath,
-      '-vn',  // No video
+      '-vn',
       '-c:a', 'aac',
       '-b:a', '256k',
       '-ar', '48000',
@@ -1084,7 +1139,6 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
       outputPath
     ]);
 
-    // Also create HLS audio stream for streaming
     console.log('🎵 Creating HLS audio stream...');
     await runFFmpeg([
       '-i', inputPath,
@@ -1102,14 +1156,11 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
       path.join(hlsDir, 'playlist.m3u8')
     ]);
 
-    // Upload
     console.log('☁️  Uploading to S3...');
     
-    // Upload processed AAC file
     const processedKey = `audio/processed/${userId}/${fileId}.m4a`;
     await uploadToS3WithRetry(outputPath, processedKey, 'audio/mp4', 'max-age=31536000');
 
-    // Upload HLS to hls/audio/ folder
     const hlsFiles = fs.readdirSync(hlsDir);
     const hlsMasterKey = `hls/audio/${userId}/${fileId}/playlist.m3u8`;
     
@@ -1121,7 +1172,6 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
       await uploadToS3WithRetry(filePath, fileKey, contentType, cacheControl);
     }
 
-    // Update DB
     await Content.findByIdAndUpdate(fileId, {
       status: 'completed',
       processedKey,
@@ -1187,7 +1237,7 @@ async function startWorker() {
         QueueUrl: process.env.QUEUE_URL,
         MaxNumberOfMessages: 1,
         WaitTimeSeconds: 20,
-        VisibilityTimeout: parseInt(process.env.VISIBILITY_TIMEOUT || '3600', 10),
+        VisibilityTimeout: parseInt(process.env.VISIBILITY_TIMEOUT || '600', 10),
         AttributeNames: ['All']
       }));
 
@@ -1203,8 +1253,7 @@ async function startWorker() {
           s3Key = body.key || body.s3Key;
           if (!s3Key) throw new Error('No S3 key in message');
           
-          // 🚫 FILTER OUT OUTPUT ARTIFACTS - these should NOT be processed
-          // Output paths include: audio/processed/*, hls/*, thumbnails/*
+          // Filter out output artifacts
           if (
             s3Key.startsWith('audio/processed/') ||
             s3Key.startsWith('hls/') ||
@@ -1219,16 +1268,13 @@ async function startWorker() {
             continue;
           }
           
-          // Detect content type from S3 path
           contentType = detectContentType(s3Key);
           
-          // Parse path: folder/{userId}/{fileId}_*.ext
           const parts = s3Key.split('/');
           if (parts.length < 3) throw new Error('Invalid S3 key format');
           
           userId = parts[1];
           const fileName = parts[2];
-          // Handle both formats: {contentId}_{filename}.ext and {contentId}.ext
           const baseName = fileName.replace(path.extname(fileName), '');
           contentId = baseName.includes('_') ? baseName.split('_')[0] : baseName;
           
@@ -1249,7 +1295,6 @@ async function startWorker() {
         await protectInstance(true);
 
         try {
-          // Route to appropriate processor based on content type
           switch (contentType) {
             case 'video':
               await processVideo(contentId, userId, s3Key, currentReceiptHandle);
@@ -1276,15 +1321,29 @@ async function startWorker() {
         } catch (err) {
           console.error(`❌ Job ${contentId} FAILED:`, err.message);
           stats.failed++;
-          try {
-            await sqsClient.send(new ChangeMessageVisibilityCommand({
+          
+          const receiveCount = parseInt(message.Attributes?.ApproximateReceiveCount || '1');
+          console.log(`📊 Receive count: ${receiveCount}/3`);
+          
+          if (receiveCount >= 3) {
+            console.log('⚠️  Max retries exceeded - message will go to DLQ');
+            await sqsClient.send(new DeleteMessageCommand({
               QueueUrl: process.env.QUEUE_URL,
               ReceiptHandle: currentReceiptHandle,
-              VisibilityTimeout: 0
             }));
-            console.log('🔄 Message released (visibility=0)');
-          } catch (releaseErr) {
-            console.warn('⚠️ Release failed:', releaseErr.message);
+          } else {
+            const backoff = Math.min(60 * Math.pow(2, receiveCount - 1), 300);
+            console.log(`🔄 Retry in ${backoff}s (attempt ${receiveCount}/3)`);
+            
+            try {
+              await sqsClient.send(new ChangeMessageVisibilityCommand({
+                QueueUrl: process.env.QUEUE_URL,
+                ReceiptHandle: currentReceiptHandle,
+                VisibilityTimeout: backoff
+              }));
+            } catch (releaseErr) {
+              console.warn('⚠️  Visibility change failed:', releaseErr.message);
+            }
           }
         } finally {
           currentReceiptHandle = null;
@@ -1322,7 +1381,7 @@ async function gracefulShutdown(signal) {
       }));
       console.log('✅ Message released');
     } catch (e) {
-      console.warn('⚠️ Release failed:', e.message);
+      console.warn('⚠️  Release failed:', e.message);
     }
   }
   
@@ -1353,7 +1412,7 @@ chown -R ec2-user:ec2-user $APP_DIR
 
 cat > /etc/systemd/system/cinishine-worker.service << EOF
 [Unit]
-Description=CiniShine Media Processing Worker v4.0
+Description=CiniShine Media Processing Worker v4.1 (Unified Content Model)
 After=network-online.target
 Wants=network-online.target
 
@@ -1392,7 +1451,18 @@ fi
 
 echo ""
 echo "=== Setup completed at $(date) ==="
-echo "✅ CiniShine Media Processing Worker v4.0"
+echo "✅ CiniShine Media Processing Worker v4.1 - UNIFIED CONTENT MODEL"
+echo ""
+echo "🔄 KEY CHANGES FROM v4.0:"
+echo " ❌ Removed separate Video model"
+echo " ✅ Uses unified Content model for ALL content types"
+echo " ✅ Videos: Content.find({ contentType: 'video' })"
+echo " ✅ Shorts: Content.find({ contentType: 'short' })"
+echo " ✅ Audio: Content.find({ contentType: 'audio' })"
+echo " ✅ Full backward compatibility with existing data"
+echo " ✅ Reduced visibility timeout to 600s (10 min)"
+echo " ✅ Added exponential backoff retry logic"
+echo " ✅ Better error logging and debugging"
 echo ""
 echo "Supported content types:"
 echo " - uploads/  → Long-form videos → Full HLS renditions (144p-1080p)"
@@ -1413,6 +1483,7 @@ echo " - thumbnails/videos/{userId}/      → Video thumbnails"
 echo " - thumbnails/shorts/{userId}/      → Short thumbnails"
 echo ""
 echo "Useful commands:"
-echo "  sudo journalctl -u cinishine-worker -f"
-echo "  sudo systemctl restart cinishine-worker"
+echo "  sudo journalctl -u cinishine-worker -f          # Watch logs"
+echo "  sudo systemctl restart cinishine-worker         # Restart worker"
+echo "  sudo systemctl status cinishine-worker          # Check status"
 echo ""
