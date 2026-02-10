@@ -1,4 +1,4 @@
-import Video from "../../models/video.model.js";
+import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import mongoose from 'mongoose';
 
@@ -12,7 +12,7 @@ const updateViewsAsync = async (videoId, userId, ipAddress, userAgent) => {
             throw new Error("Invalid video ID format");
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) {
             throw new Error("Video not found");
         }
@@ -54,7 +54,7 @@ const updateViews = async (videoId, userId, ipAddress, userAgent) => {
             throw new Error("Invalid video ID format");
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) {
             throw new Error("Video not found");
         }

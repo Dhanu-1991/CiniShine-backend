@@ -2,8 +2,8 @@
 
 import mongoose from 'mongoose';
 import WatchHistory from '../models/watchHistory.model.js';
-import Video from '../models/video.model.js';
 import Content from '../models/content.model.js';
+import Comment from '../models/comment.model.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -172,14 +172,12 @@ export class WatchHistoryRecommendationEngine {
 
     /**
      * Score a content item against user profile
+     * Watched content is DEPRIORITIZED (not excluded) so small content pools
+     * still return enough results for infinite scroll.
      */
     scoreContent(content, userProfile, watchedIds) {
-        // Skip already watched
-        if (watchedIds.has(content._id.toString())) {
-            return -1;
-        }
-
         let score = 0;
+        const isWatched = watchedIds.has(content._id.toString());
 
         // Tag matching
         const contentTags = content.tags || [];
@@ -212,6 +210,12 @@ export class WatchHistoryRecommendationEngine {
         // Random factor for diversity
         score += Math.random() * 0.05;
 
+        // Deprioritize (not exclude) already-watched content
+        // They appear after unwatched content but still fill the feed
+        if (isWatched) {
+            score *= 0.3; // 70% penalty — pushes to end but keeps them available
+        }
+
         return score;
     }
 
@@ -224,42 +228,36 @@ export class WatchHistoryRecommendationEngine {
         // Build user profile
         const userProfile = await this.buildUserProfile(userId);
 
-        // Get watched content IDs
+        // Get watched content IDs (for deprioritization, not exclusion)
         const watchedHistory = await WatchHistory.find({ userId, contentType })
             .select('contentId')
             .lean();
-        const watchedIds = new Set([
-            ...watchedHistory.map(h => h.contentId.toString()),
-            ...excludeIds.map(id => id.toString())
-        ]);
+        const watchedIds = new Set(
+            watchedHistory.map(h => h.contentId.toString())
+        );
+        // excludeIds are truly excluded (already loaded in frontend)
+        const excludeIdSet = new Set(excludeIds.map(id => id.toString()));
 
         let candidates = [];
 
-        if (contentType === 'video') {
-            candidates = await Video.find({
-                status: 'completed',
-                _id: { $nin: Array.from(watchedIds) }
-            })
-                .populate('userId', 'userName channelName channelPicture')
-                .lean();
-        } else {
-            candidates = await Content.find({
-                contentType,
-                status: 'completed',
-                visibility: 'public',
-                _id: { $nin: Array.from(watchedIds) }
-            })
-                .populate('userId', 'userName channelName channelPicture')
-                .lean();
-        }
+        // All content types now use the unified Content model
+        // Only exclude the IDs the frontend already has (not watched ones)
+        candidates = await Content.find({
+            contentType,
+            status: 'completed',
+            ...(contentType !== 'video' && { visibility: 'public' }),
+            _id: { $nin: Array.from(excludeIdSet) }
+        })
+            .populate('userId', 'userName channelName channelPicture')
+            .lean();
 
-        // Score and sort
+        // Score and sort — watched content is deprioritized, not removed
         let scoredContent;
         if (userProfile) {
             scoredContent = candidates.map(content => ({
                 ...content,
                 recommendationScore: this.scoreContent(content, userProfile, watchedIds)
-            })).filter(c => c.recommendationScore >= 0);
+            }));
 
             scoredContent.sort((a, b) => b.recommendationScore - a.recommendationScore);
         } else {
@@ -275,30 +273,55 @@ export class WatchHistoryRecommendationEngine {
         const startIdx = (page - 1) * limit;
         const paginatedContent = scoredContent.slice(startIdx, startIdx + limit);
 
-        // Generate URLs
+        // Generate URLs and get comment counts
         const contentWithUrls = await Promise.all(
-            paginatedContent.map(async (content) => ({
-                _id: content._id,
-                contentType: contentType,
-                title: content.title,
-                description: content.description,
-                duration: content.duration,
-                thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
-                imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
-                views: content.views,
-                likeCount: content.likeCount || content.likes?.length || 0,
-                createdAt: content.createdAt,
-                channelName: content.channelName || content.userId?.channelName || content.userId?.userName || 'Unknown',
-                channelPicture: content.userId?.channelPicture || null,
-                status: content.status,
-                // Audio specific
-                artist: content.artist,
-                album: content.album,
-                audioCategory: content.audioCategory,
-                // Post specific
-                postContent: content.postContent,
-                recommendationScore: content.recommendationScore
-            }))
+            paginatedContent.map(async (content) => {
+                // Get comment count for this content
+                const commentCount = await Comment.countDocuments({
+                    videoId: content._id,
+                    onModel: 'Content',
+                    parentCommentId: null
+                });
+
+                // Generate video/audio URL for shorts and audio
+                let videoUrl = null;
+                let audioUrl = null;
+                if (contentType === 'short') {
+                    const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+                    videoUrl = await generateSignedUrl(videoKey);
+                } else if (contentType === 'audio') {
+                    const audioKey = content.processedKey || content.originalKey;
+                    audioUrl = await generateSignedUrl(audioKey);
+                }
+
+                return {
+                    _id: content._id,
+                    contentType: contentType,
+                    title: content.title,
+                    description: content.description,
+                    duration: content.duration,
+                    thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
+                    imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                    videoUrl, // For shorts
+                    audioUrl, // For audio
+                    views: content.views,
+                    likeCount: content.likeCount || content.likes?.length || 0,
+                    commentCount, // ✅ ADD: Comment count
+                    createdAt: content.createdAt,
+                    channelName: content.channelName || content.userId?.channelName || content.userId?.userName || 'Unknown',
+                    channelPicture: content.userId?.channelPicture || null,
+                    userId: content.userId?._id || content.userId,
+                    status: content.status,
+                    tags: content.tags,
+                    // Audio specific
+                    artist: content.artist,
+                    album: content.album,
+                    audioCategory: content.audioCategory,
+                    // Post specific
+                    postContent: content.postContent,
+                    recommendationScore: content.recommendationScore
+                };
+            })
         );
 
         return {
@@ -336,18 +359,26 @@ export class WatchHistoryRecommendationEngine {
     }
 
     /**
-     * Get mixed feed with all content types (shorts first, then videos, audio, posts)
+     * Get mixed feed with all content types — YouTube-like algorithm
+     * Shorts are prioritized heavily on first page (like YouTube Shorts shelf).
+     * Subsequent pages focus on long-form video with occasional shorts injected.
      */
     async getMixedFeed(userId, options = {}) {
-        const { page = 1, limit = 20, shortsLimit = 10, audioLimit = 6, postsLimit = 4 } = options;
+        const { page = 1, limit = 20 } = options;
         const isFirstPage = page === 1;
+
+        // YouTube-like distribution: shorts dominate first page
+        const shortsLimit = isFirstPage ? 15 : 4;
+        const videoLimit = isFirstPage ? limit : limit;
+        const audioLimit = isFirstPage ? 8 : 3;
+        const postsLimit = isFirstPage ? 6 : 2;
 
         // Fetch content for each type in parallel
         const [shorts, videos, audio, posts] = await Promise.all([
-            isFirstPage ? this.getRecommendations(userId, 'short', { page: 1, limit: shortsLimit }) : { content: [] },
-            this.getRecommendations(userId, 'video', { page, limit }),
-            isFirstPage ? this.getRecommendations(userId, 'audio', { page: 1, limit: audioLimit }) : { content: [] },
-            isFirstPage ? this.getRecommendations(userId, 'post', { page: 1, limit: postsLimit }) : { content: [] }
+            this.getRecommendations(userId, 'short', { page: 1, limit: shortsLimit }),
+            this.getRecommendations(userId, 'video', { page, limit: videoLimit }),
+            this.getRecommendations(userId, 'audio', { page: 1, limit: audioLimit }),
+            this.getRecommendations(userId, 'post', { page: 1, limit: postsLimit })
         ]);
 
         return {

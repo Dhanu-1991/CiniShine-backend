@@ -1,4 +1,4 @@
-import Video from "../../models/video.model.js";
+import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
 
@@ -15,7 +15,7 @@ export const likeVideo = async (req, res) => {
             return res.status(401).json({ message: "Authentication required" });
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) {
             return res.status(404).json({ message: "Video not found" });
         }
@@ -87,7 +87,7 @@ export const dislikeVideo = async (req, res) => {
             return res.status(401).json({ message: "Authentication required" });
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) {
             return res.status(404).json({ message: "Video not found" });
         }
@@ -216,7 +216,7 @@ export const updateWatchTime = async (req, res) => {
             return res.status(400).json({ message: "Invalid watch time" });
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) {
             console.log('❌ Video not found:', videoId);
             return res.status(404).json({ message: "Video not found" });

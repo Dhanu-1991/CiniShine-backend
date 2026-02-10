@@ -2,14 +2,14 @@ import mongoose from 'mongoose';
 
 /**
  * Unified Content Model
- * Handles: shorts, audio, posts
- * Videos use the existing video.model.js
+ * Handles ALL content types: video, short, audio, post
+ * Single model replaces the old separate Video + Content models
  */
 const ContentSchema = new mongoose.Schema({
     // Content type discriminator
     contentType: {
         type: String,
-        enum: ['short', 'audio', 'post'],
+        enum: ['video', 'short', 'audio', 'post'],
         required: true,
         index: true
     },
@@ -25,7 +25,6 @@ const ContentSchema = new mongoose.Schema({
     // Basic metadata
     title: {
         type: String,
-        required: true,
         trim: true,
         maxlength: 200
     },
@@ -66,25 +65,33 @@ const ContentSchema = new mongoose.Schema({
         trim: true
     }],
 
-    // Media files (S3 keys)
-    originalKey: String,        // Original file key in S3
-    hlsMasterKey: String,       // For shorts: HLS master playlist
-    thumbnailKey: String,       // Thumbnail/cover art
-    thumbnailSource: {          // Track if thumbnail is auto-generated or custom
+    // ============================================
+    // MEDIA FILES (S3 keys)
+    // ============================================
+    originalKey: String,
+    hlsMasterKey: String,
+    thumbnailKey: String,
+    thumbnailSource: {
         type: String,
         enum: ['auto', 'custom'],
         default: 'auto'
     },
-    imageKey: String,           // For posts: single attached image (legacy)
-    imageKeys: [{               // For posts: multiple attached images (up to 5)
+    imageKey: String,
+    imageKeys: [{
         type: String,
         trim: true
     }],
 
-    // Media metadata
-    duration: Number,           // In seconds (for shorts/audio)
-    fileSize: Number,           // In bytes
+    // ============================================
+    // MEDIA METADATA
+    // ============================================
+    duration: Number,
+    fileSize: Number,
     mimeType: String,
+    sizes: {
+        original: Number,
+        processed: Number,
+    },
 
     // Processing status
     status: {
@@ -96,7 +103,7 @@ const ContentSchema = new mongoose.Schema({
     processingEnd: Date,
     processingError: String,
 
-    // Renditions (for shorts that need transcoding)
+    // Renditions (for video/shorts transcoding)
     renditions: [{
         resolution: String,
         bitrate: Number,
@@ -104,7 +111,9 @@ const ContentSchema = new mongoose.Schema({
         codecs: String
     }],
 
-    // Engagement metrics
+    // ============================================
+    // ENGAGEMENT METRICS
+    // ============================================
     views: {
         type: Number,
         default: 0
@@ -122,7 +131,26 @@ const ContentSchema = new mongoose.Schema({
         default: 0
     },
 
-    // Audio-specific fields
+    // ============================================
+    // VIDEO/SHORTS ANALYTICS
+    // ============================================
+    lastViewedAt: Date,
+    averageWatchTime: {
+        type: Number,
+        default: 0
+    },
+    watchCount: {
+        type: Number,
+        default: 0
+    },
+    totalWatchTime: {
+        type: Number,
+        default: 0
+    },
+
+    // ============================================
+    // AUDIO-SPECIFIC FIELDS
+    // ============================================
     audioCategory: {
         type: String,
         enum: ['music', 'podcast', 'audiobook', 'sound-effect', 'other'],
@@ -131,10 +159,14 @@ const ContentSchema = new mongoose.Schema({
     artist: String,
     album: String,
 
-    // Post-specific fields
-    postContent: String,        // Text content for posts
+    // ============================================
+    // POST-SPECIFIC FIELDS
+    // ============================================
+    postContent: String,
 
-    // Timestamps
+    // ============================================
+    // TIMESTAMPS
+    // ============================================
     createdAt: {
         type: Date,
         default: Date.now
@@ -146,11 +178,15 @@ const ContentSchema = new mongoose.Schema({
     publishedAt: Date
 });
 
-// Indexes for efficient queries
+// ============================================
+// INDEXES
+// ============================================
 ContentSchema.index({ contentType: 1, status: 1, createdAt: -1 });
 ContentSchema.index({ userId: 1, contentType: 1 });
 ContentSchema.index({ tags: 1 });
 ContentSchema.index({ visibility: 1, status: 1 });
+ContentSchema.index({ contentType: 1, status: 1, views: -1 });
+ContentSchema.index({ contentType: 1, visibility: 1, createdAt: -1 });
 
 // Update timestamp on save
 ContentSchema.pre('save', function (next) {

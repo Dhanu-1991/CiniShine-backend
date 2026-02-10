@@ -1,4 +1,4 @@
-import Video from "../../models/video.model.js";
+import Content from "../../models/content.model.js";
 import SearchHistory from "../../models/searchHistory.model.js";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
@@ -189,7 +189,7 @@ export const searchVideos = async (req, res) => {
         };
 
         // Get matching videos with user info (limited initial fetch for performance)
-        const allVideos = await Video.find(matchQuery)
+        const allVideos = await Content.find({ ...matchQuery, contentType: 'video' })
             .populate('userId', 'userName channelName channelPicture')
             .sort({ views: -1, createdAt: -1 })
             .limit(200) // Limit to top 200 for scoring (performance optimization)

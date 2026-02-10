@@ -1,5 +1,5 @@
 import User from "../../models/user.model.js";
-import Video from "../../models/video.model.js";
+// import Video from "../../models/video.model.js";
 
 export const updateChannel = async (req, res) => {
     try {
@@ -30,7 +30,7 @@ export const updateChannel = async (req, res) => {
         user.channelDescription = channelDescription ? channelDescription.trim() : "";
         await user.save();
         //UPDATE CHANNEL NAME IN VIDEOS AS WELL
-        await Video.updateMany({ userId: userId }, { channelName: channelName.trim() });
+        // await Video.updateMany({ userId: userId }, { channelName: channelName.trim() });
 
         console.log("Channel updated for user:", userId, { channelName: user.channelName });
 

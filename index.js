@@ -4,7 +4,6 @@ import cors from "cors";
 import mongoose from "mongoose";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
-
 dotenv.config();
 
 import authRouter from "./routes/authRoutes/authRouter.js";
@@ -13,8 +12,8 @@ import router from "./routes/paymentRoutes/cashfree.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
 import contactRouter from "./routes/contactRoutes/contactRouter.js";
 import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
-import videoRouter from "./routes/videoRoutes/videoRouter.js";
-import contentRouter from "./routes/contentRoutes/contentRouter.js"; // New content routes
+import videoRouter from "./routes/contentRoutes/videoRouter.js"; // Moved to contentRoutes
+import contentRouter from "./routes/contentRoutes/contentRouter.js"; // Shorts, Audio, Posts
 import channelPicRouter from "./routes/pictureRoutes/channelPicRouter.js";
 import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
 

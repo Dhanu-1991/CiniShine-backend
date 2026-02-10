@@ -1,26 +1,20 @@
 import Comment from "../../models/comment.model.js";
-import Video from "../../models/video.model.js";
 import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import mongoose from "mongoose";
 
 /**
- * Helper function to find video or content by ID
- * Returns { item, modelType } where modelType is 'Video' or 'Content'
+ * Helper function to find content by ID
+ * After migration, all content (videos, shorts, audio, posts) is in the Content model.
+ * Returns { item, modelType } where modelType is always 'Content'
  */
 async function findVideoOrContent(id) {
     if (!mongoose.Types.ObjectId.isValid(id)) {
         return { item: null, modelType: null };
     }
 
-    // Try Video first
-    let item = await Video.findById(id);
-    if (item) {
-        return { item, modelType: 'Video' };
-    }
-
-    // Try Content (shorts, audio, posts)
-    item = await Content.findById(id);
+    // All content now lives in the unified Content model
+    const item = await Content.findById(id);
     if (item) {
         return { item, modelType: 'Content' };
     }
@@ -350,19 +344,30 @@ export const deleteComment = async (req, res) => {
         const { commentId } = req.params;
         const userId = req.user?.id;
 
+        console.log(`🗑️ [Comment] Delete request - commentId: ${commentId}, userId: ${userId}`);
+
         if (!userId) {
             return res.status(401).json({ message: "Authentication required" });
         }
 
+        if (!mongoose.Types.ObjectId.isValid(commentId)) {
+            return res.status(400).json({ message: "Invalid comment ID" });
+        }
+
         const comment = await Comment.findById(commentId);
         if (!comment) {
+            console.log(`❌ [Comment] Comment not found: ${commentId}`);
             return res.status(404).json({ message: "Comment not found" });
         }
 
-        // Get video to check if user is owner
-        const video = await Video.findById(comment.videoId);
+        console.log(`✅ [Comment] Found comment - videoId: ${comment.videoId}, onModel: ${comment.onModel}, author: ${comment.userId}`);
+
+        // Get video/content to check if user is owner
+        const { item: video } = await findVideoOrContent(comment.videoId);
         const isAuthor = comment.userId.toString() === userId;
-        const isVideoOwner = video?.userId.toString() === userId;
+        const isVideoOwner = video?.userId?.toString() === userId;
+
+        console.log(`🔍 [Comment] isAuthor: ${isAuthor}, isVideoOwner: ${isVideoOwner}, contentFound: ${!!video}`);
 
         if (!isAuthor && !isVideoOwner) {
             return res.status(403).json({ message: "You cannot delete this comment" });
@@ -373,24 +378,24 @@ export const deleteComment = async (req, res) => {
             await Comment.findByIdAndUpdate(
                 comment.parentCommentId,
                 {
-                    $pull: { replies: commentId },
+                    $pull: { replies: new mongoose.Types.ObjectId(commentId) },
                     $inc: { replyCount: -1 }
                 }
             );
         } else {
             // If it's a top-level comment, delete all its replies
-            // Note: commentCount is no longer stored - it's calculated from actual comments
             await Comment.deleteMany({
-                parentCommentId: commentId
+                parentCommentId: new mongoose.Types.ObjectId(commentId)
             });
         }
 
         await Comment.findByIdAndDelete(commentId);
+        console.log(`✅ [Comment] Comment deleted: ${commentId}`);
 
         res.json({ message: "Comment deleted successfully" });
     } catch (error) {
-        console.error("Error deleting comment:", error);
-        res.status(500).json({ message: "Internal server error" });
+        console.error("❌ [Comment] Error deleting comment:", error.message, error.stack);
+        res.status(500).json({ message: "Internal server error", detail: error.message });
     }
 };
 

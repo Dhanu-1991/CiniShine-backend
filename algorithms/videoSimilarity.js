@@ -4,7 +4,7 @@
  * Video similarity and recommendation algorithms
  */
 
-import Video from '../models/video.model.js';
+import Content from '../models/content.model.js';
 
 /**
  * Find similar videos based on content analysis
@@ -20,7 +20,8 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
 
         // Find all completed videos except current one
         // ✅ FIX: Populate all needed user fields
-        const allVideos = await Video.find({
+        const allVideos = await Content.find({
+            contentType: 'video',
             status: 'completed',
             _id: { $ne: currentVideo._id }
         }).populate('userId', 'userName channelName channelPicture roles');

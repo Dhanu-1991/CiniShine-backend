@@ -582,52 +582,7 @@ export const getContent = async (req, res) => {
 /**
  * Get user's content (shorts, audio, posts)
  */
-export const getUserContent = async (req, res) => {
-    try {
-        const userId = req.user?.id;
-        const { type } = req.query; // Filter by content type
 
-        if (!userId) {
-            return res.status(401).json({ error: 'User not authenticated' });
-        }
-
-        const query = { userId };
-        if (type && ['short', 'audio', 'post'].includes(type)) {
-            query.contentType = type;
-        }
-
-        const contents = await Content.find(query)
-            .sort({ createdAt: -1 })
-            .select('contentType title description duration status thumbnailKey imageKey createdAt views likeCount');
-
-        // Generate signed URLs for thumbnails/images
-        const contentsWithUrls = await Promise.all(
-            contents.map(async (content) => {
-                const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
-                const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
-
-                return {
-                    _id: content._id,
-                    contentType: content.contentType,
-                    title: content.title,
-                    description: content.description,
-                    duration: content.duration,
-                    status: content.status,
-                    thumbnailUrl,
-                    imageUrl,
-                    createdAt: content.createdAt,
-                    views: content.views,
-                    likeCount: content.likeCount
-                };
-            })
-        );
-
-        res.json(contentsWithUrls);
-    } catch (error) {
-        console.error('❌ Error fetching user content:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-};
 
 /**
  * Get feed content (shorts, posts from subscriptions or trending)
@@ -664,7 +619,8 @@ export const getFeedContent = async (req, res) => {
 
                 // ✅ ADD: Get comment count
                 const commentCount = await Comment.countDocuments({
-                    contentId: content._id,
+                    videoId: content._id,
+                    onModel: 'Content',
                     parentCommentId: { $exists: false }
                 });
 
@@ -710,268 +666,17 @@ export const getFeedContent = async (req, res) => {
  * Track watch time for shorts and audio
  * Updates WatchHistory for recommendation algorithm
  */
-export const updateContentWatchTime = async (req, res) => {
-    try {
-        const { id: contentId } = req.params;
-        const { watchTime, totalDuration, sessionId } = req.body;
-        const userId = req.user?.id;
 
-        console.log(`⏱️ [WatchTime] Tracking - contentId: ${contentId}, userId: ${userId}, watchTime: ${watchTime}s, session: ${sessionId}`);
-
-        if (!mongoose.Types.ObjectId.isValid(contentId)) {
-            console.log(`❌ [WatchTime] Invalid content ID: ${contentId}`);
-            return res.status(400).json({ error: 'Invalid content ID' });
-        }
-
-        const content = await Content.findById(contentId);
-        if (!content) {
-            console.log(`❌ [WatchTime] Content not found: ${contentId}`);
-            return res.status(404).json({ error: 'Content not found' });
-        }
-
-        const watchPercentage = totalDuration > 0
-            ? Math.min((watchTime / totalDuration) * 100, 100)
-            : 0;
-        const completedWatch = watchPercentage >= 90;
-
-        console.log(`📊 [WatchTime] Stats - type: ${content.contentType}, percentage: ${watchPercentage.toFixed(1)}%, completed: ${completedWatch}`);
-
-        // Update or create watch history for authenticated users
-        if (userId) {
-            const existingHistory = await WatchHistory.findOne({
-                userId,
-                contentId,
-                contentType: content.contentType
-            });
-
-            if (existingHistory) {
-                // Update existing history
-                existingHistory.watchTime = Math.max(existingHistory.watchTime, watchTime);
-                existingHistory.watchPercentage = Math.max(existingHistory.watchPercentage, watchPercentage);
-                existingHistory.watchCount += 1;
-                existingHistory.lastWatchedAt = new Date();
-
-                if (completedWatch && !existingHistory.completedWatch) {
-                    existingHistory.completedWatch = true;
-                }
-
-                // Add new session
-                existingHistory.sessions.push({
-                    sessionId,
-                    watchTime,
-                    watchPercentage,
-                    startedAt: new Date(Date.now() - watchTime * 1000),
-                    endedAt: new Date()
-                });
-
-                // Keep only last 10 sessions
-                if (existingHistory.sessions.length > 10) {
-                    existingHistory.sessions = existingHistory.sessions.slice(-10);
-                }
-
-                await existingHistory.save();
-                console.log(`✅ [WatchTime] Updated existing history - watchCount: ${existingHistory.watchCount}`);
-            } else {
-                // Create new history record
-                await WatchHistory.create({
-                    userId,
-                    contentId,
-                    contentType: content.contentType,
-                    watchTime,
-                    watchPercentage,
-                    completedWatch,
-                    contentMetadata: {
-                        title: content.title,
-                        tags: content.tags,
-                        category: content.category,
-                        creatorId: content.userId,
-                        thumbnailKey: content.thumbnailKey
-                    },
-                    sessions: [{
-                        sessionId,
-                        watchTime,
-                        watchPercentage,
-                        startedAt: new Date(Date.now() - watchTime * 1000),
-                        endedAt: new Date()
-                    }]
-                });
-                console.log(`✅ [WatchTime] Created new history record for user: ${userId}`);
-            }
-        }
-
-        // Update content view count if watched for at least X seconds
-        // Shorts: 3 seconds, Posts: 5 seconds, Audio: 5 seconds
-        const viewThreshold = content.contentType === 'short' ? 3 : 5;
-
-        if (watchTime >= viewThreshold) {
-            // Increment view count
-            const updatedContent = await Content.findByIdAndUpdate(
-                contentId,
-                { $inc: { views: 1 } },
-                { new: true }
-            );
-            console.log(`👁️ [WatchTime] View counted for ${content.contentType}: ${contentId} - total views: ${updatedContent.views}`);
-        }
-
-        res.json({
-            success: true,
-            watchPercentage,
-            completedWatch,
-            message: 'Watch time updated'
-        });
-    } catch (error) {
-        console.error('❌ Error updating watch time:', error);
-        res.status(500).json({ error: 'Failed to update watch time' });
-    }
-};
 
 /**
  * Update engagement signals (like, dislike, comment, share)
  * Also updates likeCount/dislikeCount on the Content model
  */
-export const updateContentEngagement = async (req, res) => {
-    try {
-        const { id: contentId } = req.params;
-        const { action, value } = req.body; // action: 'like', 'dislike', 'comment', 'share'
-        const userId = req.user?.id;
 
-        console.log(`📊 [Engagement] Action: ${action}, Value: ${value}, ContentId: ${contentId}, UserId: ${userId}`);
-
-        if (!userId) {
-            console.log(`❌ [Engagement] No userId - authentication required`);
-            return res.status(401).json({ error: 'Authentication required' });
-        }
-
-        if (!mongoose.Types.ObjectId.isValid(contentId)) {
-            console.log(`❌ [Engagement] Invalid content ID: ${contentId}`);
-            return res.status(400).json({ error: 'Invalid content ID' });
-        }
-
-        const content = await Content.findById(contentId);
-        if (!content) {
-            console.log(`❌ [Engagement] Content not found: ${contentId}`);
-            return res.status(404).json({ error: 'Content not found' });
-        }
-
-        // Get existing engagement from WatchHistory
-        const existingHistory = await WatchHistory.findOne({ userId, contentId, contentType: content.contentType });
-        const wasLiked = existingHistory?.liked || false;
-        const wasDisliked = existingHistory?.disliked || false;
-
-        // Update watch history with engagement
-        const updateField = {};
-        if (action === 'like') updateField.liked = value;
-        if (action === 'dislike') updateField.disliked = value;
-        if (action === 'comment') updateField.commented = true;
-        if (action === 'share') updateField.shared = true;
-
-        await WatchHistory.findOneAndUpdate(
-            { userId, contentId, contentType: content.contentType },
-            { $set: updateField },
-            { upsert: true }
-        );
-
-        // Update like/dislike count on Content model
-        const contentUpdate = {};
-        if (action === 'like') {
-            if (value && !wasLiked) {
-                contentUpdate.$inc = { likeCount: 1 };
-                // If was disliked, also remove dislike
-                if (wasDisliked) {
-                    contentUpdate.$inc.dislikeCount = -1;
-                    await WatchHistory.findOneAndUpdate(
-                        { userId, contentId },
-                        { $set: { disliked: false } }
-                    );
-                }
-            } else if (!value && wasLiked) {
-                contentUpdate.$inc = { likeCount: -1 };
-            }
-        }
-        if (action === 'dislike') {
-            if (value && !wasDisliked) {
-                contentUpdate.$inc = { dislikeCount: 1 };
-                // If was liked, also remove like
-                if (wasLiked) {
-                    contentUpdate.$inc.likeCount = -1;
-                    await WatchHistory.findOneAndUpdate(
-                        { userId, contentId },
-                        { $set: { liked: false } }
-                    );
-                }
-            } else if (!value && wasDisliked) {
-                contentUpdate.$inc = { dislikeCount: -1 };
-            }
-        }
-        if (action === 'comment') {
-            // Comment count is updated in commentController
-        }
-
-        if (contentUpdate.$inc) {
-            await Content.findByIdAndUpdate(contentId, contentUpdate);
-            console.log(`✅ [Engagement] Updated content counts:`, contentUpdate.$inc);
-        }
-
-        console.log(`✅ [Engagement] ${action} updated for content: ${contentId}`);
-        res.json({ success: true, message: `${action} updated` });
-    } catch (error) {
-        console.error('❌ [Engagement] Error updating engagement:', error);
-        res.status(500).json({ error: 'Failed to update engagement' });
-    }
-};
 
 /**
  * Get engagement status for a content item (isLiked, isDisliked, isSubscribed)
- */
-export const getContentEngagementStatus = async (req, res) => {
-    try {
-        const { id: contentId } = req.params;
-        const userId = req.user?.id;
-
-        console.log(`📊 [EngagementStatus] Fetching for ContentId: ${contentId}, UserId: ${userId}`);
-
-        if (!mongoose.Types.ObjectId.isValid(contentId)) {
-            return res.status(400).json({ error: 'Invalid content ID' });
-        }
-
-        const content = await Content.findById(contentId).populate('userId', '_id');
-        if (!content) {
-            return res.status(404).json({ error: 'Content not found' });
-        }
-
-        // Check like/dislike status from WatchHistory
-        const history = await WatchHistory.findOne({ userId, contentId });
-        const isLiked = history?.liked || false;
-        const isDisliked = history?.disliked || false;
-
-        // Check subscription status
-        let isSubscribed = false;
-        if (userId) {
-            const user = await User.findById(userId).select('subscriptions');
-            const channelUserId = content.userId?._id || content.userId;
-            isSubscribed = user?.subscriptions?.includes(channelUserId.toString()) || false;
-        }
-
-        // ✅ ADD: Get comment count
-        const Comment = (await import('../../models/comment.model.js')).default;
-        const commentCount = await Comment.countDocuments({
-            contentId: content._id,
-            parentCommentId: { $exists: false } // Only count top-level comments
-        });
-
-        console.log(`✅ [EngagementStatus] Result:`, { isLiked, isDisliked, isSubscribed, commentCount });
-
-        res.json({
-            isLiked,
-            isDisliked,
-            isSubscribed,
-            commentCount
-        });
-    } catch (error) {
-        console.error('❌ [EngagementStatus] Error:', error);
-        res.status(500).json({ error: 'Failed to get engagement status' });
-    }
-};
+    */
 
 // ============================================
 // SHORTS PLAYER FEED
@@ -1011,7 +716,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                 // ✅ ADD: Get comment count for starting short
                 const Comment = (await import('../../models/comment.model.js')).default;
                 const commentCount = await Comment.countDocuments({
-                    contentId: content._id,
+                    videoId: content._id,
+                    onModel: 'Content',
                     parentCommentId: { $exists: false }
                 });
 
@@ -1078,7 +784,8 @@ export const getShortsPlayerFeed = async (req, res) => {
 
                 // ✅ GET comment count for each short
                 const commentCount = await Comment.countDocuments({
-                    contentId: content._id,
+                    videoId: content._id,
+                    onModel: 'Content',
                     parentCommentId: { $exists: false }
                 });
 
@@ -1218,7 +925,8 @@ async function formatAudioContent(content) {
 
     // ✅ ADD: Get comment count
     const commentCount = await Comment.countDocuments({
-        contentId: content._id,
+        videoId: content._id,
+        onModel: 'Content',
         parentCommentId: { $exists: false }
     });
 
@@ -1269,7 +977,8 @@ export const getSingleContent = async (req, res) => {
         // ✅ ADD: Get comment count
         const Comment = (await import('../../models/comment.model.js')).default;
         const commentCount = await Comment.countDocuments({
-            contentId: content._id,
+            videoId: content._id,
+            onModel: 'Content',
             parentCommentId: { $exists: false }
         });
 
@@ -1339,107 +1048,6 @@ export const getSingleContent = async (req, res) => {
  * Get posts from user's subscriptions
  * Returns posts from channels the user is subscribed to
  */
-export const getSubscriptionPosts = async (req, res) => {
-    try {
-        const userId = req.user?.id;
-        const { currentPostId, page = 1, limit = 10 } = req.query;
-
-        if (!userId) {
-            return res.status(401).json({ error: 'Authentication required' });
-        }
-
-        console.log(`📮 [SubscriptionPosts] Fetching for user: ${userId}, currentPost: ${currentPostId}`);
-
-        // Get user's subscriptions
-        const user = await User.findById(userId).select('subscriptions');
-        const subscriptions = user?.subscriptions || [];
-
-        if (subscriptions.length === 0) {
-            // No subscriptions - return single post if currentPostId provided
-            if (currentPostId && mongoose.Types.ObjectId.isValid(currentPostId)) {
-                const singlePost = await Content.findOne({
-                    _id: currentPostId,
-                    contentType: 'post',
-                    status: 'completed',
-                    visibility: 'public'
-                }).populate('userId', 'userName channelName channelPicture');
-
-                if (singlePost) {
-                    const postData = await formatPostWithUrls(singlePost);
-                    return res.json({
-                        posts: [postData],
-                        currentIndex: 0,
-                        pagination: { hasNextPage: false, totalItems: 1 }
-                    });
-                }
-            }
-            return res.json({
-                posts: [],
-                currentIndex: 0,
-                pagination: { hasNextPage: false, totalItems: 0 }
-            });
-        }
-
-        // Build query for subscription posts
-        const query = {
-            userId: { $in: subscriptions },
-            contentType: 'post',
-            status: 'completed',
-            visibility: 'public'
-        };
-
-        // Get total count
-        const total = await Content.countDocuments(query);
-
-        // Get posts sorted by date
-        let posts = await Content.find(query)
-            .populate('userId', 'userName channelName channelPicture')
-            .sort({ createdAt: -1 })
-            .limit(100); // Get more to find current post index
-
-        // Find current post index if provided
-        let currentIndex = 0;
-        if (currentPostId) {
-            const idx = posts.findIndex(p => p._id.toString() === currentPostId);
-            if (idx !== -1) {
-                currentIndex = idx;
-            } else {
-                // Current post not in subscriptions - add it at the beginning
-                const currentPost = await Content.findOne({
-                    _id: currentPostId,
-                    contentType: 'post',
-                    status: 'completed',
-                    visibility: 'public'
-                }).populate('userId', 'userName channelName channelPicture');
-
-                if (currentPost) {
-                    posts = [currentPost, ...posts];
-                    currentIndex = 0;
-                }
-            }
-        }
-
-        // Format posts with URLs
-        const formattedPosts = await Promise.all(
-            posts.map(post => formatPostWithUrls(post))
-        );
-
-        console.log(`✅ [SubscriptionPosts] Found ${formattedPosts.length} posts, currentIndex: ${currentIndex}`);
-
-        res.json({
-            posts: formattedPosts,
-            currentIndex,
-            pagination: {
-                hasNextPage: posts.length < total,
-                totalItems: total
-            }
-        });
-    } catch (error) {
-        console.error('❌ Error fetching subscription posts:', error);
-        res.status(500).json({ error: 'Failed to fetch subscription posts' });
-    }
-};
-
 /**
  * Helper to format post with signed URLs
  */
@@ -1462,7 +1070,8 @@ async function formatPostWithUrls(post) {
 
     // ✅ ADD: Get comment count
     const commentCount = await Comment.countDocuments({
-        contentId: post._id,
+        videoId: post._id,
+        onModel: 'Content',
         parentCommentId: { $exists: false }
     });
 
@@ -1497,13 +1106,14 @@ async function attachCommentCounts(contents) {
     const commentCounts = await Comment.aggregate([
         {
             $match: {
-                contentId: { $in: contentIds },
+                videoId: { $in: contentIds },
+                onModel: 'Content',
                 parentCommentId: { $exists: false }
             }
         },
         {
             $group: {
-                _id: '$contentId',
+                _id: '$videoId',
                 count: { $sum: 1 }
             }
         }

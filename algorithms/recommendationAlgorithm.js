@@ -8,10 +8,20 @@
 export class RecommendationEngine {
     constructor() {
         this.weights = {
+            popularity: 0.25,
+            userSimilarity: 0.25,
+            contentSimilarity: 0.15,
+            recency: 0.1,
+            engagement: 0.15,
+            watchTime: 0.1
+        };
+        this.contentWeights = {
             popularity: 0.3,
-            userSimilarity: 0.4,
-            contentSimilarity: 0.2,
-            recency: 0.1
+            userSimilarity: 0.2,
+            contentSimilarity: 0.1,
+            recency: 0.15,
+            engagement: 0.2,
+            watchTime: 0.05
         };
     }
 
@@ -27,13 +37,14 @@ export class RecommendationEngine {
         const { limit = 10, excludeOwn = true } = options;
 
         // Filter out user's own videos if requested
-        let candidateVideos = excludeOwn
-            ? allVideos.filter(video => video.userId.toString() !== user._id.toString())
+        const userId = user?._id?.toString();
+        let candidateVideos = excludeOwn && userId
+            ? allVideos.filter(video => video.userId?.toString() !== userId)
             : allVideos;
 
         // Calculate scores for each video
         const scoredVideos = candidateVideos.map(video => ({
-            ...video.toJSON(),
+            ...(typeof video?.toJSON === 'function' ? video.toJSON() : video),
             recommendationScore: this.calculateRecommendationScore(user, video, allVideos)
         }));
 
@@ -71,6 +82,14 @@ export class RecommendationEngine {
         const recencyScore = this.calculateRecencyScore(video.createdAt);
         score += recencyScore * this.weights.recency;
 
+        // Engagement score (likes vs views)
+        const engagementScore = this.calculateEngagementScore(video);
+        score += engagementScore * this.weights.engagement;
+
+        // Watch time score (avg watch time vs duration)
+        const watchTimeScore = this.calculateWatchTimeScore(video);
+        score += watchTimeScore * this.weights.watchTime;
+
         return score;
     }
 
@@ -84,8 +103,14 @@ export class RecommendationEngine {
     calculateUserSimilarity(user, videoUserId, allVideos) {
         if (!user.roles || user.roles.length === 0) return 0.5; // Neutral score
 
+        const targetUserId = videoUserId?._id ? videoUserId._id.toString() : videoUserId?.toString();
+        if (!targetUserId) return 0.5;
+
         // Find videos by the same user
-        const userVideos = allVideos.filter(v => v.userId.toString() === videoUserId.toString());
+        const userVideos = allVideos.filter(v => {
+            const vidUserId = v.userId?._id ? v.userId._id.toString() : v.userId?.toString();
+            return vidUserId === targetUserId;
+        });
 
         if (userVideos.length === 0) return 0.5;
 
@@ -123,6 +148,30 @@ export class RecommendationEngine {
         similarity += Math.random() * 0.1;
 
         return Math.min(similarity, 1);
+    }
+
+    /**
+     * Calculate engagement score (likes vs views)
+     * @param {Object} item - Video or content
+     * @returns {number} Engagement score (0-1)
+     */
+    calculateEngagementScore(item) {
+        const likes = item.likeCount ?? (Array.isArray(item.likes) ? item.likes.length : 0);
+        const views = item.views || 0;
+        const engagement = likes / Math.max(views, 1);
+        return Math.min(engagement * 10, 1);
+    }
+
+    /**
+     * Calculate watch time score (avg watch time vs duration)
+     * @param {Object} item - Video or content
+     * @returns {number} Watch time score (0-1)
+     */
+    calculateWatchTimeScore(item) {
+        const avgWatchTime = item.averageWatchTime || 0;
+        const duration = item.duration || 0;
+        if (!avgWatchTime || !duration) return 0;
+        return Math.min(avgWatchTime / duration, 1);
     }
 
     /**
@@ -176,6 +225,68 @@ export class RecommendationEngine {
         });
 
         return similarVideos.slice(0, limit);
+    }
+
+    /**
+     * Content recommendations for shorts/audio/posts
+     * @param {Object} user - Current user object
+     * @param {Array} allContent - All available content items
+     * @param {Object} options - Additional options like limit, page
+     * @returns {Array} Recommended content sorted by score
+     */
+    async getContentRecommendations(user, allContent, options = {}) {
+        const { limit = 10, excludeOwn = true } = options;
+
+        const userId = user?._id?.toString();
+        let candidateContent = excludeOwn && userId
+            ? allContent.filter(item => item.userId?.toString() !== userId)
+            : allContent;
+
+        const scoredContent = candidateContent.map(item => ({
+            ...item,
+            recommendationScore: this.calculateContentRecommendationScore(user, item, allContent)
+        }));
+
+        scoredContent.sort((a, b) => b.recommendationScore - a.recommendationScore);
+
+        return scoredContent.slice(0, limit);
+    }
+
+    /**
+     * Calculate recommendation score for shorts/audio/posts
+     * @param {Object} user - Current user
+     * @param {Object} item - Content item
+     * @param {Array} allContent - All content for context
+     * @returns {number} Recommendation score (0-1)
+     */
+    calculateContentRecommendationScore(user, item, allContent) {
+        let score = 0;
+
+        const maxViews = Math.max(...allContent.map(c => c.views || 0));
+        const popularityScore = maxViews > 0 ? (item.views || 0) / maxViews : 0;
+        score += popularityScore * this.contentWeights.popularity;
+
+        const userSimilarityScore = this.calculateUserSimilarity(user || {}, item.userId, allContent);
+        score += userSimilarityScore * this.contentWeights.userSimilarity;
+
+        // Content similarity for shorts/audio/posts is currently tag-based if available
+        let contentSimilarityScore = 0.5;
+        if (user?.preferredTags?.length && item.tags?.length) {
+            const commonTags = item.tags.filter(tag => user.preferredTags.includes(tag));
+            contentSimilarityScore = commonTags.length / Math.max(item.tags.length, user.preferredTags.length);
+        }
+        score += contentSimilarityScore * this.contentWeights.contentSimilarity;
+
+        const recencyScore = this.calculateRecencyScore(item.createdAt);
+        score += recencyScore * this.contentWeights.recency;
+
+        const engagementScore = this.calculateEngagementScore(item);
+        score += engagementScore * this.contentWeights.engagement;
+
+        const watchTimeScore = this.calculateWatchTimeScore(item);
+        score += watchTimeScore * this.contentWeights.watchTime;
+
+        return score;
     }
 }
 

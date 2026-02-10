@@ -1,5 +1,5 @@
-// controllers/video-controllers/videoController.js
-import Video from "../../models/video.model.js";
+// controllers/content-controllers/videoController.js
+import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
 import Comment from "../../models/comment.model.js";
@@ -58,7 +58,7 @@ export const getVideo = async (req, res) => {
         const videoId = req.params.id ?? req.params.videoId;
         console.log('📹 Fetching video metadata for ID:', videoId);
 
-        const video = await Video.findById(videoId).populate('userId', 'userName channelName channelPicture');
+        const video = await Content.findById(videoId).populate('userId', 'userName channelName channelPicture');
         if (!video) {
             console.error('❌ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
@@ -102,7 +102,7 @@ export const getVideo = async (req, res) => {
             "createdAt : ", video.createdAt,
             "user : ", video.userId,
             "views : ", video.views,
-            "channelName : ", video.userId.channelName
+            "channelName : ", video.userId?.channelName
         );
 
         // Get subscriber count for the channel
@@ -176,7 +176,7 @@ export const getHLSMasterPlaylist = async (req, res) => {
             return res.status(400).json({ error: 'Invalid video ID' });
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) {
             console.error('❌ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
@@ -330,7 +330,7 @@ export const getHLSVariantPlaylist = async (req, res) => {
             return res.status(400).json({ error: 'Invalid video ID' });
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
 
@@ -462,7 +462,7 @@ export const getHLSSegment = async (req, res) => {
             return res.status(400).json({ error: 'Invalid segment file' });
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
 
@@ -557,7 +557,7 @@ export const getMyContent = async (req, res) => {
             userObjectId = userId;
         }
 
-        const videos = await Video.find({ userId: userObjectId })
+        const videos = await Content.find({ userId: userObjectId, contentType: 'video' })
             .sort({ createdAt: -1 })
             .select('title description duration status thumbnailKey renditions createdAt tags');
 
@@ -621,10 +621,10 @@ export const getContent = async (req, res) => {
         }
 
         // Get user's own videos to exclude from recommendations
-        const userVideos = await Video.find({ userId }).select('_id');
+        const userVideos = await Content.find({ userId, contentType: 'video' }).select('_id');
 
         // Get all completed videos with user info
-        const allVideos = await Video.find({ status: 'completed' })
+        const allVideos = await Content.find({ status: 'completed', contentType: 'video' })
             .populate('userId', 'roles userName channelName channelPicture')
             .sort({ createdAt: -1 }); // Get recent videos first
         console.log("allVideos found : ", allVideos.length);
@@ -702,6 +702,117 @@ export const getContent = async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 }
+export const getSpecificContent = async (req, res) => {
+    try {
+        // frontend will call: GET /api/v2/video/user/content/:creatorId?page=1&limit=10
+        const creatorId = req.params.creatorId;
+        const page = Math.max(1, parseInt(req.query.page || "1"));
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "10")));
+        const skip = (page - 1) * limit;
+
+        if (!mongoose.Types.ObjectId.isValid(creatorId)) {
+            return res.status(400).json({ error: 'Invalid creator ID' });
+        }
+
+        // Fetch creator (user) and their roles/profile info
+        const creator = await User.findById(creatorId).select('roles userName channelName channelPicture subscriptions').lean();
+        if (!creator) {
+            return res.status(404).json({ error: 'Creator not found' });
+        }
+
+        const roles = Array.isArray(creator.roles) ? creator.roles : [];
+
+        // Build query for videos by this creator
+        const baseQuery = { userId: creatorId, status: 'completed', contentType: 'video' };
+
+        // Fetch paginated videos for that creator
+        const videos = await Content.find(baseQuery)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .select('title description duration status thumbnailKey renditions createdAt tags views likeCount dislikeCount commentCount')
+            .lean();
+
+        // Attach signed thumbnail URLs and ensure commentCount is accurate (top-level only)
+        const videosWithMeta = await Promise.all(
+            videos.map(async (v) => {
+                let thumbnailUrl = null;
+                if (v.thumbnailKey) {
+                    try {
+                        thumbnailUrl = await getSignedUrl(
+                            s3Client,
+                            new GetObjectCommand({
+                                Bucket: process.env.S3_BUCKET,
+                                Key: v.thumbnailKey,
+                            }),
+                            { expiresIn: 3600 }
+                        );
+                    } catch (err) {
+                        thumbnailUrl = null;
+                    }
+                }
+
+                // If commentCount is missing or not a number, fallback to counting top-level comments
+                let commentCount = typeof v.commentCount === 'number' ? v.commentCount : undefined;
+                if (!Number.isFinite(commentCount)) {
+                    try {
+                        commentCount = await Comment.countDocuments({ videoId: v._id, parentCommentId: null });
+                    } catch (e) {
+                        commentCount = 0;
+                    }
+                }
+
+                return {
+                    _id: v._id,
+                    title: v.title,
+                    description: v.description,
+                    duration: v.duration,
+                    status: v.status,
+                    thumbnailUrl,
+                    tags: v.tags || [],
+                    createdAt: v.createdAt,
+                    renditions: v.renditions || [],
+                    views: v.views || 0,
+                    likes: (typeof v.likeCount === 'number') ? v.likeCount : 0,
+                    dislikes: (typeof v.dislikeCount === 'number') ? v.dislikeCount : 0,
+                    commentCount,
+                    adaptiveStreaming: v.status === 'completed'
+                };
+            })
+        );
+
+        // Total count for pagination
+        const totalVideos = await Content.countDocuments(baseQuery);
+        const hasNextPage = skip + limit < totalVideos;
+
+        // Build 'content' object as creator summary (frontend expects content + roles + videos)
+        const content = {
+            user: {
+                _id: creator._id,
+                userName: creator.userName,
+                channelName: creator.channelName,
+                channelPicture: creator.channelPicture || null
+            },
+            subscriberCount: Array.isArray(creator.subscriptions) ? creator.subscriptions.length : 0
+        };
+
+        return res.json({
+            roles,
+            content,
+            videos: videosWithMeta,
+            pagination: {
+                currentPage: page,
+                totalPages: Math.max(1, Math.ceil(totalVideos / limit)),
+                totalVideos,
+                hasNextPage,
+                limit
+            }
+        });
+    } catch (error) {
+        console.error('💥 Error in getSpecificContent (creator):', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+};
 
 export const getRecommendations = async (req, res) => {
     try {
@@ -712,7 +823,7 @@ export const getRecommendations = async (req, res) => {
             return res.status(400).json({ error: 'Invalid video ID' });
         }
 
-        const currentVideo = await Video.findById(videoId);
+        const currentVideo = await Content.findById(videoId);
         if (!currentVideo) {
             return res.status(404).json({ error: 'Video not found' });
         }
@@ -731,11 +842,11 @@ export const getRecommendations = async (req, res) => {
         console.error('💥 Error fetching recommendations:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
-}
+};
 
 export const getVideoStatus = async (req, res) => {
     try {
-        const video = await Video.findById(req.params.id);
+        const video = await Content.findById(req.params.id);
         if (!video) {
             return res.status(404).json({ error: 'Video not found' });
         }
@@ -782,8 +893,9 @@ export const uploadInit = async (req, res) => {
         const fileId = new mongoose.Types.ObjectId();
         const key = `uploads/${userId}/${fileId}_${fileName}`;
 
-        const video = await Video.create({
+        const video = await Content.create({
             _id: fileId,
+            contentType: 'video',
             title: title || fileName,
             description: description || '',
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
@@ -986,7 +1098,7 @@ export const uploadComplete = async (req, res) => {
             return res.status(400).json({ error: 'Invalid file ID' });
         }
 
-        await Video.findByIdAndUpdate(fileId, {
+        await Content.findByIdAndUpdate(fileId, {
             status: 'processing',
             'sizes.original': fileSize,
             processingStart: new Date()
@@ -1040,7 +1152,7 @@ export const getGeneralContent = async (req, res) => {
     try {
         console.log("🔍 Fetching latest 100 videos");
 
-        const videos = await Video.find()
+        const videos = await Content.find({ contentType: 'video' })
             .sort({ createdAt: -1 }) // newest first
             .limit(100) // max 100 videos
             .select('title description duration status thumbnailKey renditions createdAt tags');
@@ -1105,7 +1217,7 @@ export const uploadVideoThumbnail = async (req, res) => {
             return res.status(400).json({ error: 'Invalid video ID' });
         }
 
-        const video = await Video.findById(videoId);
+        const video = await Content.findById(videoId);
         if (!video) {
             return res.status(404).json({ error: 'Video not found' });
         }
@@ -1133,7 +1245,7 @@ export const uploadVideoThumbnail = async (req, res) => {
         await s3Client.send(command);
 
         // Update video with thumbnail key and mark as custom
-        await Video.findByIdAndUpdate(videoId, {
+        await Content.findByIdAndUpdate(videoId, {
             thumbnailKey,
             thumbnailSource: 'custom'
         });

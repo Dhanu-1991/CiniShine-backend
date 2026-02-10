@@ -1,13 +1,13 @@
-// controllers/video-controllers/feedController.js
+// controllers/content-controllers/feedController.js
 
 import mongoose from 'mongoose';
-import Video from '../../models/video.model.js';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
+import { recommendationEngine } from '../../algorithms/recommendationAlgorithm.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -42,31 +42,6 @@ const generateSignedUrl = async (key) => {
     }
 };
 
-/**
- * Calculate recommendation score for content
- */
-const calculateScore = (item, userPreferences = {}) => {
-    let score = 0;
-
-    // Popularity score (30%)
-    const maxViews = 10000;
-    score += Math.min((item.views || 0) / maxViews, 1) * 0.3;
-
-    // Recency score (25%)
-    const daysSinceCreation = (new Date() - new Date(item.createdAt)) / (1000 * 60 * 60 * 24);
-    score += Math.max(0, 1 - daysSinceCreation / 30) * 0.25;
-
-    // Engagement score (25%)
-    const likes = item.likeCount || item.likes || 0;
-    // Note: commentCount is no longer stored - for feed scoring, we use only likes
-    const engagement = likes / Math.max(item.views || 1, 1);
-    score += Math.min(engagement * 10, 1) * 0.25;
-
-    // Random factor for diversity (20%)
-    score += Math.random() * 0.2;
-
-    return score;
-};
 
 /**
  * Get mixed feed content (videos, shorts, audio, posts)
@@ -88,26 +63,63 @@ export const getMixedFeed = async (req, res) => {
 
         const pageNum = parseInt(page);
         const isFirstPage = pageNum === 1;
+        const maxPages = 10;
 
-        // Calculate skip for each content type based on page
-        const shortsSkip = (pageNum - 1) * parseInt(shortsLimit);
-        const audioSkip = (pageNum - 1) * parseInt(audioLimit);
-        const videosSkip = (pageNum - 1) * parseInt(videosLimit);
-        const postsSkip = (pageNum - 1) * parseInt(postsLimit);
+        if (pageNum > maxPages) {
+            return res.json({
+                shorts: [],
+                videos: [],
+                audio: [],
+                posts: [],
+                sections: [],
+                isFirstPage: false,
+                pagination: {
+                    currentPage: pageNum,
+                    hasNextPage: false,
+                    hasMoreShorts: false,
+                    hasMoreAudio: false,
+                    hasMoreVideos: false,
+                    hasMorePosts: false,
+                    totals: {
+                        shorts: 0,
+                        audio: 0,
+                        videos: 0,
+                        posts: 0
+                    }
+                }
+            });
+        }
 
-        console.log(`📥 [Feed] getMixedFeed called - userId: ${userId}, page: ${page}`);
+        // Parse limits
+        const shortsLimitNum = parseInt(shortsLimit);
+        const audioLimitNum = parseInt(audioLimit);
+        const videosLimitNum = parseInt(videosLimit);
+        const postsLimitNum = parseInt(postsLimit);
+
+        // Skip based on final content served per page for proper pagination
+        const shortsSkip = (pageNum - 1) * shortsLimitNum;
+        const audioSkip = (pageNum - 1) * audioLimitNum;
+        const videosSkip = (pageNum - 1) * videosLimitNum;
+        const postsSkip = (pageNum - 1) * postsLimitNum;
+
+        console.log(`📥 [Feed] getMixedFeed called - userId: ${userId}, page: ${pageNum}`);
+        console.log(`📥 [Feed] Skips: shorts=${shortsSkip}, audio=${audioSkip}, videos=${videosSkip}, posts=${postsSkip}`);
 
         // Get user's subscriptions for posts filtering
         let subscribedCreatorIds = [];
+        let currentUser = null;
         if (userId) {
-            const user = await User.findById(userId).select('subscriptions').lean();
-            subscribedCreatorIds = user?.subscriptions || [];
+            currentUser = await User.findById(userId)
+                .select('subscriptions roles prefferedRendition preferredTags')
+                .lean();
+            subscribedCreatorIds = currentUser?.subscriptions || [];
         }
 
         // OPTIMIZATION: Parallel fetch all content types at once
+        // Sort by engagement metrics directly in DB query for efficiency
         const fetchPromises = [];
 
-        // 1. Fetch shorts (5 per page)
+        // 1. Fetch shorts - sorted by views and recency
         fetchPromises.push(
             Content.find({
                 contentType: 'short',
@@ -115,13 +127,13 @@ export const getMixedFeed = async (req, res) => {
                 visibility: 'public'
             })
                 .populate('userId', 'userName channelName channelPicture')
-                .sort({ createdAt: -1 })
+                .sort({ views: -1, likeCount: -1, createdAt: -1 })
                 .skip(shortsSkip)
-                .limit(parseInt(shortsLimit))
+                .limit(shortsLimitNum)
                 .lean()
         );
 
-        // 2. Fetch audio (5 per page)
+        // 2. Fetch audio - sorted by views and recency
         fetchPromises.push(
             Content.find({
                 contentType: 'audio',
@@ -129,23 +141,23 @@ export const getMixedFeed = async (req, res) => {
                 visibility: 'public'
             })
                 .populate('userId', 'userName channelName channelPicture')
-                .sort({ createdAt: -1 })
+                .sort({ views: -1, likeCount: -1, createdAt: -1 })
                 .skip(audioSkip)
-                .limit(parseInt(audioLimit))
+                .limit(audioLimitNum)
                 .lean()
         );
 
-        // 3. Fetch videos (12 per page)
+        // 3. Fetch videos - sorted by views and recency
         fetchPromises.push(
-            Video.find({ status: 'completed' })
+            Content.find({ status: 'completed', contentType: 'video' })
                 .populate('userId', 'userName channelName channelPicture')
-                .sort({ createdAt: -1 })
+                .sort({ views: -1, createdAt: -1 })
                 .skip(videosSkip)
-                .limit(parseInt(videosLimit))
+                .limit(videosLimitNum)
                 .lean()
         );
 
-        // 4. Fetch posts ONLY from subscribed creators (1 per page)
+        // 4. Fetch posts ONLY from subscribed creators
         const postsQuery = {
             contentType: 'post',
             status: 'completed',
@@ -160,16 +172,16 @@ export const getMixedFeed = async (req, res) => {
         fetchPromises.push(
             Content.find(postsQuery)
                 .populate('userId', 'userName channelName channelPicture')
-                .sort({ createdAt: -1 })
+                .sort({ views: -1, likeCount: -1, createdAt: -1 })
                 .skip(postsSkip)
-                .limit(parseInt(postsLimit))
+                .limit(postsLimitNum)
                 .lean()
         );
 
         // 5. Get counts in parallel (for pagination)
         fetchPromises.push(Content.countDocuments({ contentType: 'short', status: 'completed', visibility: 'public' }));
         fetchPromises.push(Content.countDocuments({ contentType: 'audio', status: 'completed', visibility: 'public' }));
-        fetchPromises.push(Video.countDocuments({ status: 'completed' }));
+        fetchPromises.push(Content.countDocuments({ status: 'completed', contentType: 'video' }));
 
         // Count posts from subscribed creators only
         const postsCountQuery = subscribedCreatorIds.length > 0
@@ -181,9 +193,10 @@ export const getMixedFeed = async (req, res) => {
         const [shorts, audioContent, videos, posts, totalShorts, totalAudio, totalVideos, totalPosts] = await Promise.all(fetchPromises);
 
         console.log(`✅ [Feed] Fetched: ${shorts.length} shorts, ${audioContent.length} audio, ${videos.length} videos, ${posts.length} posts`);
+        console.log(`📊 [Feed] Page ${pageNum} | Skips: shorts=${shortsSkip}, audio=${audioSkip}, videos=${videosSkip}, posts=${postsSkip}`);
 
-        // OPTIMIZATION: Batch generate signed URLs with Promise.all
-        // Process all content types in parallel
+        // Process content with signed URLs
+        // Generate signed URLs for all content types in parallel
         const [processedShorts, processedAudio, processedVideos, processedPosts] = await Promise.all([
             // Process shorts
             Promise.all(shorts.map(async (content) => ({
@@ -199,8 +212,7 @@ export const getMixedFeed = async (req, res) => {
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelPicture: content.userId?.channelPicture || null,
                 userId: content.userId?._id,
-                status: content.status,
-                score: calculateScore(content)
+                status: content.status
             }))),
 
             // Process audio
@@ -221,8 +233,7 @@ export const getMixedFeed = async (req, res) => {
                 artist: content.artist,
                 album: content.album,
                 audioCategory: content.audioCategory,
-                status: content.status,
-                score: calculateScore(content)
+                status: content.status
             }))),
 
             // Process videos
@@ -239,8 +250,7 @@ export const getMixedFeed = async (req, res) => {
                 channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
                 channelPicture: video.userId?.channelPicture || null,
                 userId: video.userId?._id,
-                status: video.status,
-                score: calculateScore(video)
+                status: video.status
             }))),
 
             // Process posts
@@ -258,31 +268,104 @@ export const getMixedFeed = async (req, res) => {
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelPicture: content.userId?.channelPicture || null,
                 userId: content.userId?._id,
-                status: content.status,
-                score: calculateScore(content)
+                status: content.status
             })))
         ]);
 
-        // Sort by score for better recommendations
-        processedShorts.sort((a, b) => b.score - a.score);
-        processedAudio.sort((a, b) => b.score - a.score);
-        processedVideos.sort((a, b) => b.score - a.score);
-        processedPosts.sort((a, b) => b.score - a.score);
+        // Content is already limited by DB query, no slicing needed
+        // Split videos into 4 rows of 3 for layout: row2-3 (6) and row5-6 (6)
+        const videosBatch1 = processedVideos.slice(0, 3); // Row 2
+        const videosBatch2 = processedVideos.slice(3, 6); // Row 3
+        const videosBatch3 = processedVideos.slice(6, 9); // Row 5
+        const videosBatch4 = processedVideos.slice(9, 12); // Row 6
+
+        const sections = [];
+
+        if (isFirstPage) {
+            // Fixed order for first page:
+            // Row 1: 5 shorts
+            // Row 2-3: 6 videos (3+3)
+            // Row 4: 5 audio
+            // Row 5-6: 6 videos (3+3)
+            // Row 7: 1 post
+            if (processedShorts.length > 0) {
+                sections.push({ type: 'shorts', data: processedShorts, key: `shorts-${pageNum}` });
+            }
+            if (videosBatch1.length > 0) {
+                sections.push({ type: 'videos', data: videosBatch1, key: `videos-1-${pageNum}` });
+            }
+            if (videosBatch2.length > 0) {
+                sections.push({ type: 'videos', data: videosBatch2, key: `videos-2-${pageNum}` });
+            }
+            if (processedAudio.length > 0) {
+                sections.push({ type: 'audio', data: processedAudio, key: `audio-${pageNum}` });
+            }
+            if (videosBatch3.length > 0) {
+                sections.push({ type: 'videos', data: videosBatch3, key: `videos-3-${pageNum}` });
+            }
+            if (videosBatch4.length > 0) {
+                sections.push({ type: 'videos', data: videosBatch4, key: `videos-4-${pageNum}` });
+            }
+            if (processedPosts.length > 0) {
+                sections.push({ type: 'post-single', data: processedPosts[0], key: `post-${pageNum}` });
+            }
+        } else {
+            // Randomized order for subsequent pages
+            const availableSections = [];
+
+            if (processedShorts.length > 0) {
+                availableSections.push({ type: 'shorts', data: processedShorts, key: `shorts-${pageNum}` });
+            }
+            // Combine video batches for randomization
+            const allVideos = [...videosBatch1, ...videosBatch2, ...videosBatch3, ...videosBatch4];
+            if (allVideos.length > 0) {
+                // Split into chunks of 3 for display
+                for (let i = 0; i < allVideos.length; i += 3) {
+                    const chunk = allVideos.slice(i, i + 3);
+                    if (chunk.length > 0) {
+                        availableSections.push({
+                            type: 'videos',
+                            data: chunk,
+                            key: `videos-${Math.floor(i / 3) + 1}-${pageNum}`
+                        });
+                    }
+                }
+            }
+            if (processedAudio.length > 0) {
+                availableSections.push({ type: 'audio', data: processedAudio, key: `audio-${pageNum}` });
+            }
+            if (processedPosts.length > 0) {
+                availableSections.push({ type: 'post-single', data: processedPosts[0], key: `post-${pageNum}` });
+            }
+
+            // Shuffle sections for randomized order
+            for (let i = availableSections.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [availableSections[i], availableSections[j]] = [availableSections[j], availableSections[i]];
+            }
+
+            sections.push(...availableSections);
+        }
 
         // Calculate if there's more content available
-        const hasMoreShorts = shortsSkip + shorts.length < totalShorts;
-        const hasMoreAudio = audioSkip + audioContent.length < totalAudio;
-        const hasMoreVideos = videosSkip + videos.length < totalVideos;
-        const hasMorePosts = postsSkip + posts.length < totalPosts;
+        const hasMoreShorts = (shortsSkip + processedShorts.length) < totalShorts;
+        const hasMoreAudio = (audioSkip + processedAudio.length) < totalAudio;
+        const hasMoreVideos = (videosSkip + processedVideos.length) < totalVideos;
+        const hasMorePosts = (postsSkip + processedPosts.length) < totalPosts;
 
-        // Continue pagination if ANY content type has more
-        const hasNextPage = hasMoreShorts || hasMoreAudio || hasMoreVideos || hasMorePosts;
+        console.log(`📊 [Feed] Page ${pageNum} - served: shorts=${processedShorts.length}, audio=${processedAudio.length}, videos=${processedVideos.length}, posts=${processedPosts.length}`);
+        console.log(`📊 [Feed] Totals - shorts: ${totalShorts}, audio: ${totalAudio}, videos: ${totalVideos}, posts: ${totalPosts}`);
+        console.log(`📊 [Feed] hasMore - shorts: ${hasMoreShorts}, audio: ${hasMoreAudio}, videos: ${hasMoreVideos}, posts: ${hasMorePosts}`);
+
+        // Continue pagination if ANY content type has more and within max page limit
+        const hasNextPage = pageNum < maxPages && (hasMoreShorts || hasMoreAudio || hasMoreVideos || hasMorePosts);
 
         res.json({
             shorts: processedShorts,
             videos: processedVideos,
             audio: processedAudio,
             posts: processedPosts,
+            sections,
             isFirstPage,
             pagination: {
                 currentPage: pageNum,
@@ -322,7 +405,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
         }
 
         // Get current video for similarity calculation
-        const currentVideo = await Video.findById(videoId);
+        const currentVideo = await Content.findById(videoId);
         if (!currentVideo) {
             return res.status(404).json({ error: 'Video not found' });
         }
@@ -349,8 +432,9 @@ export const getRecommendationsWithShorts = async (req, res) => {
         }
 
         // Fetch similar videos
-        const allVideos = await Video.find({
+        const allVideos = await Content.find({
             status: 'completed',
+            contentType: 'video',
             _id: { $ne: videoId }
         }).populate('userId', 'userName channelName channelPicture');
 

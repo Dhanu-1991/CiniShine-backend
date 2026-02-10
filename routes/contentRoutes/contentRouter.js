@@ -1,35 +1,34 @@
 /**
  * Content Router
- * Routes for shorts, audio, and posts
+ * Routes for shorts, audio, posts, and shared content operations
+ * Mounts sub-routers for each content type
  */
 
 import express from 'express';
 import multer from 'multer';
+
+// Sub-routers
+import shortsRouter from './shortsRouter.js';
+import audioRouter from './audioRouter.js';
+import postsRouter from './postsRouter.js';
+
+// Shared content controllers
 import {
-    // Shorts
-    shortUploadInit,
-    shortUploadComplete,
-    // Audio
-    audioUploadInit,
-    audioUploadComplete,
-    // Posts
-    postImageInit,
-    createPost,
-    // Thumbnail
     uploadThumbnail,
-    // Get content
     getContent,
     getUserContent,
     getFeedContent,
-    // New endpoints
+    getSingleContent,
     updateContentWatchTime,
     updateContentEngagement,
-    getContentEngagementStatus,
-    getShortsPlayerFeed,
-    getAudioPlayerFeed,
-    getSingleContent,
-    getSubscriptionPosts
-} from '../../controllers/content-controllers/contentController.js';
+    getContentEngagementStatus
+} from '../../controllers/content-controllers/sharedContentController.js';
+
+// Shorts feed (also mounted via sub-router, kept for backward compat)
+import { getShortsPlayerFeed } from '../../controllers/content-controllers/shortsController.js';
+import { getAudioPlayerFeed } from '../../controllers/content-controllers/audioController.js';
+import { getSubscriptionPosts } from '../../controllers/content-controllers/postsController.js';
+
 import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
 const router = express.Router();
@@ -50,22 +49,11 @@ const upload = multer({
 });
 
 // ============================================
-// SHORTS ROUTES
+// MOUNT SUB-ROUTERS
 // ============================================
-router.post('/short/init', universalTokenVerifier, shortUploadInit);
-router.post('/short/complete', universalTokenVerifier, shortUploadComplete);
-
-// ============================================
-// AUDIO ROUTES
-// ============================================
-router.post('/audio/init', universalTokenVerifier, audioUploadInit);
-router.post('/audio/complete', universalTokenVerifier, audioUploadComplete);
-
-// ============================================
-// POST ROUTES
-// ============================================
-router.post('/post/init', universalTokenVerifier, postImageInit);
-router.post('/post/create', universalTokenVerifier, createPost);
+router.use('/short', shortsRouter);
+router.use('/audio', audioRouter);
+router.use('/post', postsRouter);
 
 // ============================================
 // THUMBNAIL ROUTE (for any content type)
@@ -73,23 +61,18 @@ router.post('/post/create', universalTokenVerifier, createPost);
 router.post('/:id/thumbnail', universalTokenVerifier, upload.single('thumbnail'), uploadThumbnail);
 
 // ============================================
-// PLAYER FEEDS (for dedicated players)
+// PLAYER FEEDS (also accessible at root level)
 // ============================================
-// Shorts player feed (vertical scrolling like YouTube Shorts)
 router.get('/shorts/feed', universalTokenVerifier, getShortsPlayerFeed);
-
-// Audio player feed
 router.get('/audio/feed', universalTokenVerifier, getAudioPlayerFeed);
-
-// Subscription posts feed (for post carousel navigation)
-router.get('/posts/subscriptions', universalTokenVerifier, getSubscriptionPosts);
+router.get('/posts/feed', universalTokenVerifier, getSubscriptionPosts);
 
 // ============================================
-// WATCH TIME & ENGAGEMENT TRACKING
+// ENGAGEMENT ROUTES (like/dislike for shorts, audio, posts)
 // ============================================
-router.post('/:id/watch-time', universalTokenVerifier, updateContentWatchTime);
 router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
-router.get('/:id/engagement-status', optionalTokenVerifier, getContentEngagementStatus);
+router.get('/:id/engagement/status', universalTokenVerifier, getContentEngagementStatus);
+router.post('/:id/watch-time', universalTokenVerifier, updateContentWatchTime);
 
 // ============================================
 // GET ROUTES
@@ -97,7 +80,8 @@ router.get('/:id/engagement-status', optionalTokenVerifier, getContentEngagement
 // Get feed (public shorts, audio, posts)
 router.get('/feed', getFeedContent);
 
-// Get user's own content
+// Get user's own content// ============================================
+
 router.get('/user/my-content', universalTokenVerifier, getUserContent);
 
 // Get single content by ID (with all URLs)
