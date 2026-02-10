@@ -536,6 +536,15 @@ export const getContent = async (req, res) => {
             return res.status(404).json({ error: 'Content not found' });
         }
 
+        // Block private content unless the requester is the owner
+        if (content.visibility === 'private') {
+            const requesterId = req.user?.id;
+            const ownerId = content.userId?._id?.toString() || content.userId?.toString();
+            if (!requesterId || requesterId !== ownerId) {
+                return res.status(403).json({ error: 'This content is private' });
+            }
+        }
+
         // Generate signed URL for thumbnail if exists (with existence check)
         const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
 
@@ -972,6 +981,15 @@ export const getSingleContent = async (req, res) => {
 
         if (!content) {
             return res.status(404).json({ error: 'Content not found' });
+        }
+
+        // Block private content unless the requester is the owner
+        if (content.visibility === 'private') {
+            const requesterId = req.user?.id;
+            const ownerId = content.userId?._id?.toString() || content.userId?.toString();
+            if (!requesterId || requesterId !== ownerId) {
+                return res.status(403).json({ error: 'This content is private' });
+            }
         }
 
         // ✅ ADD: Get comment count

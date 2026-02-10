@@ -69,6 +69,19 @@ const userSchema = new mongoose.Schema({
         required: false,
         trim: true,
     },
+    bio: {
+        type: String,
+        trim: true,
+        maxlength: 500,
+    },
+    achievements: [{
+        type: String,
+        trim: true,
+    }],
+    historyPaused: {
+        type: Boolean,
+        default: false,
+    },
     subscriptions: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

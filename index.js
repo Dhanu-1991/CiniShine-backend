@@ -14,6 +14,9 @@ import contactRouter from "./routes/contactRoutes/contactRouter.js";
 import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
 import videoRouter from "./routes/contentRoutes/videoRouter.js"; // Moved to contentRoutes
 import contentRouter from "./routes/contentRoutes/contentRouter.js"; // Shorts, Audio, Posts
+import channelRouter from "./routes/channelRoutes/channelRouter.js"; // Channel pages
+import historyRouter from "./routes/historyRoutes/historyRouter.js"; // Watch history
+import profileRouter from "./routes/profileRoutes/profileRouter.js"; // Creator profile
 import channelPicRouter from "./routes/pictureRoutes/channelPicRouter.js";
 import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
 
@@ -63,6 +66,9 @@ app.use("/api/v1/user/channel-picture", channelPicRouter);
 app.use("/api/v1/user/profile-picture", profilePicRouter);
 app.use("/api/v2/video", videoRouter);
 app.use("/api/v2/content", contentRouter); // Shorts, Audio, Posts
+app.use("/api/v2/channel", channelRouter); // Channel pages
+app.use("/api/v2/history", historyRouter); // Watch history
+app.use("/api/v2/profile", profileRouter); // Creator profile
 app.use(errorHandlingMiddleware);
 
 mongoose

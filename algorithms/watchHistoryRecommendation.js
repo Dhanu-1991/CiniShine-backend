@@ -1,4 +1,43 @@
-// algorithms/watchHistoryRecommendation.js
+/**
+ * watchHistoryRecommendation.js — PERSONALIZED RECOMMENDATION ENGINE
+ *
+ * ═══════════════════════════════════════════════════════════════
+ * HOW THE RECOMMENDATION ALGORITHM WORKS:
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * This is the PRIMARY algorithm used by:
+ *   - ShortsPlayer feed (getShortsPlayerFeed)
+ *   - AudioPlayer feed (getAudioPlayerFeed)
+ *   - Post feed (getSubscriptionPosts)
+ *
+ * STEP 1: Build user profile from last 100 WatchHistory records
+ *   - Extracts preferred: tags, categories, creators, content types
+ *   - Each preference weighted by:
+ *     recencyWeight (14-day half-life exponential decay) ×
+ *     engagementWeight (completion bonus + like bonus + comment bonus + share bonus + rewatch bonus)
+ *
+ * STEP 2: Score candidate content against user profile
+ *   - Tag match:        25% weight
+ *   - Category match:   15% weight
+ *   - Creator match:    20% weight
+ *   - Watch time engagement: 15% weight
+ *   - Completion bonus: 10% weight
+ *   - Interaction weight: 15% weight
+ *   - PLUS: popularity boost (views/10000), recency boost (30-day decay), random diversity (5%)
+ *   - Already-watched content gets 70% PENALTY (score × 0.3) — deprioritized but not excluded
+ *
+ * STEP 3: Fallback for users with no history
+ *   - 40% popularity + 40% recency + 15% engagement + 5% random
+ *
+ * USED BY: Shorts infinite scroll, Audio next-up, Post feed
+ * NOT USED BY: Video recommendations (those use videoSimilarity.js + recommendationAlgorithm.js)
+ *
+ * IMPORTANT: The algorithm uses tags, categories, and like/dislike status of the
+ * CURRENT content to find similar next recommendations. On infinite scroll,
+ * excludeIds prevents duplicates, and the algorithm scores new candidates
+ * against the user's evolving preference profile.
+ * ═══════════════════════════════════════════════════════════════
+ */
 
 import mongoose from 'mongoose';
 import WatchHistory from '../models/watchHistory.model.js';
@@ -245,7 +284,7 @@ export class WatchHistoryRecommendationEngine {
         candidates = await Content.find({
             contentType,
             status: 'completed',
-            ...(contentType !== 'video' && { visibility: 'public' }),
+            visibility: 'public', // STRICT: Only public content in recommendations
             _id: { $nin: Array.from(excludeIdSet) }
         })
             .populate('userId', 'userName channelName channelPicture')

@@ -139,10 +139,9 @@ const ContentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
-    watchCount: {
-        type: Number,
-        default: 0
-    },
+    // NOTE: watchCount was removed from Content model - it was dead/unused code.
+    // The watchCount in WatchHistory model (per-user re-watch count) is still used
+    // by the recommendation algorithm (watchHistoryRecommendation.js) for "rewatch bonus".
     totalWatchTime: {
         type: Number,
         default: 0

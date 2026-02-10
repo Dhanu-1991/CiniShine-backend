@@ -57,6 +57,12 @@ export const createComment = async (req, res) => {
             return res.status(404).json({ message: "Video or content not found" });
         }
 
+        // Check if comments are enabled on this content
+        if (item.commentsEnabled === false) {
+            console.log(`❌ [Comment] Comments disabled for: ${videoId}`);
+            return res.status(403).json({ message: "Comments are disabled for this content" });
+        }
+
         console.log(`✅ [Comment] Found ${modelType}: ${videoId}`);
 
         // If reply, validate parent comment exists
@@ -145,6 +151,16 @@ export const getComments = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(videoId)) {
             console.error(`❌ [Comments] Invalid video ID: ${videoId}`);
             return res.status(400).json({ message: "Invalid video ID" });
+        }
+
+        // Check if comments are enabled on this content
+        const contentItem = await Content.findById(videoId).select('commentsEnabled').lean();
+        if (contentItem && contentItem.commentsEnabled === false) {
+            return res.json({
+                comments: [],
+                pagination: { currentPage: 1, totalPages: 0, totalComments: 0, hasNextPage: false },
+                message: "Comments are disabled for this content"
+            });
         }
 
         const pageNum = Math.max(1, parseInt(page));

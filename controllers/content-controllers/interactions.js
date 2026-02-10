@@ -1,6 +1,40 @@
+/**
+ * interactions.js — VIDEO engagement & watch time tracking
+ * 
+ * ═══════════════════════════════════════════════════════════
+ * HOW VIEWS ARE COUNTED (for VIDEOS only — shorts/audio/posts use sharedContentController.js):
+ * ═══════════════════════════════════════════════════════════
+ * 1. Frontend (WatchPage.jsx) accumulates watch time in ms via play/pause events.
+ * 2. Watch time is sent to POST /api/v2/video/:id/watch-time every 10s and on page leave.
+ * 3. Backend converts ms → seconds, then applies constraints:
+ *    - MIN_WATCH_TIME: 5s — must watch at least 5s
+ *    - MAX_WATCH_TIME: 1.5× video duration (or 1hr if no duration)
+ *    - MIN_VIDEO_DURATION: 10s — very short videos are excluded
+ * 4. Rate-limited: 30s cooldown between updates per user+video (in-memory cache).
+ * 5. View counting thresholds (based on video duration):
+ *    - <10s video  → 2s watch required
+ *    - 10-60s video → 5s watch required
+ *    - >60s video  → 15s watch required
+ * 6. De-duplication via user.viewHistory[]:
+ *    - 1-10min videos → 1min cooldown between views from same user
+ *    - >10min videos  → 30min cooldown between views from same user
+ * 7. When a view IS counted: video.views++, then averageWatchTime = totalWatchTime / views
+ * 8. totalWatchTime ALWAYS accumulates (even when view isn't counted)
+ *
+ * ═══════════════════════════════════════════════════════════
+ * HOW AVERAGE WATCH TIME IS CALCULATED:
+ * ═══════════════════════════════════════════════════════════
+ * averageWatchTime = totalWatchTime / views
+ * - totalWatchTime accumulates every valid watch session (above 5s, below 1.5x duration)
+ * - averageWatchTime is only recalculated when a NEW VIEW is counted
+ * - Used by recommendationAlgorithm.js: watchTimeScore = min(avgWatchTime / duration, 1)
+ *   → measures retention rate (weight: 0.10 for videos)
+ * ═══════════════════════════════════════════════════════════
+ */
 import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
+import WatchHistory from "../../models/watchHistory.model.js";
 
 // In-memory cache for rate limiting (resets on server restart)
 const watchRateLimit = new Map();
@@ -385,6 +419,72 @@ export const updateWatchTime = async (req, res) => {
             videoId,
             userId
         });
+
+        // ═══ Upsert WatchHistory for recommendation engine + history page ═══
+        try {
+            const user = await User.findById(userId, 'historyPaused') || {};
+            if (!user.historyPaused) {
+                const watchPercentage = video.duration > 0
+                    ? Math.min(100, (watchTimeSeconds / video.duration) * 100) : 0;
+                const completedWatch = watchPercentage >= 80;
+                const existingHistory = await WatchHistory.findOne({ userId, contentId: videoId });
+                const isNewEntry = !existingHistory;
+
+                await WatchHistory.findOneAndUpdate(
+                    { userId, contentId: videoId },
+                    {
+                        $set: {
+                            contentType: 'video',
+                            lastWatchedAt: new Date(),
+                            watchPercentage: Math.max(watchPercentage, existingHistory?.watchPercentage || 0),
+                            completedWatch: completedWatch || existingHistory?.completedWatch || false,
+                            'contentMetadata.title': video.title,
+                            'contentMetadata.tags': video.tags || [],
+                            'contentMetadata.category': video.category,
+                            'contentMetadata.creatorId': video.userId,
+                            'contentMetadata.duration': video.duration
+                        },
+                        $inc: {
+                            watchTime: watchTimeSeconds,
+                            watchCount: 1
+                        },
+                        $setOnInsert: {
+                            firstWatchedAt: new Date()
+                        },
+                        $push: {
+                            sessions: {
+                                $each: [{
+                                    startedAt: new Date(Date.now() - watchTime),
+                                    endedAt: new Date(),
+                                    watchTime: watchTimeSeconds,
+                                    completedWatch
+                                }],
+                                $slice: -20
+                            }
+                        }
+                    },
+                    { upsert: true, new: true }
+                );
+
+                // Cap history at 100 entries per user
+                if (isNewEntry) {
+                    const historyCount = await WatchHistory.countDocuments({ userId });
+                    if (historyCount > 100) {
+                        const oldest = await WatchHistory.find({ userId })
+                            .sort({ lastWatchedAt: 1 })
+                            .limit(historyCount - 100)
+                            .select('_id');
+                        await WatchHistory.deleteMany({ _id: { $in: oldest.map(h => h._id) } });
+                    }
+                }
+
+                console.log(`📝 [WatchHistory] Video upserted - userId: ${userId}, videoId: ${videoId}, watchPercentage: ${watchPercentage.toFixed(1)}%`);
+            } else {
+                console.log(`⏸️ [WatchHistory] Skipped - history paused for user ${userId}`);
+            }
+        } catch (historyErr) {
+            console.error('⚠️ WatchHistory upsert failed (non-blocking):', historyErr.message);
+        }
 
         res.json({
             message: "Watch time updated",

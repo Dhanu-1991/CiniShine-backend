@@ -2,6 +2,37 @@
  * Shared Content Controller
  * Handles: get content, upload thumbnail, feed content, single content
  * Shared functions used by all content types
+ *
+ * ═══════════════════════════════════════════════════════════
+ * HOW VIEWS ARE COUNTED (for SHORTS, AUDIO, POSTS):
+ * ═══════════════════════════════════════════════════════════
+ * 1. Frontend players (ShortsPlayer, AudioPlayer, PostViewPage) send watch time
+ *    to POST /api/v2/content/:id/watch-time every 10s while playing.
+ * 2. Backend receives watchTime in ms, converts to seconds.
+ * 3. Rate-limited: 30s cooldown per user+content (in-memory Map).
+ * 4. View counting thresholds (minimum watch before counting a view):
+ *    - Shorts: 2s
+ *    - Audio:  5s
+ *    - Posts:  3s
+ *    - Video:  10s (fallback)
+ * 5. View cooldowns (prevent re-counting from same user):
+ *    - Shorts: 1 minute between views
+ *    - Others: 5 minutes between views
+ *    - Checked via WatchHistory.lastWatchedAt (NOT user.viewHistory[])
+ * 6. totalWatchTime always accumulates on every valid request.
+ * 7. views only increments when BOTH threshold met AND cooldown passed.
+ * 8. averageWatchTime = totalWatchTime / views (recalculated on EVERY update).
+ *
+ * ═══════════════════════════════════════════════════════════
+ * HOW WATCH HISTORY IS TRACKED:
+ * ═══════════════════════════════════════════════════════════
+ * - Every watchTime update upserts a WatchHistory record for that user+content.
+ * - WatchHistory stores: watchTime, watchPercentage, completedWatch (>=80%),
+ *   contentMetadata snapshot (title, tags, category, creatorId, duration),
+ *   and up to 20 session records.
+ * - The watchHistoryRecommendation.js engine uses this data to build
+ *   personalized feeds (preferred tags, categories, creators).
+ * ═══════════════════════════════════════════════════════════
  */
 
 import mongoose from 'mongoose';
@@ -355,7 +386,7 @@ const RATE_LIMIT_WINDOW = 30 * 1000; // 30s between updates per user+content
 export const updateContentWatchTime = async (req, res) => {
     try {
         const { id } = req.params;
-        const { watchTime } = req.body;
+        const { watchTime, duration: clientDuration } = req.body;
         const userId = req.user?.id;
 
         console.log(`⏱️ [WatchTime] Request - contentId: ${id}, userId: ${userId}, watchTime: ${watchTime}ms`);
@@ -375,6 +406,13 @@ export const updateContentWatchTime = async (req, res) => {
 
         const content = await Content.findById(id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
+
+        // FIX: If content has no duration and client sent one, update it.
+        // This fixes shorts/audio that were uploaded before duration tracking was added.
+        if ((!content.duration || content.duration === 0) && clientDuration && clientDuration > 0) {
+            content.duration = clientDuration;
+            console.log(`📏 [Duration] Fixed missing duration for ${content.contentType} "${content.title}": ${clientDuration}s`);
+        }
 
         const watchTimeSeconds = watchTime / 1000;
         console.log(`📊 [WatchTime] ${content.contentType} "${content.title}" - ${watchTimeSeconds}s sent, current views: ${content.views}, totalWatchTime: ${content.totalWatchTime || 0}s`);
@@ -407,48 +445,73 @@ export const updateContentWatchTime = async (req, res) => {
 
         console.log(`✅ [WatchTime] Saved - views: ${content.views}, avgWatchTime: ${content.averageWatchTime.toFixed(1)}s, viewCounted: ${viewCounted}, totalWatchTime: ${content.totalWatchTime.toFixed(1)}s`);
 
-        // Upsert WatchHistory for the recommendation engine
-        const watchPercentage = content.duration > 0
-            ? Math.min(100, (watchTimeSeconds / content.duration) * 100) : 0;
-        const completedWatch = watchPercentage >= 80;
+        // Check if user has history tracking paused
+        const user = await (await import('../../models/user.model.js')).default.findById(userId, 'historyPaused');
+        const historyPaused = user?.historyPaused || false;
 
-        await WatchHistory.findOneAndUpdate(
-            { userId, contentId: id },
-            {
-                $set: {
-                    contentType: content.contentType,
-                    lastWatchedAt: new Date(),
-                    watchPercentage: Math.max(watchPercentage, existingHistory?.watchPercentage || 0),
-                    completedWatch: completedWatch || existingHistory?.completedWatch || false,
-                    'contentMetadata.title': content.title,
-                    'contentMetadata.tags': content.tags || [],
-                    'contentMetadata.category': content.category,
-                    'contentMetadata.creatorId': content.userId,
-                    'contentMetadata.duration': content.duration
-                },
-                $inc: {
-                    watchTime: watchTimeSeconds,
-                    watchCount: viewCounted ? 1 : 0
-                },
-                $setOnInsert: {
-                    firstWatchedAt: new Date()
-                },
-                $push: {
-                    sessions: {
-                        $each: [{
-                            startedAt: new Date(Date.now() - watchTime),
-                            endedAt: new Date(),
-                            watchTime: watchTimeSeconds,
-                            completedWatch
-                        }],
-                        $slice: -20 // Keep last 20 sessions
+        if (!historyPaused) {
+            // Upsert WatchHistory for the recommendation engine
+            const watchPercentage = content.duration > 0
+                ? Math.min(100, (watchTimeSeconds / content.duration) * 100) : 0;
+            const completedWatch = watchPercentage >= 80;
+
+            const isNewEntry = !existingHistory;
+
+            await WatchHistory.findOneAndUpdate(
+                { userId, contentId: id },
+                {
+                    $set: {
+                        contentType: content.contentType,
+                        lastWatchedAt: new Date(),
+                        watchPercentage: Math.max(watchPercentage, existingHistory?.watchPercentage || 0),
+                        completedWatch: completedWatch || existingHistory?.completedWatch || false,
+                        'contentMetadata.title': content.title,
+                        'contentMetadata.tags': content.tags || [],
+                        'contentMetadata.category': content.category,
+                        'contentMetadata.creatorId': content.userId,
+                        'contentMetadata.duration': content.duration
+                    },
+                    $inc: {
+                        watchTime: watchTimeSeconds,
+                        watchCount: viewCounted ? 1 : 0
+                    },
+                    $setOnInsert: {
+                        firstWatchedAt: new Date()
+                    },
+                    $push: {
+                        sessions: {
+                            $each: [{
+                                startedAt: new Date(Date.now() - watchTime),
+                                endedAt: new Date(),
+                                watchTime: watchTimeSeconds,
+                                completedWatch
+                            }],
+                            $slice: -20 // Keep last 20 sessions
+                        }
                     }
-                }
-            },
-            { upsert: true, new: true }
-        );
+                },
+                { upsert: true, new: true }
+            );
 
-        console.log(`📝 [WatchHistory] Upserted - userId: ${userId}, contentId: ${id}, watchPercentage: ${watchPercentage.toFixed(1)}%, completedWatch: ${completedWatch}`);
+            // HISTORY CAP: Keep only 100 items per user. If a new entry was created, delete oldest.
+            if (isNewEntry) {
+                const historyCount = await WatchHistory.countDocuments({ userId });
+                if (historyCount > 100) {
+                    const oldest = await WatchHistory.find({ userId })
+                        .sort({ lastWatchedAt: 1 })
+                        .limit(historyCount - 100)
+                        .select('_id');
+                    await WatchHistory.deleteMany({
+                        _id: { $in: oldest.map(h => h._id) }
+                    });
+                    console.log(`🗑️ [WatchHistory] Trimmed ${historyCount - 100} oldest entries for user ${userId}`);
+                }
+            }
+
+            console.log(`📝 [WatchHistory] Upserted - userId: ${userId}, contentId: ${id}, watchPercentage: ${(content.duration > 0 ? Math.min(100, (watchTimeSeconds / content.duration) * 100) : 0).toFixed(1)}%, completedWatch: ${watchPercentage >= 80}`);
+        } else {
+            console.log(`⏸️ [WatchHistory] Skipped - history paused for user ${userId}`);
+        }
 
         res.json({
             message: 'Watch time updated',

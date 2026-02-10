@@ -182,6 +182,7 @@ export const searchVideos = async (req, res) => {
 
         const matchQuery = {
             status: 'completed',
+            visibility: 'public',
             $or: [
                 { title: searchRegex },
                 { description: searchRegex }
