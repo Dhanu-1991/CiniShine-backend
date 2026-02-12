@@ -23,7 +23,6 @@ dotenv.config();
 
 
   try {
-    console.log("Sending email with options:", mailOptions);
     const info = await transporter.sendMail(mailOptions);
     console.log('Email sent:', info);
 
@@ -32,7 +31,3 @@ dotenv.config();
     console.error('Error sending email:', error);
     return false;}
   }
-//     to: phone,
-//   });
-// }
-// export { sendOtpToEmail, sendOtpToPhone };
