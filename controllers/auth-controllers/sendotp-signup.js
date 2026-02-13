@@ -1,18 +1,18 @@
-//sendOtp
+//sendOtp — unified for signup and forgot-password
 import { saveOtp } from './services/otpStore.js'
-import { sendOtpToEmail } from './services/otpServiceEmail.js'; // You must implement these functions
-import { sendOtpToPhone } from './services/otpServicePhone.js'; // You must implement these functions
-import { validateEmailAddress } from './validate.email.js'; // You must implement this function
+import { sendOtpToEmail } from './services/otpServiceEmail.js';
+import { sendOtpToPhone } from './services/otpServicePhone.js';
 import { detectCommonEmailTypos } from './validate.email.js';
-const sendOtp = async (req, res) => {
 
-  const { contact, type } = req.body;
+const sendOtp = async (req, res) => {
+  const { contact, type, purpose } = req.body;
 
   if (!contact || !['email', 'phone'].includes(type)) {
     return res.status(400).json({ message: 'Invalid input' });
   }
 
-  if (type === 'email') {
+  // Email typo detection — only for signup flow
+  if (type === 'email' && purpose !== 'forgotPassword') {
     const typoResult = detectCommonEmailTypos(contact);
     if (typoResult && typoResult.isTypo) {
       console.log("Suggested email correction:", typoResult.suggestion);

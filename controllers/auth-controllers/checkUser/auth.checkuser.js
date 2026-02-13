@@ -1,23 +1,19 @@
 import User from "../../../models/user.model.js";
 
-const checkUser = async (req, res, next) => {
+const checkUser = async (req, res) => {
     try {
         const { contact } = req.body;
         
         const existingUser = await User.findOne({ contact });
-        // Check if the user already exists
         if (existingUser) {
-            return res.status(200).json({ message: "User already exists" });
+            return res.status(409).json({ exists: true, message: "User already exists" });
         }
 
-        console.log("User does not exist");
-        res.status(200).json({ message: `User does not exist` });
-
+        res.status(200).json({ exists: false, message: "User does not exist" });
 
     } catch (error) {
-        console.log("Error in checkUser controller:", error);
+        console.error("Error in checkUser controller:", error);
         res.status(500).json({ message: "Internal server error" });
-        next(error);
     }
 };
 

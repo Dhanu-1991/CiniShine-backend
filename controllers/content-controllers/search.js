@@ -191,7 +191,7 @@ export const searchVideos = async (req, res) => {
 
         // Get matching videos with user info (limited initial fetch for performance)
         const allVideos = await Content.find({ ...matchQuery, contentType: 'video' })
-            .populate('userId', 'userName channelName channelPicture')
+            .populate('userId', 'userName channelName channelHandle channelPicture')
             .sort({ views: -1, createdAt: -1 })
             .limit(200) // Limit to top 200 for scoring (performance optimization)
             .sort({ createdAt: -1 });
@@ -202,6 +202,7 @@ export const searchVideos = async (req, res) => {
             const description = video.description || '';
             const userName = video.userId?.userName || '';
             const channelName = video.userId?.channelName || '';
+            const channelHandle = video.userId?.channelHandle || '';
 
             // Extract hashtags from video title and description
             const titleHashtags = extractHashtags(title);
@@ -224,6 +225,9 @@ export const searchVideos = async (req, res) => {
                 // Channel name scoring (high priority)
                 // Exact match: 90, word match: 40 each, partial: 25
                 score += calculateTextScore(searchWords, channelName, 90, 40, 25);
+
+                // Channel handle scoring (high priority)
+                score += calculateTextScore(searchWords, channelHandle, 85, 35, 20);
 
                 // Username scoring (medium priority)
                 // Exact match: 80, word match: 30 each, partial: 20
@@ -312,6 +316,7 @@ export const searchVideos = async (req, res) => {
                         _id: video.userId?._id,
                         userName: video.userId?.userName,
                         channelName: video.userId?.channelName,
+                        channelHandle: video.userId?.channelHandle,
                         channelPicture: video.userId?.channelPicture
                     },
                     searchScore: video.searchScore,

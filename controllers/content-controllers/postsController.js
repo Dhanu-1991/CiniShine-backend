@@ -147,7 +147,7 @@ export const getSubscriptionPosts = async (req, res) => {
         if (currentPostId && parsedPage === 1) {
             try {
                 pinnedPost = await Content.findById(currentPostId)
-                    .populate('userId', 'userName channelName channelPicture');
+                    .populate('userId', 'userName channelName channelHandle channelPicture');
                 if (pinnedPost) excludeIdSet.add(currentPostId);
             } catch (_) { /* ignore invalid ID */ }
         }
@@ -168,7 +168,7 @@ export const getSubscriptionPosts = async (req, res) => {
         const skip = (parsedPage - 1) * parsedLimit;
 
         let [posts, total] = await Promise.all([
-            Content.find(query).populate('userId', 'userName channelName channelPicture')
+            Content.find(query).populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ createdAt: -1 }).skip(skip).limit(parsedLimit),
             Content.countDocuments(query)
         ]);
@@ -178,7 +178,7 @@ export const getSubscriptionPosts = async (req, res) => {
             const fallbackQuery = { ...baseFilter };
             delete fallbackQuery.userId;
             [posts, total] = await Promise.all([
-                Content.find(fallbackQuery).populate('userId', 'userName channelName channelPicture')
+                Content.find(fallbackQuery).populate('userId', 'userName channelName channelHandle channelPicture')
                     .sort({ createdAt: -1 }).skip(skip).limit(parsedLimit),
                 Content.countDocuments(fallbackQuery)
             ]);
@@ -230,6 +230,7 @@ async function formatPostWithUrls(post) {
         views: post.views, likeCount: post.likeCount || 0, commentCount,
         createdAt: post.createdAt,
         channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
+        channelHandle: post.userId?.channelHandle || null,
         channelPicture: post.userId?.channelPicture,
         userId: post.userId?._id || post.userId, tags: post.tags, visibility: post.visibility
     };

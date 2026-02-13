@@ -74,15 +74,20 @@ async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
  */
 export const getChannelPage = async (req, res) => {
     try {
-        const { channelName } = req.params;
+        const { channelIdentifier } = req.params;
         const currentUserId = req.user?.id;
 
-        if (!channelName) return res.status(400).json({ error: 'Channel name required' });
+        if (!channelIdentifier) return res.status(400).json({ error: 'Channel identifier required' });
 
-        // Find user by channelName (case-insensitive)
-        const user = await User.findOne({
-            channelName: { $regex: new RegExp(`^${channelName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        // Find user by channelHandle first, then fall back to channelName
+        let user = await User.findOne({
+            channelHandle: channelIdentifier.toLowerCase()
         });
+        if (!user) {
+            user = await User.findOne({
+                channelName: { $regex: new RegExp(`^${channelIdentifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+            });
+        }
 
         if (!user) return res.status(404).json({ error: 'Channel not found' });
 
@@ -163,6 +168,7 @@ export const getChannelPage = async (req, res) => {
             channel: {
                 _id: user._id,
                 channelName: user.channelName,
+                channelHandle: user.channelHandle || '',
                 userName: user.userName,
                 channelDescription: user.channelDescription || '',
                 bio: user.bio || '',
@@ -190,7 +196,7 @@ export const getChannelPage = async (req, res) => {
  */
 export const getChannelContent = async (req, res) => {
     try {
-        const { channelName } = req.params;
+        const { channelIdentifier } = req.params;
         const { type = 'video', sort = 'latest', page = 1, limit = 12 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -198,9 +204,12 @@ export const getChannelContent = async (req, res) => {
             return res.status(400).json({ error: 'Invalid content type' });
         }
 
-        const user = await User.findOne({
-            channelName: { $regex: new RegExp(`^${channelName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-        });
+        let user = await User.findOne({ channelHandle: channelIdentifier.toLowerCase() });
+        if (!user) {
+            user = await User.findOne({
+                channelName: { $regex: new RegExp(`^${channelIdentifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+            });
+        }
         if (!user) return res.status(404).json({ error: 'Channel not found' });
 
         // STRICT: Only public + completed content

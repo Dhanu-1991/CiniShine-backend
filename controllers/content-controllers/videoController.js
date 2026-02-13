@@ -58,7 +58,7 @@ export const getVideo = async (req, res) => {
         const videoId = req.params.id ?? req.params.videoId;
         console.log('📹 Fetching video metadata for ID:', videoId);
 
-        const video = await Content.findById(videoId).populate('userId', 'userName channelName channelPicture');
+        const video = await Content.findById(videoId).populate('userId', 'userName channelName channelHandle channelPicture');
         if (!video) {
             console.error('❌ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
@@ -149,6 +149,7 @@ export const getVideo = async (req, res) => {
             dislikes: video.dislikeCount || 0,
             userReaction: userReaction?.type || null,
             channelName: video.userId?.channelName || 'Unknown', // Fetch from populated user
+            channelHandle: video.userId?.channelHandle || null,
             subscriberCount,
             isSubscribed,
             channelPicture: video.userId?.channelPicture,
@@ -625,7 +626,7 @@ export const getContent = async (req, res) => {
 
         // Get all completed videos with user info
         const allVideos = await Content.find({ status: 'completed', contentType: 'video' })
-            .populate('userId', 'roles userName channelName channelPicture')
+            .populate('userId', 'roles userName channelName channelHandle channelPicture')
             .sort({ createdAt: -1 }); // Get recent videos first
         console.log("allVideos found : ", allVideos.length);
         // Get personalized recommendations

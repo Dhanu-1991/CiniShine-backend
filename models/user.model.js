@@ -64,6 +64,14 @@ const userSchema = new mongoose.Schema({
         required: false,
         trim: true,
     },
+    channelHandle: {
+        type: String,
+        required: false,
+        trim: true,
+        unique: true,
+        sparse: true,
+        lowercase: true,
+    },
     channelDescription: {
         type: String,
         required: false,

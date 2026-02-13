@@ -159,7 +159,7 @@ export const getShortsPlayerFeed = async (req, res) => {
         let startingShort = null;
         if (currentShortId && mongoose.Types.ObjectId.isValid(currentShortId)) {
             const content = await Content.findById(currentShortId)
-                .populate('userId', 'userName channelName channelPicture');
+                .populate('userId', 'userName channelName channelHandle channelPicture');
 
             if (content && content.contentType === 'short') {
                 const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
@@ -172,6 +172,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     duration: content.duration, thumbnailUrl, videoUrl, views: content.views,
                     likeCount: content.likeCount || 0, commentCount, createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+                    channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
                     userId: content.userId?._id || content.userId, tags: content.tags
                 };
@@ -194,7 +195,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: 'public',
                     _id: { $nin: allExcludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) }
                 })
-                    .populate('userId', 'userName channelName channelPicture')
+                    .populate('userId', 'userName channelName channelHandle channelPicture')
                     .sort({ createdAt: -1, views: -1 })
                     .skip(skip).limit(parseInt(limit));
 
@@ -208,7 +209,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                         videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
                         views: content.views, likeCount: content.likeCount || 0, commentCount,
                         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
-                        channelPicture: content.userId?.channelPicture,
+                    channelHandle: content.userId?.channelHandle || null,
+                    channelPicture: content.userId?.channelPicture,
                         userId: content.userId?._id || content.userId, tags: content.tags
                     };
                 }));
@@ -219,7 +221,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                 contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: 'public',
                 _id: { $nin: allExcludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ createdAt: -1, views: -1 })
                 .skip(skip).limit(parseInt(limit));
 
@@ -233,6 +235,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
                     views: content.views, likeCount: content.likeCount || 0, commentCount,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+                    channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
                     userId: content.userId?._id || content.userId, tags: content.tags
                 };

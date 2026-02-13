@@ -126,7 +126,7 @@ export const getMixedFeed = async (req, res) => {
                 status: 'completed',
                 visibility: 'public'
             })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ views: -1, likeCount: -1, createdAt: -1 })
                 .skip(shortsSkip)
                 .limit(shortsLimitNum)
@@ -140,7 +140,7 @@ export const getMixedFeed = async (req, res) => {
                 status: 'completed',
                 visibility: 'public'
             })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ views: -1, likeCount: -1, createdAt: -1 })
                 .skip(audioSkip)
                 .limit(audioLimitNum)
@@ -150,7 +150,7 @@ export const getMixedFeed = async (req, res) => {
         // 3. Fetch videos - sorted by views and recency
         fetchPromises.push(
             Content.find({ status: 'completed', contentType: 'video' })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ views: -1, createdAt: -1 })
                 .skip(videosSkip)
                 .limit(videosLimitNum)
@@ -171,7 +171,7 @@ export const getMixedFeed = async (req, res) => {
 
         fetchPromises.push(
             Content.find(postsQuery)
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ views: -1, likeCount: -1, createdAt: -1 })
                 .skip(postsSkip)
                 .limit(postsLimitNum)
@@ -228,6 +228,7 @@ export const getMixedFeed = async (req, res) => {
                 likeCount: content.likeCount,
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                channelHandle: content.userId?.channelHandle || null,
                 channelPicture: content.userId?.channelPicture || null,
                 userId: content.userId?._id,
                 artist: content.artist,
@@ -248,6 +249,7 @@ export const getMixedFeed = async (req, res) => {
                 likeCount: video.likes?.length || 0,
                 createdAt: video.createdAt,
                 channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+                channelHandle: video.userId?.channelHandle || null,
                 channelPicture: video.userId?.channelPicture || null,
                 userId: video.userId?._id,
                 status: video.status
@@ -266,6 +268,7 @@ export const getMixedFeed = async (req, res) => {
                 likeCount: content.likeCount,
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                channelHandle: content.userId?.channelHandle || null,
                 channelPicture: content.userId?.channelPicture || null,
                 userId: content.userId?._id,
                 status: content.status
@@ -421,7 +424,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 status: 'completed',
                 visibility: 'public'
             })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ views: -1, createdAt: -1 })
                 .limit(parseInt(shortsLimit));
 
@@ -436,7 +439,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
             status: 'completed',
             contentType: 'video',
             _id: { $ne: videoId }
-        }).populate('userId', 'userName channelName channelPicture');
+        }).populate('userId', 'userName channelName channelHandle channelPicture');
 
         // Calculate similarity scores
         const scoredVideos = allVideos.map(video => ({
@@ -466,6 +469,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
                     likeCount: content.likeCount,
                     createdAt: content.createdAt,
                     channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
+                    channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture || null,
                     status: content.status
                 };
@@ -485,6 +489,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 likeCount: video.likes?.length || 0,
                 createdAt: video.createdAt,
                 channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+                channelHandle: video.userId?.channelHandle || null,
                 channelPicture: video.userId?.channelPicture || null,
                 status: video.status,
                 similarityScore: video.similarityScore

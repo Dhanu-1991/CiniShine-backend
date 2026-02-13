@@ -1,20 +1,24 @@
 import { getOtp, deleteOtp } from './services/otpStore.js';
-const verifyOtp = async (req, res) => {
 
-    const {contact,otp} = req.body;
-    const actualOtp=getOtp(contact);
-    if(actualOtp===otp){
-        console.log("otp matched")
+const verifyOtp = async (req, res) => {
+    const { contact, otp } = req.body;
+
+    if (!contact || !otp) {
+        return res.status(400).json({ message: 'Contact and OTP are required' });
+    }
+
+    const actualOtp = getOtp(contact);
+
+    if (!actualOtp) {
+        return res.status(400).json({ message: 'OTP has expired or was not requested' });
+    }
+
+    if (actualOtp === otp) {
         deleteOtp(contact);
-        console.log("deleted stored otp")
         return res.status(200).json({ message: 'OTP verified successfully' });
     }
-    if(actualOtp!==otp){
-        console.log("otps didnt match")
-        return res.status(299).json({ message: 'Invalid OTP' });
-    
-    }
 
-    return res.status(500).json({message:"some error in veryfying Otp"});
-}
-export {verifyOtp};
+    return res.status(400).json({ message: 'Invalid OTP' });
+};
+
+export { verifyOtp };

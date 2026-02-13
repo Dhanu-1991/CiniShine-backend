@@ -146,6 +146,7 @@ async function formatAudioContent(content) {
         duration: content.duration, thumbnailUrl, audioUrl, views: content.views || 0,
         likeCount: content.likeCount || 0, commentCount, createdAt: content.createdAt,
         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+        channelHandle: content.userId?.channelHandle || null,
         channelPicture: content.userId?.channelPicture,
         userId: content.userId?._id || content.userId,
         artist: content.artist, album: content.album, audioCategory: content.audioCategory, tags: content.tags
@@ -167,7 +168,7 @@ export const getAudioPlayerFeed = async (req, res) => {
 
         let startingAudio = null;
         if (currentAudioId && mongoose.Types.ObjectId.isValid(currentAudioId)) {
-            const content = await Content.findById(currentAudioId).populate('userId', 'userName channelName channelPicture');
+            const content = await Content.findById(currentAudioId).populate('userId', 'userName channelName channelHandle channelPicture');
             if (content && content.contentType === 'audio') {
                 startingAudio = await formatAudioContent(content);
             }
@@ -187,7 +188,7 @@ export const getAudioPlayerFeed = async (req, res) => {
                     contentType: 'audio', status: 'completed', visibility: 'public',
                     _id: { $nin: allExcludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) }
                 })
-                    .populate('userId', 'userName channelName channelPicture')
+                    .populate('userId', 'userName channelName channelHandle channelPicture')
                     .sort({ createdAt: -1, views: -1 })
                     .skip(skip).limit(parseInt(limit));
                 audioList = await Promise.all(contents.map(formatAudioContent));
@@ -198,7 +199,7 @@ export const getAudioPlayerFeed = async (req, res) => {
                 contentType: 'audio', status: 'completed', visibility: 'public',
                 _id: { $nin: allExcludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit));
             audioList = await Promise.all(contents.map(formatAudioContent));
         }

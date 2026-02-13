@@ -530,7 +530,7 @@ export const getContent = async (req, res) => {
         }
 
         const content = await Content.findById(contentId)
-            .populate('userId', 'userName channelName channelPicture profilePicture');
+            .populate('userId', 'userName channelName channelHandle channelPicture profilePicture');
 
         if (!content) {
             return res.status(404).json({ error: 'Content not found' });
@@ -613,7 +613,7 @@ export const getFeedContent = async (req, res) => {
         }
 
         const contents = await Content.find(query)
-            .populate('userId', 'userName channelName channelPicture')
+            .populate('userId', 'userName channelName channelHandle channelPicture')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit));
@@ -714,7 +714,7 @@ export const getShortsPlayerFeed = async (req, res) => {
             console.log(`📥 [ShortsPlayerFeed] Fetching starting short: ${currentShortId}`);
 
             const content = await Content.findById(currentShortId)
-                .populate('userId', 'userName channelName channelPicture');
+                .populate('userId', 'userName channelName channelHandle channelPicture');
 
             if (content && content.contentType === 'short') {
                 // Generate URLs for the starting short (with existence check)
@@ -743,6 +743,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     commentCount, // ✅ ADD
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+                    channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
                     userId: content.userId?._id || content.userId,
                     tags: content.tags
@@ -780,7 +781,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                 visibility: 'public',
                 _id: { $nin: allExcludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ createdAt: -1, views: -1 })
                 .skip(skip)
                 .limit(parseInt(limit));
@@ -810,6 +811,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     likeCount: content.likeCount || 0,
                     commentCount, // ✅ ADD
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+                    channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
                     userId: content.userId?._id || content.userId,
                     tags: content.tags
@@ -864,7 +866,7 @@ export const getAudioPlayerFeed = async (req, res) => {
         let startingAudio = null;
         if (currentAudioId && mongoose.Types.ObjectId.isValid(currentAudioId)) {
             const content = await Content.findById(currentAudioId)
-                .populate('userId', 'userName channelName channelPicture');
+                .populate('userId', 'userName channelName channelHandle channelPicture');
 
             if (content && content.contentType === 'audio') {
                 startingAudio = await formatAudioContent(content);
@@ -889,7 +891,7 @@ export const getAudioPlayerFeed = async (req, res) => {
                 visibility: 'public',
                 _id: { $nin: excludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit));
@@ -952,6 +954,7 @@ async function formatAudioContent(content) {
         commentCount, // ✅ ADD
         createdAt: content.createdAt,
         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+        channelHandle: content.userId?.channelHandle || null,
         channelPicture: content.userId?.channelPicture,
         userId: content.userId?._id || content.userId,
         artist: content.artist,
@@ -977,7 +980,7 @@ export const getSingleContent = async (req, res) => {
         }
 
         const content = await Content.findById(id)
-            .populate('userId', 'userName channelName channelPicture');
+            .populate('userId', 'userName channelName channelHandle channelPicture');
 
         if (!content) {
             return res.status(404).json({ error: 'Content not found' });
@@ -1042,6 +1045,7 @@ export const getSingleContent = async (req, res) => {
             commentCount, // ✅ ADD
             createdAt: content.createdAt,
             channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
+            channelHandle: content.userId?.channelHandle || null,
             channelPicture: content.userId?.channelPicture,
             userId: content.userId?._id || content.userId,
             tags: content.tags,
@@ -1107,6 +1111,7 @@ async function formatPostWithUrls(post) {
         commentCount, // ✅ ADD
         createdAt: post.createdAt,
         channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
+        channelHandle: post.userId?.channelHandle || null,
         channelPicture: post.userId?.channelPicture,
         userId: post.userId?._id || post.userId,
         tags: post.tags,

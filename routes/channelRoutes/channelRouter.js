@@ -10,9 +10,10 @@ import { optionalTokenVerifier } from '../../controllers/auth-controllers/univer
 const router = express.Router();
 
 // Get channel page data (public, but optional auth for subscription status)
-router.get('/:channelName', optionalTokenVerifier, getChannelPage);
+// Accepts either channelHandle or channelName as :channelIdentifier
+router.get('/:channelIdentifier', optionalTokenVerifier, getChannelPage);
 
 // Get channel content by type with sorting
-router.get('/:channelName/content', optionalTokenVerifier, getChannelContent);
+router.get('/:channelIdentifier/content', optionalTokenVerifier, getChannelContent);
 
 export default router;

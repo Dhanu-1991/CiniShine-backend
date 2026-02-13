@@ -120,7 +120,7 @@ export const getContent = async (req, res) => {
         const { id: contentId } = req.params;
         if (!mongoose.Types.ObjectId.isValid(contentId)) return res.status(400).json({ error: 'Invalid content ID' });
 
-        const content = await Content.findById(contentId).populate('userId', 'userName channelName channelPicture profilePicture');
+        const content = await Content.findById(contentId).populate('userId', 'userName channelName channelHandle channelPicture profilePicture');
         if (!content) return res.status(404).json({ error: 'Content not found' });
 
         const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
@@ -199,7 +199,7 @@ export const getFeedContent = async (req, res) => {
         }
 
         const contents = await Content.find(query)
-            .populate('userId', 'userName channelName channelPicture')
+            .populate('userId', 'userName channelName channelHandle channelPicture')
             .sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit));
         const total = await Content.countDocuments(query);
 
@@ -234,7 +234,7 @@ export const getSingleContent = async (req, res) => {
         const { id } = req.params;
         if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid content ID' });
 
-        const content = await Content.findById(id).populate('userId', 'userName channelName channelPicture');
+        const content = await Content.findById(id).populate('userId', 'userName channelName channelHandle channelPicture');
         if (!content) return res.status(404).json({ error: 'Content not found' });
 
         const commentCount = await Comment.countDocuments({ videoId: content._id, onModel: 'Content', parentCommentId: null });

@@ -305,7 +305,7 @@ export const updateProfileSettings = async (req, res) => {
         }
 
         const user = await User.findByIdAndUpdate(userId, update, { new: true }).select(
-            'userName channelName channelDescription bio achievements roles profilePicture channelPicture'
+            'userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture'
         );
 
         res.json({
@@ -328,8 +328,8 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'userName channelName channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions'
-        ).populate('subscriptions', 'channelName profilePicture channelPicture');
+            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions'
+        ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -350,23 +350,21 @@ export const getProfileSettings = async (req, res) => {
 
         const subscriberCount = await User.countDocuments({ subscriptions: user._id });
 
-        // Enrich subscriptions with signed URLs
-        const subscriptions = await Promise.all((user.subscriptions || []).slice(0, 20).map(async (sub) => {
-            const picUrl = sub.channelPicture
-                ? await getSignedUrlIfExists(process.env.S3_BUCKET, sub.channelPicture)
-                : null;
-            return {
-                _id: sub._id,
-                channelName: sub.channelName,
-                channelPicture: picUrl,
-            };
+        // For subscriptions avoid expensive S3 head/URL checks — return stored picture key/url as-is.
+        const subscriptions = (user.subscriptions || []).slice(0, 20).map((sub) => ({
+            _id: sub._id,
+            channelName: sub.channelName,
+            channelHandle: sub.channelHandle || null,
+            channelPicture: sub.channelPicture || null,
         }));
 
         res.json({
             user: {
                 _id: user._id,
                 userName: user.userName,
+                contact: user.contact,
                 channelName: user.channelName,
+                channelHandle: user.channelHandle || null,
                 channelDescription: user.channelDescription || '',
                 bio: user.bio || '',
                 achievements: user.achievements || [],
