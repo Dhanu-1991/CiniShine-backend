@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-const PROMAILER_URL = process.env.PROMAILER_URL || 'https://api.mailbridge.dev/v1/messages/send';
+const PROMAILER_URL = process.env.PROMAILER_URL || 'https://mailserver.automationlounge.com/api/v1/messages/send';
 const PROMAILER_API_KEY = process.env.PROMAILER_API_KEY;
 
 async function _fetch(...args) {
