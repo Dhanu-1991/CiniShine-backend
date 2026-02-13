@@ -1,36 +1,26 @@
-import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
+import SibApiV3Sdk from 'sib-api-v3-sdk';
+import dotenv from "dotenv";
 dotenv.config();
 
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false, // IMPORTANT
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false,
-  },
-});
+const client = SibApiV3Sdk.ApiClient.instance;
+client.authentications['api-key'].apiKey = process.env.BREVO_API_KEY;
 
+const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
 
 export async function sendOtpToEmail(to, otp) {
   try {
-    const info = await transporter.sendMail({
-      from: `${process.env.EMAIL_NAME || 'CiniShine'} <${process.env.EMAIL_USER}>`,
-      to,
-      subject: 'Your OTP Code',
-      text: `Your OTP code is ${otp}. It will expire in 5 minutes. If you did not request this, ignore this email.`,
-      html: `<p>Your OTP code is <strong>${otp}</strong>.</p><p>This code will expire in 5 minutes.</p><p>If you did not request this, please ignore this email.</p>`,
+    await apiInstance.sendTransacEmail({
+      sender: { email: process.env.EMAIL_USER, name: "CiniShine" },
+      to: [{ email: to }],
+      subject: "Your OTP Code",
+      textContent: `Your OTP is ${otp}`
     });
 
-    console.log('OTP email sent:', info.messageId);
+    console.log("OTP sent successfully");
     return true;
   } catch (error) {
-    console.error('Nodemailer error sending OTP:', error);
+    console.error("Brevo error:", error.response?.body || error);
     return false;
   }
 }
