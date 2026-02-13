@@ -1,47 +1,47 @@
+import axios from "axios";
 import dotenv from "dotenv";
+
 dotenv.config();
 
-const PROMAILER_URL = process.env.PROMAILER_URL || 'https://mailserver.automationlounge.com/api/v1/messages/send';
-const PROMAILER_API_KEY = process.env.PROMAILER_API_KEY;
-
-async function _fetch(...args) {
-  if (globalThis.fetch) return fetch(...args);
-  const { default: nodeFetch } = await import('node-fetch');
-  return nodeFetch(...args);
-}
+const PROMAILER_ENDPOINT = process.env.PROMAILER_URL || "https://mailserver.automationlounge.com/api/v1/messages/send";
 
 export async function sendOtpToEmail(to, otp) {
-  if (!PROMAILER_API_KEY) {
-    console.error('Promailer API key missing: set PROMAILER_API_KEY');
-    return false;
-  }
-
-  const payload = {
-    to: to,
-    subject: 'Your OTP Code',
-    html: `<p>Your OTP is <strong>${otp}</strong></p>`
-  };
-
   try {
-    const res = await _fetch(PROMAILER_URL, {
-      method: 'POST',
+    const payload = {
+      to: to,
+      subject: "Your OTP Code",
+      html: `<h2>Your OTP</h2><p>Your OTP is <b>${otp}</b></p>`,
+    };
+
+    // optional plain-text
+    payload.text = `Your OTP is ${otp}`;
+
+    // optional custom sender if you set PROMAILER_FROM in .env
+    if (process.env.PROMAILER_FROM) payload.from = process.env.PROMAILER_FROM;
+
+    console.log("Sending payload:", payload);
+
+    const response = await axios.post(PROMAILER_ENDPOINT, payload, {
       headers: {
-        'Authorization': `Bearer ${PROMAILER_API_KEY}`,
-        'Content-Type': 'application/json'
+        Authorization: `Bearer ${process.env.PROMAILER_API_KEY}`,
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload)
+      validateStatus: () => true, // we'll handle non-2xx manually to log body
     });
 
-    if (!res.ok) {
-      const body = await res.text();
-      console.error('Promailer error:', res.status, body);
+    console.log("Promailer status:", response.status);
+    console.log("Promailer response:", response.data);
+
+    const okByFlag = response.data && response.data.success === true;
+    const okByStatus = response.status >= 200 && response.status < 300;
+    if (!okByFlag && !okByStatus) {
+      console.error('Promailer rejected request');
       return false;
     }
 
-    console.log('OTP sent successfully via Promailer');
     return true;
   } catch (error) {
-    console.error('Promailer request failed:', error);
+    console.error("Promailer error:", error.response?.data || error.message);
     return false;
   }
 }
