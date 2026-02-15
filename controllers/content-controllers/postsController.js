@@ -7,8 +7,9 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import Comment from '../../models/comment.model.js';
 import User from '../../models/user.model.js';
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -17,37 +18,6 @@ const s3Client = new S3Client({
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     },
 });
-
-const s3ExistenceCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
-
-async function s3ObjectExists(bucket, key) {
-    const cacheKey = `${bucket}:${key}`;
-    const cached = s3ExistenceCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.exists;
-    try {
-        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        s3ExistenceCache.set(cacheKey, { exists: true, timestamp: Date.now() });
-        return true;
-    } catch (err) {
-        if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
-            s3ExistenceCache.set(cacheKey, { exists: false, timestamp: Date.now() });
-            return false;
-        }
-        return true;
-    }
-}
-
-async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
-    if (!key) return null;
-    if (!(await s3ObjectExists(bucket, key))) return null;
-    try {
-        return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn });
-    } catch (err) {
-        console.error(`Error generating signed URL for ${key}:`, err.message);
-        return null;
-    }
-}
 
 /**
  * Initialize post image upload (optional)
@@ -211,12 +181,12 @@ export const getSubscriptionPosts = async (req, res) => {
  * Helper to format post with signed URLs
  */
 async function formatPostWithUrls(post) {
-    const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.thumbnailKey);
-    const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.imageKey);
+    const thumbnailUrl = getCfUrl(post.thumbnailKey);
+    const imageUrl = getCfUrl(post.imageKey);
 
     let imageUrls = [];
     if (post.imageKeys && post.imageKeys.length > 0) {
-        imageUrls = (await Promise.all(post.imageKeys.map(key => getSignedUrlIfExists(process.env.S3_BUCKET, key)))).filter(Boolean);
+        imageUrls = (await Promise.all(post.imageKeys.map(key => getCfUrl(key)))).filter(Boolean);
     } else if (imageUrl) {
         imageUrls = [imageUrl];
     }

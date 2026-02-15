@@ -3,6 +3,7 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client
 import { v4 as uuidv4 } from "uuid";
 import sharp from "sharp";
 import path from "path";
+import { getCfUrl } from "../../config/cloudfront.js";
 
 /* ======================================================
    S3 CLIENT
@@ -19,7 +20,7 @@ const s3Client = new S3Client({
    S3 HELPERS
 ====================================================== */
 
-// Upload file to S3
+// Upload file to S3 — returns the S3 key (not full URL)
 const uploadToS3 = async (fileBuffer, fileName, mimeType) => {
     const uploadParams = {
         Bucket: process.env.S3_BUCKET,
@@ -32,20 +33,28 @@ const uploadToS3 = async (fileBuffer, fileName, mimeType) => {
         const command = new PutObjectCommand(uploadParams);
         await s3Client.send(command);
 
-        return `https://${process.env.S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileName}`;
+        return fileName; // Return key, not full URL
     } catch (error) {
         console.error("S3 upload error:", error);
         throw new Error("Failed to upload to S3");
     }
 };
 
-// Delete file from S3
-const deleteFromS3 = async (fileUrl) => {
+// Delete file from S3 (handles both S3 keys and full URLs)
+const deleteFromS3 = async (keyOrUrl) => {
     try {
-        if (!fileUrl) return;
+        if (!keyOrUrl) return;
 
-        const urlParts = fileUrl.split("/");
-        const key = urlParts.slice(3).join("/");
+        let key = keyOrUrl;
+        // If it's a full URL, extract the key
+        if (keyOrUrl.startsWith('http')) {
+            try {
+                const url = new URL(keyOrUrl);
+                key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+            } catch {
+                key = keyOrUrl;
+            }
+        }
 
         const deleteParams = {
             Bucket: process.env.S3_BUCKET,
@@ -133,7 +142,7 @@ export const updateProfilePicture = async (req, res) => {
         }
 
         // Delete old profile picture if exists
-        if (user.profilePicture && user.profilePicture.includes("amazonaws.com")) {
+        if (user.profilePicture) {
             await deleteFromS3(user.profilePicture);
         }
 
@@ -145,25 +154,25 @@ export const updateProfilePicture = async (req, res) => {
         const optimizedBuffer = await optimizeImage(req.file.buffer);
 
         // Upload to S3
-        const s3Url = await uploadToS3(
+        const s3Key = await uploadToS3(
             optimizedBuffer,
             fileName,
             req.file.mimetype
         );
 
-        // Save to DB
-        user.profilePicture = s3Url;
+        // Save key to DB
+        user.profilePicture = s3Key;
         user.updatedAt = new Date();
         await user.save();
 
         return res.status(200).json({
             success: true,
             message: "Profile picture updated successfully",
-            profilePicture: s3Url,
+            profilePicture: getCfUrl(s3Key),
             user: {
                 _id: user._id,
                 userName: user.userName,
-                profilePicture: user.profilePicture,
+                profilePicture: getCfUrl(s3Key),
                 channelName: user.channelName || user.userName,
                 updatedAt: user.updatedAt,
             },
@@ -197,7 +206,7 @@ export const removeProfilePicture = async (req, res) => {
             });
         }
 
-        if (user.profilePicture && user.profilePicture.includes("amazonaws.com")) {
+        if (user.profilePicture) {
             await deleteFromS3(user.profilePicture);
         }
 
@@ -238,7 +247,7 @@ export const getProfilePicture = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            profilePicture: user.profilePicture,
+            profilePicture: getCfUrl(user.profilePicture),
             userName: user.userName,
             channelName: user.channelName || user.userName,
         });

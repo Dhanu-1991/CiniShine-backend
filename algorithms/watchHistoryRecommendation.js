@@ -43,36 +43,7 @@ import mongoose from 'mongoose';
 import WatchHistory from '../models/watchHistory.model.js';
 import Content from '../models/content.model.js';
 import Comment from '../models/comment.model.js';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-
-const s3Client = new S3Client({
-    region: process.env.AWS_REGION,
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-});
-
-/**
- * Generate signed URL for S3 objects
- */
-const generateSignedUrl = async (key) => {
-    if (!key) return null;
-    try {
-        return await getSignedUrl(
-            s3Client,
-            new GetObjectCommand({
-                Bucket: process.env.S3_BUCKET,
-                Key: key,
-            }),
-            { expiresIn: 3600 }
-        );
-    } catch (error) {
-        console.error('Error generating signed URL:', error);
-        return null;
-    }
-};
+import { getCfUrl } from '../config/cloudfront.js';
 
 /**
  * WatchHistoryRecommendationEngine
@@ -322,15 +293,15 @@ export class WatchHistoryRecommendationEngine {
                     parentCommentId: null
                 });
 
-                // Generate video/audio URL for shorts and audio
+                // Generate video/audio URL for shorts and audio (CloudFront)
                 let videoUrl = null;
                 let audioUrl = null;
                 if (contentType === 'short') {
                     const videoKey = content.hlsKey || content.processedKey || content.originalKey;
-                    videoUrl = await generateSignedUrl(videoKey);
+                    videoUrl = getCfUrl(videoKey);
                 } else if (contentType === 'audio') {
                     const audioKey = content.processedKey || content.originalKey;
-                    audioUrl = await generateSignedUrl(audioKey);
+                    audioUrl = getCfUrl(audioKey);
                 }
 
                 return {
@@ -339,24 +310,22 @@ export class WatchHistoryRecommendationEngine {
                     title: content.title,
                     description: content.description,
                     duration: content.duration,
-                    thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
-                    imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
-                    videoUrl, // For shorts
-                    audioUrl, // For audio
+                    thumbnailUrl: getCfUrl(content.thumbnailKey),
+                    imageUrl: content.imageKey ? getCfUrl(content.imageKey) : null,
+                    videoUrl,
+                    audioUrl,
                     views: content.views,
                     likeCount: content.likeCount || content.likes?.length || 0,
-                    commentCount, // ✅ ADD: Comment count
+                    commentCount,
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName || 'Unknown',
                     channelPicture: content.userId?.channelPicture || null,
                     userId: content.userId?._id || content.userId,
                     status: content.status,
                     tags: content.tags,
-                    // Audio specific
                     artist: content.artist,
                     album: content.album,
                     audioCategory: content.audioCategory,
-                    // Post specific
                     postContent: content.postContent,
                     recommendationScore: content.recommendationScore
                 };

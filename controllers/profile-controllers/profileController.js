@@ -16,8 +16,8 @@ import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
-import { S3Client, GetObjectCommand, HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -26,32 +26,6 @@ const s3Client = new S3Client({
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     },
 });
-
-// Extract S3 key from a full URL or return as-is if already a key
-function extractS3Key(urlOrKey) {
-    if (!urlOrKey) return null;
-    if (urlOrKey.startsWith('http')) {
-        try {
-            const url = new URL(urlOrKey);
-            return url.pathname.slice(1); // remove leading "/"
-        } catch {
-            return urlOrKey;
-        }
-    }
-    return urlOrKey;
-}
-
-async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
-    if (!key) return null;
-    const resolvedKey = extractS3Key(key);
-    if (!resolvedKey) return null;
-    try {
-        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: resolvedKey }));
-        return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: resolvedKey }), { expiresIn });
-    } catch {
-        return null;
-    }
-}
 
 /**
  * Get creator's own content with engagement stats
@@ -106,8 +80,8 @@ export const getMyContent = async (req, res) => {
                 commentsEnabled: item.commentsEnabled,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
-                thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.thumbnailKey),
-                imageUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.imageKey),
+                thumbnailUrl: getCfUrl(item.thumbnailKey),
+                imageUrl: getCfUrl(item.imageKey),
             };
         }));
 
@@ -334,10 +308,10 @@ export const getProfileSettings = async (req, res) => {
         if (!user) return res.status(404).json({ error: 'User not found' });
 
         const channelPictureUrl = user.channelPicture
-            ? await getSignedUrlIfExists(process.env.S3_BUCKET, user.channelPicture)
+            ? getCfUrl(user.channelPicture)
             : null;
         const profilePictureUrl = user.profilePicture
-            ? await getSignedUrlIfExists(process.env.S3_BUCKET, user.profilePicture)
+            ? getCfUrl(user.profilePicture)
             : null;
 
         // Content stats
@@ -404,8 +378,8 @@ export const getContentAnalytics = async (req, res) => {
             VideoReaction.countDocuments({ videoId: id, type: 'like' }),
             VideoReaction.countDocuments({ videoId: id, type: 'dislike' }),
             WatchHistory.find({ contentId: id }).select('sessions watchTime watchPercentage completedWatch').lean(),
-            getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
-            getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey),
+            getCfUrl(content.thumbnailKey),
+            getCfUrl(content.imageKey),
         ]);
 
         // Compute daily views from watchHistory sessions (last 30 days)

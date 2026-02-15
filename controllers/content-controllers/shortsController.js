@@ -7,9 +7,10 @@
 import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import Comment from '../../models/comment.model.js';
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -18,39 +19,6 @@ const s3Client = new S3Client({
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     },
 });
-
-// Cache for S3 object existence checks (TTL: 5 minutes)
-const s3ExistenceCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
-
-async function s3ObjectExists(bucket, key) {
-    const cacheKey = `${bucket}:${key}`;
-    const cached = s3ExistenceCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.exists;
-    try {
-        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        s3ExistenceCache.set(cacheKey, { exists: true, timestamp: Date.now() });
-        return true;
-    } catch (err) {
-        if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
-            s3ExistenceCache.set(cacheKey, { exists: false, timestamp: Date.now() });
-            return false;
-        }
-        return true;
-    }
-}
-
-async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
-    if (!key) return null;
-    const exists = await s3ObjectExists(bucket, key);
-    if (!exists) return null;
-    try {
-        return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn });
-    } catch (err) {
-        console.error(`Error generating signed URL for ${key}:`, err.message);
-        return null;
-    }
-}
 
 /**
  * Initialize short video upload
@@ -162,9 +130,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                 .populate('userId', 'userName channelName channelHandle channelPicture');
 
             if (content && content.contentType === 'short') {
-                const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
+                const thumbnailUrl = getCfUrl(content.thumbnailKey);
                 const videoKey = content.hlsKey || content.processedKey || content.originalKey;
-                const videoUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
+                const videoUrl = getCfUrl(videoKey);
                 const commentCount = await Comment.countDocuments({ videoId: content._id, onModel: 'Content', parentCommentId: null });
 
                 startingShort = {
@@ -205,12 +173,12 @@ export const getShortsPlayerFeed = async (req, res) => {
                     return {
                         _id: content._id, contentType: 'short', title: content.title, description: content.description,
                         duration: content.duration,
-                        thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
-                        videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
+                        thumbnailUrl: getCfUrl(content.thumbnailKey),
+                        videoUrl: getCfUrl(videoKey),
                         views: content.views, likeCount: content.likeCount || 0, commentCount,
                         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
-                    channelHandle: content.userId?.channelHandle || null,
-                    channelPicture: content.userId?.channelPicture,
+                        channelHandle: content.userId?.channelHandle || null,
+                        channelPicture: content.userId?.channelPicture,
                         userId: content.userId?._id || content.userId, tags: content.tags
                     };
                 }));
@@ -231,8 +199,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                 return {
                     _id: content._id, contentType: 'short', title: content.title, description: content.description,
                     duration: content.duration,
-                    thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
-                    videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
+                    thumbnailUrl: getCfUrl(content.thumbnailKey),
+                    videoUrl: getCfUrl(videoKey),
                     views: content.views, likeCount: content.likeCount || 0, commentCount,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,

@@ -1,15 +1,6 @@
 import Content from "../../models/content.model.js";
 import SearchHistory from "../../models/searchHistory.model.js";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-
-const s3Client = new S3Client({
-    region: process.env.AWS_REGION,
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-});
+import { getCfUrl } from "../../config/cloudfront.js";
 
 /**
  * Get search text suggestions (autocomplete)
@@ -283,47 +274,31 @@ export const searchVideos = async (req, res) => {
         // Apply pagination
         const paginatedVideos = scoredVideos.slice(skip, skip + parseInt(limit));
 
-        // Generate thumbnail URLs
-        const videosWithUrls = await Promise.all(
-            paginatedVideos.map(async (video) => {
-                let thumbnailUrl = null;
-                if (video.thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: video.thumbnailKey,
-                            }),
-                            { expiresIn: 3600 }
-                        );
-                    } catch (error) {
-                        console.error('Error generating thumbnail URL:', error);
-                    }
-                }
+        // Generate CloudFront thumbnail URLs
+        const videosWithUrls = paginatedVideos.map((video) => {
+            const thumbnailUrl = getCfUrl(video.thumbnailKey);
 
-                return {
-                    _id: video._id,
-                    title: video.title,
-                    description: video.description,
-                    duration: video.duration,
-                    thumbnailUrl,
-                    views: video.views,
-                    likes: video.likes || 0,
-                    dislikes: video.dislikes || 0,
-                    createdAt: video.createdAt,
-                    user: {
-                        _id: video.userId?._id,
-                        userName: video.userId?.userName,
-                        channelName: video.userId?.channelName,
-                        channelHandle: video.userId?.channelHandle,
-                        channelPicture: video.userId?.channelPicture
-                    },
-                    searchScore: video.searchScore,
-                    matchedHashtags: video.matchedHashtags || []
-                };
-            })
-        );
+            return {
+                _id: video._id,
+                title: video.title,
+                description: video.description,
+                duration: video.duration,
+                thumbnailUrl,
+                views: video.views,
+                likes: video.likes || 0,
+                dislikes: video.dislikes || 0,
+                createdAt: video.createdAt,
+                user: {
+                    _id: video.userId?._id,
+                    userName: video.userId?.userName,
+                    channelName: video.userId?.channelName,
+                    channelHandle: video.userId?.channelHandle,
+                    channelPicture: video.userId?.channelPicture
+                },
+                searchScore: video.searchScore,
+                matchedHashtags: video.matchedHashtags || []
+            };
+        });
 
         const totalVideos = scoredVideos.length;
         const hasNextPage = skip + parseInt(limit) < totalVideos;

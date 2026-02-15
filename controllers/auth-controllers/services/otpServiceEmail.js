@@ -32,9 +32,7 @@ export async function sendOtpToEmail(to, otp) {
     console.log("Promailer status:", response.status);
     console.log("Promailer response:", response.data);
 
-    const okByFlag = response.data && response.data.success === true;
-    const okByStatus = response.status >= 200 && response.status < 300;
-    if (!okByFlag && !okByStatus) {
+    if (!response.data || response.data.success !== true) {
       console.error('Promailer rejected request');
       return false;
     }

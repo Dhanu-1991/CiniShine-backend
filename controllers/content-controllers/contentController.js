@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Content Controller
  * Handles: shorts, audio, posts
  * 
@@ -20,61 +20,10 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
-
-// Cache for S3 object existence checks (TTL: 5 minutes)
-const s3ExistenceCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Check if an S3 object exists (with caching)
- */
-async function s3ObjectExists(bucket, key) {
-    const cacheKey = `${bucket}:${key}`;
-    const cached = s3ExistenceCache.get(cacheKey);
-
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        return cached.exists;
-    }
-
-    try {
-        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        s3ExistenceCache.set(cacheKey, { exists: true, timestamp: Date.now() });
-        return true;
-    } catch (err) {
-        if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
-            s3ExistenceCache.set(cacheKey, { exists: false, timestamp: Date.now() });
-            return false;
-        }
-        // For other errors, don't cache and assume it might exist
-        console.error(`Error checking S3 object existence for ${key}:`, err.message);
-        return true; // Optimistically return true to try generating URL
-    }
-}
-
-/**
- * Generate signed URL only if object exists
- */
-async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
-    if (!key) return null;
-
-    const exists = await s3ObjectExists(bucket, key);
-    if (!exists) {
-        return null;
-    }
-
-    try {
-        return await getSignedUrl(s3Client, new GetObjectCommand({
-            Bucket: bucket,
-            Key: key,
-        }), { expiresIn });
-    } catch (err) {
-        console.error(`Error generating signed URL for ${key}:`, err.message);
-        return null;
-    }
-}
+import { getCfUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -136,7 +85,7 @@ export const shortUploadInit = async (req, res) => {
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
-        console.log(`📤 Short upload initialized: ${fileId} for user ${userId}`);
+        console.log(`ðŸ“¤ Short upload initialized: ${fileId} for user ${userId}`);
 
         res.json({
             uploadUrl,
@@ -144,7 +93,7 @@ export const shortUploadInit = async (req, res) => {
             key
         });
     } catch (error) {
-        console.error('❌ Error initializing short upload:', error);
+        console.error('âŒ Error initializing short upload:', error);
         res.status(500).json({ error: 'Failed to initialize upload' });
     }
 };
@@ -194,7 +143,7 @@ export const shortUploadComplete = async (req, res) => {
 
         await Content.findByIdAndUpdate(fileId, updateData);
 
-        console.log(`✅ Short upload completed: ${fileId}`);
+        console.log(`âœ… Short upload completed: ${fileId}`);
 
         res.json({
             success: true,
@@ -202,7 +151,7 @@ export const shortUploadComplete = async (req, res) => {
             contentId: fileId
         });
     } catch (error) {
-        console.error('❌ Error completing short upload:', error);
+        console.error('âŒ Error completing short upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
     }
 };
@@ -259,7 +208,7 @@ export const audioUploadInit = async (req, res) => {
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
-        console.log(`📤 Audio upload initialized: ${fileId} for user ${userId}`);
+        console.log(`ðŸ“¤ Audio upload initialized: ${fileId} for user ${userId}`);
 
         res.json({
             uploadUrl,
@@ -267,7 +216,7 @@ export const audioUploadInit = async (req, res) => {
             key
         });
     } catch (error) {
-        console.error('❌ Error initializing audio upload:', error);
+        console.error('âŒ Error initializing audio upload:', error);
         res.status(500).json({ error: 'Failed to initialize upload' });
     }
 };
@@ -319,7 +268,7 @@ export const audioUploadComplete = async (req, res) => {
 
         await Content.findByIdAndUpdate(fileId, updateData);
 
-        console.log(`✅ Audio upload completed: ${fileId}`);
+        console.log(`âœ… Audio upload completed: ${fileId}`);
 
         res.json({
             success: true,
@@ -327,7 +276,7 @@ export const audioUploadComplete = async (req, res) => {
             contentId: fileId
         });
     } catch (error) {
-        console.error('❌ Error completing audio upload:', error);
+        console.error('âŒ Error completing audio upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
     }
 };
@@ -368,7 +317,7 @@ export const postImageInit = async (req, res) => {
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
-        console.log(`📤 Post image upload initialized: ${fileId} for user ${userId}`);
+        console.log(`ðŸ“¤ Post image upload initialized: ${fileId} for user ${userId}`);
 
         res.json({
             uploadUrl,
@@ -376,7 +325,7 @@ export const postImageInit = async (req, res) => {
             key
         });
     } catch (error) {
-        console.error('❌ Error initializing post image upload:', error);
+        console.error('âŒ Error initializing post image upload:', error);
         res.status(500).json({ error: 'Failed to initialize image upload' });
     }
 };
@@ -425,7 +374,7 @@ export const createPost = async (req, res) => {
             publishedAt: new Date()
         });
 
-        console.log(`✅ Post created: ${fileId} by user ${userId}`);
+        console.log(`âœ… Post created: ${fileId} by user ${userId}`);
 
         res.json({
             success: true,
@@ -440,7 +389,7 @@ export const createPost = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error creating post:', error);
+        console.error('âŒ Error creating post:', error);
         res.status(500).json({ error: 'Failed to create post' });
     }
 };
@@ -501,7 +450,7 @@ export const uploadThumbnail = async (req, res) => {
             thumbnailSource: 'custom'
         });
 
-        console.log(`✅ Custom thumbnail uploaded for content: ${contentId}`);
+        console.log(`âœ… Custom thumbnail uploaded for content: ${contentId}`);
 
         res.json({
             success: true,
@@ -509,7 +458,7 @@ export const uploadThumbnail = async (req, res) => {
             thumbnailKey
         });
     } catch (error) {
-        console.error('❌ Error uploading thumbnail:', error);
+        console.error('âŒ Error uploading thumbnail:', error);
         res.status(500).json({ error: 'Failed to upload thumbnail' });
     }
 };
@@ -546,15 +495,15 @@ export const getContent = async (req, res) => {
         }
 
         // Generate signed URL for thumbnail if exists (with existence check)
-        const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
+        const thumbnailUrl = getCfUrl(content.thumbnailKey);
 
         // Generate signed URL for image (posts)
-        const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
+        const imageUrl = getCfUrl(content.imageKey);
 
         // Generate signed URL for audio file
         let audioUrl = null;
         if (content.contentType === 'audio' && content.originalKey) {
-            audioUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.originalKey);
+            audioUrl = getCfUrl(content.originalKey);
         }
 
         res.json({
@@ -583,7 +532,7 @@ export const getContent = async (req, res) => {
             commentsEnabled: content.commentsEnabled
         });
     } catch (error) {
-        console.error('❌ Error fetching content:', error);
+        console.error('âŒ Error fetching content:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -623,10 +572,10 @@ export const getFeedContent = async (req, res) => {
         // Generate URLs
         const contentsWithUrls = await Promise.all(
             contents.map(async (content) => {
-                const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
-                const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
+                const thumbnailUrl = getCfUrl(content.thumbnailKey);
+                const imageUrl = getCfUrl(content.imageKey);
 
-                // ✅ ADD: Get comment count
+                // âœ… ADD: Get comment count
                 const commentCount = await Comment.countDocuments({
                     videoId: content._id,
                     onModel: 'Content',
@@ -644,7 +593,7 @@ export const getFeedContent = async (req, res) => {
                     imageUrl,
                     views: content.views,
                     likeCount: content.likeCount,
-                    commentCount, // ✅ ADD
+                    commentCount, // âœ… ADD
                     createdAt: content.createdAt,
                     user: content.userId,
                     channelName: content.channelName
@@ -662,7 +611,7 @@ export const getFeedContent = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error fetching feed:', error);
+        console.error('âŒ Error fetching feed:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -706,23 +655,23 @@ export const getShortsPlayerFeed = async (req, res) => {
             ? excludeIds.split(',').filter(id => mongoose.Types.ObjectId.isValid(id))
             : [];
 
-        console.log(`📥 [ShortsPlayerFeed] Request - userId: ${userId}, page: ${page}, currentShortId: ${currentShortId}, excludeCount: ${excludeIdArray.length}`);
+        console.log(`ðŸ“¥ [ShortsPlayerFeed] Request - userId: ${userId}, page: ${page}, currentShortId: ${currentShortId}, excludeCount: ${excludeIdArray.length}`);
 
         // If starting from a specific short, fetch that first
         let startingShort = null;
         if (currentShortId && mongoose.Types.ObjectId.isValid(currentShortId)) {
-            console.log(`📥 [ShortsPlayerFeed] Fetching starting short: ${currentShortId}`);
+            console.log(`ðŸ“¥ [ShortsPlayerFeed] Fetching starting short: ${currentShortId}`);
 
             const content = await Content.findById(currentShortId)
                 .populate('userId', 'userName channelName channelHandle channelPicture');
 
             if (content && content.contentType === 'short') {
                 // Generate URLs for the starting short (with existence check)
-                const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
+                const thumbnailUrl = getCfUrl(content.thumbnailKey);
                 const videoKey = content.hlsKey || content.processedKey || content.originalKey;
-                const videoUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
+                const videoUrl = getCfUrl(videoKey);
 
-                // ✅ ADD: Get comment count for starting short
+                // âœ… ADD: Get comment count for starting short
                 const Comment = (await import('../../models/comment.model.js')).default;
                 const commentCount = await Comment.countDocuments({
                     videoId: content._id,
@@ -740,7 +689,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     videoUrl,
                     views: content.views,
                     likeCount: content.likeCount || 0,
-                    commentCount, // ✅ ADD
+                    commentCount, // âœ… ADD
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
@@ -749,7 +698,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     tags: content.tags
                 };
 
-                console.log(`✅ [ShortsPlayerFeed] Starting short found - views: ${content.views}, likes: ${content.likeCount}`);
+                console.log(`âœ… [ShortsPlayerFeed] Starting short found - views: ${content.views}, likes: ${content.likeCount}`);
             }
         }
 
@@ -762,7 +711,7 @@ export const getShortsPlayerFeed = async (req, res) => {
         ];
 
         if (userId) {
-            console.log(`📥 [ShortsPlayerFeed] Getting personalized recommendations for user: ${userId}`);
+            console.log(`ðŸ“¥ [ShortsPlayerFeed] Getting personalized recommendations for user: ${userId}`);
             // Personalized recommendations
             const recommendations = await watchHistoryEngine.getRecommendations(
                 userId,
@@ -770,9 +719,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                 { page: parseInt(page), limit: parseInt(limit), excludeIds: allExcludeIds }
             );
             shorts = recommendations.content;
-            console.log(`✅ [ShortsPlayerFeed] Got ${shorts.length} personalized shorts`);
+            console.log(`âœ… [ShortsPlayerFeed] Got ${shorts.length} personalized shorts`);
         } else {
-            console.log(`📥 [ShortsPlayerFeed] Fetching default shorts (no user)`);
+            console.log(`ðŸ“¥ [ShortsPlayerFeed] Fetching default shorts (no user)`);
             // Fallback to popular/recent shorts
             const skip = (parseInt(page) - 1) * parseInt(limit);
             const contents = await Content.find({
@@ -786,13 +735,13 @@ export const getShortsPlayerFeed = async (req, res) => {
                 .skip(skip)
                 .limit(parseInt(limit));
 
-            // ✅ ADD: Import Comment model once at the top
+            // âœ… ADD: Import Comment model once at the top
             const Comment = (await import('../../models/comment.model.js')).default;
 
             shorts = await Promise.all(contents.map(async (content) => {
                 const videoKey = content.hlsKey || content.processedKey || content.originalKey;
 
-                // ✅ GET comment count for each short
+                // âœ… GET comment count for each short
                 const commentCount = await Comment.countDocuments({
                     videoId: content._id,
                     onModel: 'Content',
@@ -805,11 +754,11 @@ export const getShortsPlayerFeed = async (req, res) => {
                     title: content.title,
                     description: content.description,
                     duration: content.duration,
-                    thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
-                    videoUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey),
+                    thumbnailUrl: getCfUrl(content.thumbnailKey),
+                    videoUrl: getCfUrl(videoKey),
                     views: content.views,
                     likeCount: content.likeCount || 0,
-                    commentCount, // ✅ ADD
+                    commentCount, // âœ… ADD
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
@@ -818,10 +767,10 @@ export const getShortsPlayerFeed = async (req, res) => {
                 };
             }));
 
-            console.log(`✅ [ShortsPlayerFeed] Fetched ${shorts.length} default shorts`);
+            console.log(`âœ… [ShortsPlayerFeed] Fetched ${shorts.length} default shorts`);
         }
 
-        // ✅ ADD: Attach comment counts for personalized shorts too (if using recommendations)
+        // âœ… ADD: Attach comment counts for personalized shorts too (if using recommendations)
         if (userId && shorts.length > 0) {
             shorts = await attachCommentCounts(shorts);
         }
@@ -845,7 +794,7 @@ export const getShortsPlayerFeed = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error fetching shorts feed:', error);
+        console.error('âŒ Error fetching shorts feed:', error);
         res.status(500).json({ error: 'Failed to fetch shorts' });
     }
 };
@@ -917,7 +866,7 @@ export const getAudioPlayerFeed = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error fetching audio feed:', error);
+        console.error('âŒ Error fetching audio feed:', error);
         res.status(500).json({ error: 'Failed to fetch audio' });
     }
 };
@@ -926,15 +875,15 @@ export const getAudioPlayerFeed = async (req, res) => {
  * Helper function to format audio content with signed URLs
  */
 async function formatAudioContent(content) {
-    // ✅ ADD: Import Comment model
+    // âœ… ADD: Import Comment model
     const Comment = (await import('../../models/comment.model.js')).default;
 
     const thumbnailKey = content.thumbnailKey || content.imageKey;
-    const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, thumbnailKey);
+    const thumbnailUrl = getCfUrl(thumbnailKey);
     const audioKey = content.processedKey || content.originalKey;
-    const audioUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, audioKey);
+    const audioUrl = getCfUrl(audioKey);
 
-    // ✅ ADD: Get comment count
+    // âœ… ADD: Get comment count
     const commentCount = await Comment.countDocuments({
         videoId: content._id,
         onModel: 'Content',
@@ -951,7 +900,7 @@ async function formatAudioContent(content) {
         audioUrl,
         views: content.views || 0,
         likeCount: content.likeCount || 0,
-        commentCount, // ✅ ADD
+        commentCount, // âœ… ADD
         createdAt: content.createdAt,
         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
         channelHandle: content.userId?.channelHandle || null,
@@ -995,7 +944,7 @@ export const getSingleContent = async (req, res) => {
             }
         }
 
-        // ✅ ADD: Get comment count
+        // âœ… ADD: Get comment count
         const Comment = (await import('../../models/comment.model.js')).default;
         const commentCount = await Comment.countDocuments({
             videoId: content._id,
@@ -1004,15 +953,15 @@ export const getSingleContent = async (req, res) => {
         });
 
         // Generate URLs based on content type (with existence check)
-        const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
-        const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
+        const thumbnailUrl = getCfUrl(content.thumbnailKey);
+        const imageUrl = getCfUrl(content.imageKey);
         let mediaUrl = null;
 
         // For posts with multiple images, generate URLs for all images
         let imageUrls = [];
         if (content.contentType === 'post' && content.imageKeys && content.imageKeys.length > 0) {
             imageUrls = await Promise.all(
-                content.imageKeys.map(key => getSignedUrlIfExists(process.env.S3_BUCKET, key))
+                content.imageKeys.map(key => getCfUrl(key))
             );
             // Filter out nulls
             imageUrls = imageUrls.filter(url => url !== null);
@@ -1022,10 +971,10 @@ export const getSingleContent = async (req, res) => {
 
         if (content.contentType === 'short') {
             const videoKey = content.hlsKey || content.processedKey || content.originalKey;
-            mediaUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
+            mediaUrl = getCfUrl(videoKey);
         } else if (content.contentType === 'audio') {
             const audioKey = content.processedKey || content.originalKey;
-            mediaUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, audioKey);
+            mediaUrl = getCfUrl(audioKey);
         }
 
         res.json({
@@ -1042,7 +991,7 @@ export const getSingleContent = async (req, res) => {
             audioUrl: content.contentType === 'audio' ? mediaUrl : null,
             views: content.views,
             likeCount: content.likeCount || 0,
-            commentCount, // ✅ ADD
+            commentCount, // âœ… ADD
             createdAt: content.createdAt,
             channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
             channelHandle: content.userId?.channelHandle || null,
@@ -1057,7 +1006,7 @@ export const getSingleContent = async (req, res) => {
             status: content.status
         });
     } catch (error) {
-        console.error('❌ Error fetching content:', error);
+        console.error('âŒ Error fetching content:', error);
         res.status(500).json({ error: 'Failed to fetch content' });
     }
 };
@@ -1074,23 +1023,23 @@ export const getSingleContent = async (req, res) => {
  * Helper to format post with signed URLs
  */
 async function formatPostWithUrls(post) {
-    // ✅ ADD: Import Comment model
+    // âœ… ADD: Import Comment model
     const Comment = (await import('../../models/comment.model.js')).default;
 
-    const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.thumbnailKey);
-    const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, post.imageKey);
+    const thumbnailUrl = getCfUrl(post.thumbnailKey);
+    const imageUrl = getCfUrl(post.imageKey);
 
     let imageUrls = [];
     if (post.imageKeys && post.imageKeys.length > 0) {
         imageUrls = await Promise.all(
-            post.imageKeys.map(key => getSignedUrlIfExists(process.env.S3_BUCKET, key))
+            post.imageKeys.map(key => getCfUrl(key))
         );
         imageUrls = imageUrls.filter(url => url !== null);
     } else if (imageUrl) {
         imageUrls = [imageUrl];
     }
 
-    // ✅ ADD: Get comment count
+    // âœ… ADD: Get comment count
     const commentCount = await Comment.countDocuments({
         videoId: post._id,
         onModel: 'Content',
@@ -1108,7 +1057,7 @@ async function formatPostWithUrls(post) {
         imageUrls,
         views: post.views,
         likeCount: post.likeCount || 0,
-        commentCount, // ✅ ADD
+        commentCount, // âœ… ADD
         createdAt: post.createdAt,
         channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
         channelHandle: post.userId?.channelHandle || null,

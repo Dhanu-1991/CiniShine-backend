@@ -6,12 +6,9 @@ import Comment from "../../models/comment.model.js";
 import mongoose from 'mongoose';
 import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import stream from 'stream';
-import { promisify } from 'util';
 import { updateViews } from "./videoParameters.js";
 import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.js";
-
-const pipeline = promisify(stream.pipeline);
+import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -37,21 +34,6 @@ async function findHLSFiles(videoId, userId) {
     }
 }
 
-// Helper function to get correct protocol (handles proxies/load balancers)
-function getProtocol(req) {
-    const forwardedProto = req.headers['x-forwarded-proto'];
-    if (forwardedProto) {
-        return forwardedProto.split(',')[0].trim();
-    }
-    if (req.secure) {
-        return 'https';
-    }
-    if (req.headers['x-forwarded-ssl'] === 'on') {
-        return 'https';
-    }
-    return req.protocol;
-}
-
 // Get video metadata
 export const getVideo = async (req, res) => {
     try {
@@ -64,23 +46,8 @@ export const getVideo = async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
-        // Generate signed URL for thumbnail (optional)
-        let thumbnailUrl = null;
-        if (video.thumbnailKey) {
-            try {
-                thumbnailUrl = await getSignedUrl(
-                    s3Client,
-                    new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET,
-                        Key: video.thumbnailKey,
-                    }),
-                    { expiresIn: 3600 }
-                );
-            } catch (err) {
-                console.warn('Could not create signed thumbnail URL:', err.message || err);
-                thumbnailUrl = null;
-            }
-        }
+        // Generate CloudFront URL for thumbnail (optional)
+        const thumbnailUrl = getCfUrl(video.thumbnailKey);
 
         // Prepare renditions data
         const renditions = (video.renditions || []).map(rendition => ({
@@ -137,8 +104,8 @@ export const getVideo = async (req, res) => {
             title: video.title,
             description: video.description,
             duration: video.duration,
-            // point client to backend playlist route (backend will rewrite)
-            hlsMasterUrl: `/api/v2/video/${videoId}/master.m3u8`,
+            // Point client directly to CloudFront HLS master playlist
+            hlsMasterUrl: getCfHlsMasterUrl(video.hlsMasterKey),
             thumbnailUrl,
             renditions,
             status: video.status,
@@ -564,40 +531,23 @@ export const getMyContent = async (req, res) => {
 
         console.log("✅ Videos found:", videos.length);
 
-        const videosWithUrls = await Promise.all(
-            videos.map(async (video) => {
-                let thumbnailUrl = null;
-                if (video.thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: video.thumbnailKey,
-                            }),
-                            { expiresIn: 3600 }
-                        );
-                    } catch (s3Error) {
-                        console.error('❌ Thumbnail error for video:', video._id);
-                        thumbnailUrl = null;
-                    }
-                }
+        const videosWithUrls = videos.map((video) => {
+            const thumbnailUrl = getCfUrl(video.thumbnailKey);
 
-                return {
-                    _id: video._id,
-                    title: video.title,
-                    description: video.description,
-                    duration: video.duration,
-                    status: video.status,
-                    thumbnailUrl,
-                    tags: video.tags,
-                    createdAt: video.createdAt,
-                    renditions: video.renditions || [],
-                    adaptiveStreaming: video.status === 'completed',
-                    prefferedRendition: video.prefferedRendition || 'Auto'
-                };
-            })
-        );
+            return {
+                _id: video._id,
+                title: video.title,
+                description: video.description,
+                duration: video.duration,
+                status: video.status,
+                thumbnailUrl,
+                tags: video.tags,
+                createdAt: video.createdAt,
+                renditions: video.renditions || [],
+                adaptiveStreaming: video.status === 'completed',
+                prefferedRendition: video.prefferedRendition || 'Auto'
+            };
+        });
 
         res.json(videosWithUrls);
     } catch (error) {
@@ -640,45 +590,29 @@ export const getContent = async (req, res) => {
         // Apply pagination to recommendations
         const paginatedVideos = recommendedVideos.slice(skip, skip + limit);
 
-        // Generate thumbnail URLs for the videos
-        const videosWithThumbnails = await Promise.all(
-            paginatedVideos.map(async (video) => {
-                let thumbnailUrl = null;
-                if (video.thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: video.thumbnailKey,
-                            }),
-                            { expiresIn: 3600 }
-                        );
-                    } catch (error) {
-                        console.error('Error generating thumbnail URL:', error);
-                    }
-                }
+        // Generate CloudFront URLs for the videos
+        const videosWithThumbnails = paginatedVideos.map((video) => {
+            const thumbnailUrl = getCfUrl(video.thumbnailKey);
 
-                return {
-                    _id: video._id,
-                    title: video.title,
-                    description: video.description,
-                    duration: video.duration,
-                    thumbnailUrl,
-                    status: video.status,
-                    views: video.views,
-                    createdAt: video.createdAt,
-                    user: {
-                        _id: video.userId._id,
-                        userName: video.userId.userName,
-                        roles: video.userId.roles
-                    },
-                    recommendationScore: video.recommendationScore,// Optional: for debugging
-                    channelName: video.userId?.channelName,
-                    channelPicture: video.userId?.channelPicture || null
-                };
-            })
-        );
+            return {
+                _id: video._id,
+                title: video.title,
+                description: video.description,
+                duration: video.duration,
+                thumbnailUrl,
+                status: video.status,
+                views: video.views,
+                createdAt: video.createdAt,
+                user: {
+                    _id: video.userId._id,
+                    userName: video.userId.userName,
+                    roles: video.userId.roles
+                },
+                recommendationScore: video.recommendationScore,// Optional: for debugging
+                channelName: video.userId?.channelName,
+                channelPicture: video.userId?.channelPicture || null
+            };
+        });
         console.log("videosWithThumbnails prepared : ", videosWithThumbnails);
 
         // Get total count for pagination info
@@ -734,24 +668,10 @@ export const getSpecificContent = async (req, res) => {
             .select('title description duration status thumbnailKey renditions createdAt tags views likeCount dislikeCount commentCount')
             .lean();
 
-        // Attach signed thumbnail URLs and ensure commentCount is accurate (top-level only)
+        // Attach CloudFront thumbnail URLs and ensure commentCount is accurate (top-level only)
         const videosWithMeta = await Promise.all(
             videos.map(async (v) => {
-                let thumbnailUrl = null;
-                if (v.thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: v.thumbnailKey,
-                            }),
-                            { expiresIn: 3600 }
-                        );
-                    } catch (err) {
-                        thumbnailUrl = null;
-                    }
-                }
+                const thumbnailUrl = getCfUrl(v.thumbnailKey);
 
                 // If commentCount is missing or not a number, fallback to counting top-level comments
                 let commentCount = typeof v.commentCount === 'number' ? v.commentCount : undefined;
@@ -1160,39 +1080,22 @@ export const getGeneralContent = async (req, res) => {
 
         console.log("✅ Videos found:", videos.length);
 
-        const videosWithUrls = await Promise.all(
-            videos.map(async (video) => {
-                let thumbnailUrl = null;
-                if (video.thumbnailKey) {
-                    try {
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: video.thumbnailKey,
-                            }),
-                            { expiresIn: 3600 }
-                        );
-                    } catch (s3Error) {
-                        console.error('❌ Thumbnail error for video:', video._id);
-                        thumbnailUrl = null;
-                    }
-                }
+        const videosWithUrls = videos.map((video) => {
+            const thumbnailUrl = getCfUrl(video.thumbnailKey);
 
-                return {
-                    _id: video._id,
-                    title: video.title,
-                    description: video.description,
-                    duration: video.duration,
-                    status: video.status,
-                    thumbnailUrl,
-                    tags: video.tags,
-                    createdAt: video.createdAt,
-                    renditions: video.renditions || [],
-                    adaptiveStreaming: video.status === 'completed'
-                };
-            })
-        );
+            return {
+                _id: video._id,
+                title: video.title,
+                description: video.description,
+                duration: video.duration,
+                status: video.status,
+                thumbnailUrl,
+                tags: video.tags,
+                createdAt: video.createdAt,
+                renditions: video.renditions || [],
+                adaptiveStreaming: video.status === 'completed'
+            };
+        });
 
         res.json(videosWithUrls);
     } catch (error) {

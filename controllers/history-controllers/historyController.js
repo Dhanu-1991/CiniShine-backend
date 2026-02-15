@@ -17,42 +17,7 @@ import mongoose from 'mongoose';
 import WatchHistory from '../../models/watchHistory.model.js';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
-import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-
-const s3Client = new S3Client({
-    region: process.env.AWS_REGION,
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-});
-
-// Extract S3 key from a full URL or return as-is if already a key
-function extractS3Key(urlOrKey) {
-    if (!urlOrKey) return null;
-    if (urlOrKey.startsWith('http')) {
-        try {
-            const url = new URL(urlOrKey);
-            return url.pathname.slice(1); // remove leading "/"
-        } catch {
-            return urlOrKey;
-        }
-    }
-    return urlOrKey;
-}
-
-async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
-    if (!key) return null;
-    const resolvedKey = extractS3Key(key);
-    if (!resolvedKey) return null;
-    try {
-        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: resolvedKey }));
-        return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: resolvedKey }), { expiresIn });
-    } catch {
-        return null;
-    }
-}
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
  * Get paginated watch history for the current user
@@ -108,7 +73,7 @@ export const getWatchHistory = async (req, res) => {
             const creator = await User.findById(content.userId, 'channelPicture channelName profilePicture').lean();
             let channelPicUrl = null;
             if (creator?.channelPicture) {
-                channelPicUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, creator.channelPicture);
+                channelPicUrl = getCfUrl(creator.channelPicture);
             }
 
             return {
@@ -117,8 +82,8 @@ export const getWatchHistory = async (req, res) => {
                 contentType: content.contentType,
                 title: content.title,
                 description: content.description,
-                thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
-                imageUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey),
+                thumbnailUrl: getCfUrl(content.thumbnailKey),
+                imageUrl: getCfUrl(content.imageKey),
                 duration: content.duration,
                 views: content.views || 0,
                 likeCount: content.likeCount || 0,

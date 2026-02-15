@@ -39,8 +39,8 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import Comment from '../../models/comment.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
-import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -49,37 +49,6 @@ const s3Client = new S3Client({
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     },
 });
-
-const s3ExistenceCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
-
-async function s3ObjectExists(bucket, key) {
-    const cacheKey = `${bucket}:${key}`;
-    const cached = s3ExistenceCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.exists;
-    try {
-        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        s3ExistenceCache.set(cacheKey, { exists: true, timestamp: Date.now() });
-        return true;
-    } catch (err) {
-        if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
-            s3ExistenceCache.set(cacheKey, { exists: false, timestamp: Date.now() });
-            return false;
-        }
-        return true;
-    }
-}
-
-async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
-    if (!key) return null;
-    if (!(await s3ObjectExists(bucket, key))) return null;
-    try {
-        return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn });
-    } catch (err) {
-        console.error(`Error generating signed URL for ${key}:`, err.message);
-        return null;
-    }
-}
 
 /**
  * Upload custom thumbnail for content (shorts/audio)
@@ -123,11 +92,11 @@ export const getContent = async (req, res) => {
         const content = await Content.findById(contentId).populate('userId', 'userName channelName channelHandle channelPicture profilePicture');
         if (!content) return res.status(404).json({ error: 'Content not found' });
 
-        const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
-        const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
+        const thumbnailUrl = getCfUrl(content.thumbnailKey);
+        const imageUrl = getCfUrl(content.imageKey);
         let audioUrl = null;
         if (content.contentType === 'audio' && content.originalKey) {
-            audioUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.originalKey);
+            audioUrl = getCfUrl(content.originalKey);
         }
 
         res.json({
@@ -169,7 +138,7 @@ export const getUserContent = async (req, res) => {
         const contentsWithUrls = await Promise.all(contents.map(async (content) => ({
             _id: content._id, contentType: content.contentType, title: content.title,
             description: content.description, status: content.status, createdAt: content.createdAt,
-            thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
+            thumbnailUrl: getCfUrl(content.thumbnailKey),
             views: content.views, likeCount: content.likeCount
         })));
 
@@ -209,8 +178,8 @@ export const getFeedContent = async (req, res) => {
                 _id: content._id, contentType: content.contentType, title: content.title,
                 description: content.description, postContent: content.postContent,
                 duration: content.duration,
-                thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey),
-                imageUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey),
+                thumbnailUrl: getCfUrl(content.thumbnailKey),
+                imageUrl: getCfUrl(content.imageKey),
                 views: content.views, likeCount: content.likeCount, commentCount,
                 createdAt: content.createdAt, user: content.userId, channelName: content.channelName
             };
@@ -238,12 +207,12 @@ export const getSingleContent = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
 
         const commentCount = await Comment.countDocuments({ videoId: content._id, onModel: 'Content', parentCommentId: null });
-        const thumbnailUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.thumbnailKey);
-        const imageUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, content.imageKey);
+        const thumbnailUrl = getCfUrl(content.thumbnailKey);
+        const imageUrl = getCfUrl(content.imageKey);
 
         let imageUrls = [];
         if (content.contentType === 'post' && content.imageKeys?.length > 0) {
-            imageUrls = (await Promise.all(content.imageKeys.map(key => getSignedUrlIfExists(process.env.S3_BUCKET, key)))).filter(Boolean);
+            imageUrls = (await Promise.all(content.imageKeys.map(key => getCfUrl(key)))).filter(Boolean);
         } else if (imageUrl) {
             imageUrls = [imageUrl];
         }
@@ -251,10 +220,10 @@ export const getSingleContent = async (req, res) => {
         let mediaUrl = null;
         if (content.contentType === 'short') {
             const videoKey = content.hlsKey || content.processedKey || content.originalKey;
-            mediaUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, videoKey);
+            mediaUrl = getCfUrl(videoKey);
         } else if (content.contentType === 'audio') {
             const audioKey = content.processedKey || content.originalKey;
-            mediaUrl = await getSignedUrlIfExists(process.env.S3_BUCKET, audioKey);
+            mediaUrl = getCfUrl(audioKey);
         }
 
         res.json({

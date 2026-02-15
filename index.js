@@ -19,6 +19,8 @@ import historyRouter from "./routes/historyRoutes/historyRouter.js"; // Watch hi
 import profileRouter from "./routes/profileRoutes/profileRouter.js"; // Creator profile
 import channelPicRouter from "./routes/pictureRoutes/channelPicRouter.js";
 import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
+import { issueCloudFrontCookies } from "./config/cloudfront.js";
+import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
 
 const app = express();
 
@@ -69,6 +71,10 @@ app.use("/api/v2/content", contentRouter); // Shorts, Audio, Posts
 app.use("/api/v2/channel", channelRouter); // Channel pages
 app.use("/api/v2/history", historyRouter); // Watch history
 app.use("/api/v2/profile", profileRouter); // Creator profile
+
+// CloudFront signed cookies endpoint (protected — user must be logged in)
+app.get("/api/v2/auth/cloudfront-cookies", universalTokenVerifier, issueCloudFrontCookies);
+
 app.use(errorHandlingMiddleware);
 
 mongoose

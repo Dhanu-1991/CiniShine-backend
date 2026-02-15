@@ -5,6 +5,7 @@
  */
 
 import Content from '../models/content.model.js';
+import { getCfUrl } from '../config/cloudfront.js';
 
 /**
  * Find similar videos based on content analysis
@@ -40,54 +41,22 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
         const endIndex = startIndex + limit;
         const paginatedVideos = scoredVideos.slice(startIndex, endIndex);
 
-        // Generate thumbnail URLs
-        const videosWithUrls = await Promise.all(
-            paginatedVideos.map(async (video) => {
-                let thumbnailUrl = null;
-                if (video.thumbnailKey) {
-                    try {
-                        // Import s3Client here or pass it
-                        const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
-                        const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
-
-                        const s3Client = new S3Client({
-                            region: process.env.AWS_REGION,
-                            credentials: {
-                                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-                                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-                            },
-                        });
-
-                        thumbnailUrl = await getSignedUrl(
-                            s3Client,
-                            new GetObjectCommand({
-                                Bucket: process.env.S3_BUCKET,
-                                Key: video.thumbnailKey,
-                            }),
-                            { expiresIn: 3600 }
-                        );
-                    } catch (error) {
-                        console.error('Error generating thumbnail URL:', error);
-                    }
-                }
-
-                return {
-                    _id: video._id,
-                    title: video.title,
-                    description: video.description,
-                    duration: video.duration,
-                    thumbnailUrl,
-                    views: video.views,
-                    createdAt: video.createdAt,
-                    user: video.userId,
-                    // ✅ FIX: Use channelName from video or fallback to userName
-                    channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
-                    // ✅ FIX: Get channelPicture from populated userId
-                    channelPicture: video.userId?.channelPicture || null,
-                    similarityScore: video.similarityScore
-                };
-            })
-        );
+        // Generate thumbnail URLs (CloudFront — sync, no S3 presign)
+        const videosWithUrls = paginatedVideos.map((video) => {
+            return {
+                _id: video._id,
+                title: video.title,
+                description: video.description,
+                duration: video.duration,
+                thumbnailUrl: getCfUrl(video.thumbnailKey),
+                views: video.views,
+                createdAt: video.createdAt,
+                user: video.userId,
+                channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+                channelPicture: video.userId?.channelPicture || null,
+                similarityScore: video.similarityScore
+            };
+        });
 
         const totalVideos = scoredVideos.length;
         const hasNextPage = endIndex < totalVideos;

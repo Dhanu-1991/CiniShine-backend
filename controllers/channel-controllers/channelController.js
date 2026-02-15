@@ -11,62 +11,7 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
-import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-
-const s3Client = new S3Client({
-    region: process.env.AWS_REGION,
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-});
-
-const s3ExistenceCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
-
-async function s3ObjectExists(bucket, key) {
-    const cacheKey = `${bucket}:${key}`;
-    const cached = s3ExistenceCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.exists;
-    try {
-        await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        s3ExistenceCache.set(cacheKey, { exists: true, timestamp: Date.now() });
-        return true;
-    } catch (err) {
-        if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
-            s3ExistenceCache.set(cacheKey, { exists: false, timestamp: Date.now() });
-            return false;
-        }
-        return true;
-    }
-}
-
-// Extract S3 key from a full URL or return as-is if already a key
-function extractS3Key(urlOrKey) {
-    if (!urlOrKey) return null;
-    if (urlOrKey.startsWith('http')) {
-        try {
-            const url = new URL(urlOrKey);
-            return url.pathname.slice(1); // remove leading "/"
-        } catch {
-            return urlOrKey;
-        }
-    }
-    return urlOrKey;
-}
-
-async function getSignedUrlIfExists(bucket, key, expiresIn = 3600) {
-    if (!key) return null;
-    const resolvedKey = extractS3Key(key);
-    if (!resolvedKey) return null;
-    if (!(await s3ObjectExists(bucket, resolvedKey))) return null;
-    try {
-        return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: resolvedKey }), { expiresIn });
-    } catch {
-        return null;
-    }
-}
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
  * Get channel page data by channelName
@@ -129,8 +74,8 @@ export const getChannelPage = async (req, res) => {
             views: item.views || 0,
             likeCount: item.likeCount || 0,
             createdAt: item.createdAt,
-            thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.thumbnailKey),
-            imageUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.imageKey),
+            thumbnailUrl: getCfUrl(item.thumbnailKey),
+            imageUrl: getCfUrl(item.imageKey),
         })));
 
         // Popular content (top 6 by views, public only)
@@ -152,16 +97,16 @@ export const getChannelPage = async (req, res) => {
             views: item.views || 0,
             likeCount: item.likeCount || 0,
             createdAt: item.createdAt,
-            thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.thumbnailKey),
-            imageUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.imageKey),
+            thumbnailUrl: getCfUrl(item.thumbnailKey),
+            imageUrl: getCfUrl(item.imageKey),
         })));
 
         // Channel picture URL
         const channelPictureUrl = user.channelPicture
-            ? await getSignedUrlIfExists(process.env.S3_BUCKET, user.channelPicture)
+            ? getCfUrl(user.channelPicture)
             : null;
         const profilePictureUrl = user.profilePicture
-            ? await getSignedUrlIfExists(process.env.S3_BUCKET, user.profilePicture)
+            ? getCfUrl(user.profilePicture)
             : null;
 
         res.json({
@@ -237,8 +182,8 @@ export const getChannelContent = async (req, res) => {
             views: item.views || 0,
             likeCount: item.likeCount || 0,
             createdAt: item.createdAt,
-            thumbnailUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.thumbnailKey),
-            imageUrl: await getSignedUrlIfExists(process.env.S3_BUCKET, item.imageKey),
+            thumbnailUrl: getCfUrl(item.thumbnailKey),
+            imageUrl: getCfUrl(item.imageKey),
         })));
 
         res.json({

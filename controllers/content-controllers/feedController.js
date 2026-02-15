@@ -1,46 +1,17 @@
-// controllers/content-controllers/feedController.js
+﻿// controllers/content-controllers/feedController.js
 
 import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { recommendationEngine } from '../../algorithms/recommendationAlgorithm.js';
-
-const s3Client = new S3Client({
-    region: process.env.AWS_REGION,
-    credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-});
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
- * Generate signed URL for S3 objects
+ * Generate CloudFront URL for S3 objects (replaces S3 signed URLs)
  */
-const generateSignedUrl = async (key) => {
-    if (!key) {
-        console.warn(`⚠️ [S3] No key provided for signed URL generation`);
-        return null;
-    }
-    try {
-        const url = await getSignedUrl(
-            s3Client,
-            new GetObjectCommand({
-                Bucket: process.env.S3_BUCKET,
-                Key: key,
-            }),
-            { expiresIn: 3600 }
-        );
-        console.log(`✅ [S3] Generated signed URL for key: ${key.substring(0, 50)}...`);
-        return url;
-    } catch (error) {
-        console.error(`❌ [S3] Error generating signed URL for key ${key}:`, error.message);
-        return null;
-    }
-};
+const generateCfUrl = (key) => getCfUrl(key);
 
 
 /**
@@ -102,8 +73,8 @@ export const getMixedFeed = async (req, res) => {
         const videosSkip = (pageNum - 1) * videosLimitNum;
         const postsSkip = (pageNum - 1) * postsLimitNum;
 
-        console.log(`📥 [Feed] getMixedFeed called - userId: ${userId}, page: ${pageNum}`);
-        console.log(`📥 [Feed] Skips: shorts=${shortsSkip}, audio=${audioSkip}, videos=${videosSkip}, posts=${postsSkip}`);
+        console.log(`ðŸ“¥ [Feed] getMixedFeed called - userId: ${userId}, page: ${pageNum}`);
+        console.log(`ðŸ“¥ [Feed] Skips: shorts=${shortsSkip}, audio=${audioSkip}, videos=${videosSkip}, posts=${postsSkip}`);
 
         // Get user's subscriptions for posts filtering
         let subscribedCreatorIds = [];
@@ -192,8 +163,8 @@ export const getMixedFeed = async (req, res) => {
         // Wait for all fetches to complete
         const [shorts, audioContent, videos, posts, totalShorts, totalAudio, totalVideos, totalPosts] = await Promise.all(fetchPromises);
 
-        console.log(`✅ [Feed] Fetched: ${shorts.length} shorts, ${audioContent.length} audio, ${videos.length} videos, ${posts.length} posts`);
-        console.log(`📊 [Feed] Page ${pageNum} | Skips: shorts=${shortsSkip}, audio=${audioSkip}, videos=${videosSkip}, posts=${postsSkip}`);
+        console.log(`âœ… [Feed] Fetched: ${shorts.length} shorts, ${audioContent.length} audio, ${videos.length} videos, ${posts.length} posts`);
+        console.log(`ðŸ“Š [Feed] Page ${pageNum} | Skips: shorts=${shortsSkip}, audio=${audioSkip}, videos=${videosSkip}, posts=${postsSkip}`);
 
         // Process content with signed URLs
         // Generate signed URLs for all content types in parallel
@@ -205,7 +176,7 @@ export const getMixedFeed = async (req, res) => {
                 title: content.title,
                 description: content.description,
                 duration: content.duration,
-                thumbnailUrl: await generateSignedUrl(content.thumbnailKey),
+                thumbnailUrl: generateCfUrl(content.thumbnailKey),
                 views: content.views,
                 likeCount: content.likeCount,
                 createdAt: content.createdAt,
@@ -222,8 +193,8 @@ export const getMixedFeed = async (req, res) => {
                 title: content.title,
                 description: content.description,
                 duration: content.duration,
-                thumbnailUrl: await generateSignedUrl(content.thumbnailKey || content.imageKey),
-                imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                thumbnailUrl: generateCfUrl(content.thumbnailKey || content.imageKey),
+                imageUrl: content.imageKey ? generateCfUrl(content.imageKey) : null,
                 views: content.views,
                 likeCount: content.likeCount,
                 createdAt: content.createdAt,
@@ -244,7 +215,7 @@ export const getMixedFeed = async (req, res) => {
                 title: video.title,
                 description: video.description,
                 duration: video.duration,
-                thumbnailUrl: await generateSignedUrl(video.thumbnailKey),
+                thumbnailUrl: generateCfUrl(video.thumbnailKey),
                 views: video.views,
                 likeCount: video.likes?.length || 0,
                 createdAt: video.createdAt,
@@ -262,8 +233,8 @@ export const getMixedFeed = async (req, res) => {
                 title: content.title,
                 description: content.description,
                 postContent: content.postContent,
-                thumbnailUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
-                imageUrl: content.imageKey ? await generateSignedUrl(content.imageKey) : null,
+                thumbnailUrl: content.imageKey ? generateCfUrl(content.imageKey) : null,
+                imageUrl: content.imageKey ? generateCfUrl(content.imageKey) : null,
                 views: content.views,
                 likeCount: content.likeCount,
                 createdAt: content.createdAt,
@@ -356,9 +327,9 @@ export const getMixedFeed = async (req, res) => {
         const hasMoreVideos = (videosSkip + processedVideos.length) < totalVideos;
         const hasMorePosts = (postsSkip + processedPosts.length) < totalPosts;
 
-        console.log(`📊 [Feed] Page ${pageNum} - served: shorts=${processedShorts.length}, audio=${processedAudio.length}, videos=${processedVideos.length}, posts=${processedPosts.length}`);
-        console.log(`📊 [Feed] Totals - shorts: ${totalShorts}, audio: ${totalAudio}, videos: ${totalVideos}, posts: ${totalPosts}`);
-        console.log(`📊 [Feed] hasMore - shorts: ${hasMoreShorts}, audio: ${hasMoreAudio}, videos: ${hasMoreVideos}, posts: ${hasMorePosts}`);
+        console.log(`ðŸ“Š [Feed] Page ${pageNum} - served: shorts=${processedShorts.length}, audio=${processedAudio.length}, videos=${processedVideos.length}, posts=${processedPosts.length}`);
+        console.log(`ðŸ“Š [Feed] Totals - shorts: ${totalShorts}, audio: ${totalAudio}, videos: ${totalVideos}, posts: ${totalPosts}`);
+        console.log(`ðŸ“Š [Feed] hasMore - shorts: ${hasMoreShorts}, audio: ${hasMoreAudio}, videos: ${hasMoreVideos}, posts: ${hasMorePosts}`);
 
         // Continue pagination if ANY content type has more and within max page limit
         const hasNextPage = pageNum < maxPages && (hasMoreShorts || hasMoreAudio || hasMoreVideos || hasMorePosts);
@@ -387,7 +358,7 @@ export const getMixedFeed = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Error fetching mixed feed:', error);
+        console.error('âŒ Error fetching mixed feed:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -428,7 +399,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 .sort({ views: -1, createdAt: -1 })
                 .limit(parseInt(shortsLimit));
 
-            console.log(`📥 [Recommendations] Fetched ${shorts.length} shorts for first page`);
+            console.log(`ðŸ“¥ [Recommendations] Fetched ${shorts.length} shorts for first page`);
             shorts.forEach((short, idx) => {
                 console.log(`  Short ${idx}: ${short._id}, thumbnailKey: ${short.thumbnailKey}, title: ${short.title}`);
             });
@@ -456,8 +427,8 @@ export const getRecommendationsWithShorts = async (req, res) => {
         // Process shorts with URLs
         const processedShorts = await Promise.all(
             shorts.map(async (content, idx) => {
-                const thumbnailUrl = await generateSignedUrl(content.thumbnailKey);
-                console.log(`✅ [Recommendations] Processing short ${idx}: ${content._id}, URL: ${thumbnailUrl ? 'generated' : 'null'}`);
+                const thumbnailUrl = generateCfUrl(content.thumbnailKey);
+                console.log(`âœ… [Recommendations] Processing short ${idx}: ${content._id}, URL: ${thumbnailUrl ? 'generated' : 'null'}`);
                 return {
                     _id: content._id,
                     contentType: 'short',
@@ -484,7 +455,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 title: video.title,
                 description: video.description,
                 duration: video.duration,
-                thumbnailUrl: await generateSignedUrl(video.thumbnailKey),
+                thumbnailUrl: generateCfUrl(video.thumbnailKey),
                 views: video.views,
                 likeCount: video.likes?.length || 0,
                 createdAt: video.createdAt,
@@ -512,7 +483,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Error fetching recommendations with shorts:', error);
+        console.error('âŒ Error fetching recommendations with shorts:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
