@@ -19,6 +19,9 @@ import historyRouter from "./routes/historyRoutes/historyRouter.js"; // Watch hi
 import profileRouter from "./routes/profileRoutes/profileRouter.js"; // Creator profile
 import channelPicRouter from "./routes/pictureRoutes/channelPicRouter.js";
 import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
+import bookmarkRouter from "./routes/bookmarkRoutes/bookmarkRouter.js";
+import chatRouter from "./routes/chatRoutes/chatRouter.js";
+import notificationRouter from "./routes/notificationRoutes/notificationRouter.js";
 import { issueCloudFrontCookies } from "./config/cloudfront.js";
 import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
 
@@ -71,6 +74,9 @@ app.use("/api/v2/content", contentRouter); // Shorts, Audio, Posts
 app.use("/api/v2/channel", channelRouter); // Channel pages
 app.use("/api/v2/history", historyRouter); // Watch history
 app.use("/api/v2/profile", profileRouter); // Creator profile
+app.use("/api/v2/bookmarks", bookmarkRouter); // Bookmarks
+app.use("/api/v2/chats", chatRouter); // Chat / Messaging
+app.use("/api/v2/notifications", notificationRouter); // Notifications
 
 // CloudFront signed cookies endpoint (protected — user must be logged in)
 app.get("/api/v2/auth/cloudfront-cookies", universalTokenVerifier, issueCloudFrontCookies);

@@ -10,6 +10,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getCfUrl } from '../../config/cloudfront.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
+import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -93,6 +94,13 @@ export const audioUploadComplete = async (req, res) => {
         if (selectedRoles) updateData.selectedRoles = selectedRoles;
 
         await Content.findByIdAndUpdate(fileId, updateData);
+
+        // Notify subscribers about the new audio
+        createUploadNotifications(
+            content.userId, fileId, 'audio',
+            updateData.title || content.title, content.thumbnailKey || content.imageKey
+        ).catch(err => console.error('Notification error:', err));
+
         console.log(`✅ Audio upload completed: ${fileId}`);
         res.json({ success: true, message: 'Audio uploaded successfully', contentId: fileId });
     } catch (error) {

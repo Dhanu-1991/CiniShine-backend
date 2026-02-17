@@ -10,6 +10,7 @@ import User from '../../models/user.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getCfUrl } from '../../config/cloudfront.js';
+import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -77,6 +78,12 @@ export const createPost = async (req, res) => {
             status: 'completed',
             publishedAt: new Date()
         });
+
+        // Notify subscribers about the new post
+        createUploadNotifications(
+            userId, post._id, 'post',
+            post.title, post.imageKey
+        ).catch(err => console.error('Notification error:', err));
 
         console.log(`✅ Post created: ${fileId} by user ${userId}`);
         res.json({

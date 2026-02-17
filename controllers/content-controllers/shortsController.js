@@ -10,6 +10,7 @@ import Comment from '../../models/comment.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
+import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 import { getCfUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
@@ -92,6 +93,12 @@ export const shortUploadComplete = async (req, res) => {
         if (selectedRoles) updateData.selectedRoles = selectedRoles;
 
         await Content.findByIdAndUpdate(fileId, updateData);
+
+        // Notify subscribers about the new short
+        createUploadNotifications(
+            content.userId, fileId, 'short',
+            updateData.title || content.title, content.thumbnailKey
+        ).catch(err => console.error('Notification error:', err));
 
         console.log(`✅ Short upload completed: ${fileId}`);
         res.json({ success: true, message: 'Short uploaded successfully, processing started', contentId: fileId });

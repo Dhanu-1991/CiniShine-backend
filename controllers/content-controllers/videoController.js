@@ -9,6 +9,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { updateViews } from "./videoParameters.js";
 import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.js";
 import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
+import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -1019,11 +1020,20 @@ export const uploadComplete = async (req, res) => {
             return res.status(400).json({ error: 'Invalid file ID' });
         }
 
-        await Content.findByIdAndUpdate(fileId, {
+        const content = await Content.findByIdAndUpdate(fileId, {
             status: 'processing',
             'sizes.original': fileSize,
             processingStart: new Date()
-        });
+        }, { new: true });
+
+        // Notify subscribers about the new upload
+        if (content) {
+            createUploadNotifications(
+                content.userId, content._id, 'video',
+                content.title, content.thumbnailKey
+            ).catch(err => console.error('Notification error:', err));
+        }
+
         res.json({ success: true, message: 'Queue reset and video added' });
     } catch (error) {
         console.error('Error completing upload:', error);
