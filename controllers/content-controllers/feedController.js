@@ -181,7 +181,7 @@ export const getMixedFeed = async (req, res) => {
                 likeCount: content.likeCount,
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
-                channelPicture: content.userId?.channelPicture || null,
+                channelPicture: generateCfUrl(content.userId?.channelPicture) || null,
                 userId: content.userId?._id,
                 status: content.status
             }))),
@@ -200,7 +200,7 @@ export const getMixedFeed = async (req, res) => {
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelHandle: content.userId?.channelHandle || null,
-                channelPicture: content.userId?.channelPicture || null,
+                channelPicture: generateCfUrl(content.userId?.channelPicture) || null,
                 userId: content.userId?._id,
                 artist: content.artist,
                 album: content.album,
@@ -221,7 +221,7 @@ export const getMixedFeed = async (req, res) => {
                 createdAt: video.createdAt,
                 channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
                 channelHandle: video.userId?.channelHandle || null,
-                channelPicture: video.userId?.channelPicture || null,
+                channelPicture: generateCfUrl(video.userId?.channelPicture) || null,
                 userId: video.userId?._id,
                 status: video.status
             }))),
@@ -240,7 +240,7 @@ export const getMixedFeed = async (req, res) => {
                 createdAt: content.createdAt,
                 channelName: content.userId?.channelName || content.userId?.userName || 'Unknown Channel',
                 channelHandle: content.userId?.channelHandle || null,
-                channelPicture: content.userId?.channelPicture || null,
+                channelPicture: generateCfUrl(content.userId?.channelPicture) || null,
                 userId: content.userId?._id,
                 status: content.status
             })))

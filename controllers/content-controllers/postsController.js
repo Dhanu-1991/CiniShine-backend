@@ -208,7 +208,7 @@ async function formatPostWithUrls(post) {
         createdAt: post.createdAt,
         channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
         channelHandle: post.userId?.channelHandle || null,
-        channelPicture: post.userId?.channelPicture,
+        channelPicture: getCfUrl(post.userId?.channelPicture),
         userId: post.userId?._id || post.userId, tags: post.tags, visibility: post.visibility
     };
 }

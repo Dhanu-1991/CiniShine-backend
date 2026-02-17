@@ -52,6 +52,38 @@ const ConversationSchema = new mongoose.Schema({
         of: Number,
         default: {}
     },
+    // ─── Group chat fields ───────────────────────────────────────────
+    isGroup: {
+        type: Boolean,
+        default: false
+    },
+    groupName: {
+        type: String,
+        default: ''
+    },
+    // Optional uploaded group picture (S3 key)
+    groupPictureKey: {
+        type: String,
+        default: null
+    },
+    // User IDs who are admins of this group
+    adminIds: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
+    // Pending invitations: { userId, invitedBy }
+    pendingInvites: [{
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        invitedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    }],
+    // ─── Soft-delete per user ───────────────────────────────────────
+    // When a user hides the conversation, we store their userId here.
+    // The conversation is hidden only for them; the other side is unaffected.
+    deletedBy: {
+        type: Map,
+        of: Date,
+        default: {}
+    },
     updatedAt: {
         type: Date,
         default: Date.now

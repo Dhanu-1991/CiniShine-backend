@@ -20,7 +20,7 @@ const MessageSchema = new mongoose.Schema({
     recipientId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
+        required: false, // null for group messages
         index: true
     },
     text: {
@@ -53,6 +53,18 @@ const MessageSchema = new mongoose.Schema({
     editedAt: {
         type: Date,
         default: null
+    },
+    // For group messages: the conversation this message belongs to
+    conversationId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Conversation',
+        default: null,
+        index: true
+    },
+    // Whether this message was deleted from one side (stores userId → deletedAt)
+    deletedBySender: {
+        type: Boolean,
+        default: false
     },
     createdAt: {
         type: Date,

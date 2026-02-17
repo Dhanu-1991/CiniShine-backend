@@ -693,7 +693,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
-                    channelPicture: content.userId?.channelPicture,
+                    channelPicture: getCfUrl(content.userId?.channelPicture),
                     userId: content.userId?._id || content.userId,
                     tags: content.tags
                 };
@@ -761,7 +761,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     commentCount, // âœ… ADD
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
-                    channelPicture: content.userId?.channelPicture,
+                    channelPicture: getCfUrl(content.userId?.channelPicture),
                     userId: content.userId?._id || content.userId,
                     tags: content.tags
                 };
@@ -904,7 +904,7 @@ async function formatAudioContent(content) {
         createdAt: content.createdAt,
         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
         channelHandle: content.userId?.channelHandle || null,
-        channelPicture: content.userId?.channelPicture,
+        channelPicture: getCfUrl(content.userId?.channelPicture),
         userId: content.userId?._id || content.userId,
         artist: content.artist,
         album: content.album,
@@ -995,7 +995,7 @@ export const getSingleContent = async (req, res) => {
             createdAt: content.createdAt,
             channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
             channelHandle: content.userId?.channelHandle || null,
-            channelPicture: content.userId?.channelPicture,
+            channelPicture: getCfUrl(content.userId?.channelPicture),
             userId: content.userId?._id || content.userId,
             tags: content.tags,
             category: content.category,
