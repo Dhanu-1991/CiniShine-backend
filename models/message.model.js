@@ -49,6 +49,11 @@ const MessageSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    // Set when sender edits their own message
+    editedAt: {
+        type: Date,
+        default: null
+    },
     createdAt: {
         type: Date,
         default: Date.now

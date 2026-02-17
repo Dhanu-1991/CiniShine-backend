@@ -78,12 +78,12 @@ export const sendMessage = async (req, res) => {
             };
             conversation.unreadCount.set(recipientId, currentUnread + 1);
             conversation.updatedAt = new Date();
-            
+
             // If previously archived and sender is messaging again, un-archive
             if (conversation.archived && conversation.initiatorId.toString() === senderId) {
                 conversation.archived = false;
             }
-            
+
             await conversation.save();
         }
 
@@ -435,6 +435,96 @@ export const markConversationRead = async (req, res) => {
     } catch (error) {
         console.error('Error marking conversation as read:', error);
         return res.status(500).json({ message: 'Failed to mark as read' });
+    }
+};
+
+/**
+ * Edit a sent message (sender only)
+ * PATCH /api/v2/chats/message/:messageId
+ * Body: { text }
+ */
+export const editMessage = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageId } = req.params;
+        const { text } = req.body;
+
+        if (!text?.trim()) {
+            return res.status(400).json({ message: 'Text is required' });
+        }
+        if (!mongoose.Types.ObjectId.isValid(messageId)) {
+            return res.status(400).json({ message: 'Invalid message ID' });
+        }
+
+        const message = await Message.findOne({
+            _id: messageId,
+            senderId: new mongoose.Types.ObjectId(userId)
+        });
+        if (!message) {
+            return res.status(404).json({ message: 'Message not found or not yours' });
+        }
+
+        message.text = text.trim();
+        message.editedAt = new Date();
+        await message.save();
+
+        return res.json({
+            message: 'Message edited',
+            data: { _id: message._id, text: message.text, editedAt: message.editedAt }
+        });
+    } catch (error) {
+        console.error('Error editing message:', error);
+        return res.status(500).json({ message: 'Failed to edit message' });
+    }
+};
+
+/**
+ * Delete a sent message (sender only)
+ * DELETE /api/v2/chats/message/:messageId
+ */
+export const deleteMessage = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(messageId)) {
+            return res.status(400).json({ message: 'Invalid message ID' });
+        }
+
+        const message = await Message.findOne({
+            _id: messageId,
+            senderId: new mongoose.Types.ObjectId(userId)
+        });
+        if (!message) {
+            return res.status(404).json({ message: 'Message not found or not yours' });
+        }
+
+        await message.deleteOne();
+
+        // If this was the lastMessage in the conversation, update it
+        const conversation = await Conversation.findOne({
+            participants: { $all: [message.senderId, message.recipientId] }
+        });
+        if (conversation && conversation.lastMessage?.text === message.text) {
+            // Fetch the previous message
+            const prev = await Message.findOne({
+                $or: [
+                    { senderId: message.senderId, recipientId: message.recipientId },
+                    { senderId: message.recipientId, recipientId: message.senderId }
+                ]
+            }).sort({ createdAt: -1 });
+            if (prev) {
+                conversation.lastMessage = { text: prev.text, senderId: prev.senderId, createdAt: prev.createdAt };
+            } else {
+                conversation.lastMessage = null;
+            }
+            await conversation.save();
+        }
+
+        return res.json({ message: 'Message deleted', messageId });
+    } catch (error) {
+        console.error('Error deleting message:', error);
+        return res.status(500).json({ message: 'Failed to delete message' });
     }
 };
 

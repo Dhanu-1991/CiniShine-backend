@@ -11,7 +11,9 @@ import {
     ignoreRequest,
     getUnreadCount,
     markConversationRead,
-    searchConversations
+    searchConversations,
+    editMessage,
+    deleteMessage
 } from '../../controllers/chat-controllers/chatController.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
@@ -46,5 +48,11 @@ router.post('/ignore/:conversationId', ignoreRequest);
 
 // Mark conversation as read
 router.post('/mark-read/:conversationId', markConversationRead);
+
+// Edit a sent message (sender only)
+router.patch('/message/:messageId', editMessage);
+
+// Delete a sent message (sender only)
+router.delete('/message/:messageId', deleteMessage);
 
 export default router;
