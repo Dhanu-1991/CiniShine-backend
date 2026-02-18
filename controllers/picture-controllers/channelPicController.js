@@ -3,7 +3,7 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client
 import { v4 as uuidv4 } from "uuid";
 import sharp from "sharp";
 import path from "path";
-import { getCfUrl } from "../../config/cloudfront.js";
+import { getCfUrl } from "../../../config/cloudfront.js";
 
 /* ======================================================
    S3 CLIENT

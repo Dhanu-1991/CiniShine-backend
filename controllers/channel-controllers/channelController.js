@@ -11,7 +11,7 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl } from '../../../config/cloudfront.js';
 
 /**
  * Get channel page data by channelName

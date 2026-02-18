@@ -8,7 +8,7 @@ import Content from '../../models/content.model.js';
 import Comment from '../../models/comment.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl } from '../../../config/cloudfront.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 

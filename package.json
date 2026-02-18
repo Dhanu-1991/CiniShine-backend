@@ -15,6 +15,7 @@
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.893.0",
+    "@aws-sdk/client-ses": "^3.993.0",
     "@aws-sdk/cloudfront-signer": "^3.988.0",
     "@aws-sdk/s3-request-presigner": "^3.893.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
@@ -43,7 +44,7 @@
     "nodemailer": "^7.0.13",
     "path": "^0.12.7",
     "redis": "^5.5.6",
-    "resend": "^6.6.0",
+    "resend": "^6.9.2",
     "sharp": "^0.34.5",
     "sib-api-v3-sdk": "^8.5.0",
     "twilio": "^5.7.2",

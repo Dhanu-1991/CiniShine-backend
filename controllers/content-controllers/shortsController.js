@@ -11,7 +11,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl } from '../../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,

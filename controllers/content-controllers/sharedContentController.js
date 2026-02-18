@@ -40,7 +40,7 @@ import Content from '../../models/content.model.js';
 import Comment from '../../models/comment.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl } from '../../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,

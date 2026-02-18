@@ -5,7 +5,7 @@
  */
 
 import Content from '../models/content.model.js';
-import { getCfUrl } from '../config/cloudfront.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
  * Find similar videos based on content analysis

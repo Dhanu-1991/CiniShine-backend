@@ -8,7 +8,7 @@ import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } fr
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { updateViews } from "./videoParameters.js";
 import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.js";
-import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
+import { getCfUrl, getCfHlsMasterUrl } from "../../../config/cloudfront.js";
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 
 const s3Client = new S3Client({

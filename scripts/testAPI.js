@@ -1,42 +1,49 @@
-import Mailjet from "node-mailjet";
+import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { Resend } from "resend";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// initialize SDK
-const mailjet = Mailjet.apiConnect(
-    process.env.MAILJET_API_KEY,
-    process.env.MAILJET_API_SECRET
-);
+const ses = new SESClient({ region: process.env.AWS_REGION || "us-east-1" });
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 async function sendEmail() {
-    try {
-        const request = mailjet
-            .post("send", { version: "v3.1" })
-            .request({
-                Messages: [
-                    {
-                        From: {
-                            Email: "dhanushkumarvr019@gmail.com",
-                            Name: "Cini Shine",
-                        },
-                        To: [
-                            {
-                                Email: "dhanushkumarvr@gmail.com",
-                                Name: "Dhanush Kumar V R",
-                            },
-                        ],
-                        Subject: "Verification Email from Cini Shine",
-                        TextPart: "Your one-time password is 983425.",
-                        HTMLPart: "<h1>OTP IS 983425!</h1>",
-                    },
-                ],
+    // Use Resend if configured
+    if (resend) {
+        try {
+            const response = await resend.emails.send({
+                from: process.env.EMAIL_USER || "admin@watchinit.com",
+                to: "dhanushkumarvr@gmail.com",
+                subject: "Your OTP Code",
+                html: "<h1>Your OTP is 983425</h1>",
             });
 
-        const result = await request;
-        console.log("Mailjet response:", result.body);
+            console.log("Resend response:", response);
+            return;
+        } catch (err) {
+            console.error("Resend error:", err);
+            // fallthrough to SES
+        }
+    }
+
+    // Fallback to SES
+    try {
+        const params = {
+            Destination: { ToAddresses: ["dhanushkumarvr@gmail.com"] },
+            Message: {
+                Body: {
+                    Html: { Charset: "UTF-8", Data: "<h1>OTP IS 983425!</h1>" },
+                    Text: { Charset: "UTF-8", Data: "Your one-time password is 983425." },
+                },
+                Subject: { Charset: "UTF-8", Data: "Verification Email from Watchinit" },
+            },
+            Source: process.env.EMAIL_USER || "admin@watchinit.com",
+        };
+
+        const result = await ses.send(new SendEmailCommand(params));
+        console.log("SES response:", result);
     } catch (error) {
-        console.error("Mailjet error:", error.statusCode, error.body);
+        console.error("SES error:", error);
     }
 }
 

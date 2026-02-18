@@ -1,45 +1,62 @@
-import axios from "axios";
+import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { Resend } from "resend";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const PROMAILER_ENDPOINT = process.env.PROMAILER_URL || "https://mailserver.automationlounge.com/api/v1/messages/send";
+const REGION = process.env.AWS_REGION || "us-east-1";
+const FROM_ADDRESS = process.env.EMAIL_USER || "no-reply@example.com";
+
+const ses = new SESClient({ region: REGION });
+const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 export async function sendOtpToEmail(to, otp) {
+  // Prefer Resend if API key provided
+  if (resendClient) {
+    try {
+      const resp = await resendClient.emails.send({
+        from: FROM_ADDRESS,
+        to,
+        subject: "Your OTP Code",
+        html: `<h2>Your OTP</h2><p>Your OTP is <b>${otp}</b></p>`,
+      });
+
+      console.log("Resend response:", resp);
+      if (resp && (resp.id || resp.messageId)) return true;
+    } catch (err) {
+      console.error("Resend error:", err);
+      // fallthrough to SES fallback
+    }
+  }
+
+  // Fallback to AWS SES
   try {
-    const payload = {
-      to: to,
-      subject: "Your OTP Code",
-      html: `<h2>Your OTP</h2><p>Your OTP is <b>${otp}</b></p>`,
+    const params = {
+      Destination: { ToAddresses: [to] },
+      Message: {
+        Body: {
+          Html: { Charset: "UTF-8", Data: `<h2>Your OTP</h2><p>Your OTP is <b>${otp}</b></p>` },
+          Text: { Charset: "UTF-8", Data: `Your OTP is ${otp}` },
+        },
+        Subject: { Charset: "UTF-8", Data: "Your OTP Code" },
+      },
+      Source: FROM_ADDRESS,
     };
 
-    // optional plain-text
-    payload.text = `Your OTP is ${otp}`;
+    console.log("Sending SES email to:", to);
 
-    // optional custom sender if you set PROMAILER_FROM in .env
-    if (process.env.PROMAILER_FROM) payload.from = process.env.PROMAILER_FROM;
+    const command = new SendEmailCommand(params);
+    const response = await ses.send(command);
 
-    console.log("Sending payload:", payload);
-
-    const response = await axios.post(PROMAILER_ENDPOINT, payload, {
-      headers: {
-        Authorization: `Bearer ${process.env.PROMAILER_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      validateStatus: () => true, // we'll handle non-2xx manually to log body
-    });
-
-    console.log("Promailer status:", response.status);
-    console.log("Promailer response:", response.data);
-
-    if (!response.data || response.data.success !== true) {
-      console.error('Promailer rejected request');
+    console.log("SES response:", response);
+    if (!response || !response.MessageId) {
+      console.error("SES failed to send email");
       return false;
     }
 
     return true;
   } catch (error) {
-    console.error("Promailer error:", error.response?.data || error.message);
+    console.error("SES error:", error);
     return false;
   }
 }

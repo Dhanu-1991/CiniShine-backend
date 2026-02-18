@@ -22,7 +22,7 @@ import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
 import bookmarkRouter from "./routes/bookmarkRoutes/bookmarkRouter.js";
 import chatRouter from "./routes/chatRoutes/chatRouter.js";
 import notificationRouter from "./routes/notificationRoutes/notificationRouter.js";
-import { issueCloudFrontCookies } from "./config/cloudfront.js";
+import { issueCloudFrontCookies } from "../config/cloudfront.js";
 import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
 
 const app = express();

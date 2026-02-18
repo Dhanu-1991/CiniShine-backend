@@ -6,7 +6,7 @@ import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { recommendationEngine } from '../../algorithms/recommendationAlgorithm.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl } from '../../../config/cloudfront.js';
 
 /**
  * Generate CloudFront URL for S3 objects (replaces S3 signed URLs)

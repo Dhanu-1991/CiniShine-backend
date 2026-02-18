@@ -43,7 +43,7 @@ import mongoose from 'mongoose';
 import WatchHistory from '../models/watchHistory.model.js';
 import Content from '../models/content.model.js';
 import Comment from '../models/comment.model.js';
-import { getCfUrl } from '../config/cloudfront.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
  * WatchHistoryRecommendationEngine
