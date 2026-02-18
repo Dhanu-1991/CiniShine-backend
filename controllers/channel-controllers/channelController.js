@@ -200,3 +200,41 @@ export const getChannelContent = async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch channel content' });
     }
 };
+
+/**
+ * Check which followed channels have new content since a given date
+ * POST /api/v2/channel/new-content-check
+ * Body: { channelIds: string[], since: ISO date string }
+ * Returns: { channelsWithNew: string[] }
+ */
+export const checkNewContent = async (req, res) => {
+    try {
+        const { channelIds, since } = req.body;
+
+        if (!channelIds || !Array.isArray(channelIds) || channelIds.length === 0) {
+            return res.json({ channelsWithNew: [] });
+        }
+
+        const sinceDate = since ? new Date(since) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+        const validIds = channelIds
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        if (validIds.length === 0) {
+            return res.json({ channelsWithNew: [] });
+        }
+
+        // Find content uploaded after sinceDate from any of the given channel user IDs
+        const newContent = await Content.distinct('userId', {
+            userId: { $in: validIds },
+            createdAt: { $gt: sinceDate },
+            visibility: 'public',
+        });
+
+        res.json({ channelsWithNew: newContent.map(id => id.toString()) });
+    } catch (error) {
+        console.error('❌ Error checking new content:', error);
+        res.status(500).json({ error: 'Failed to check new content', channelsWithNew: [] });
+    }
+};

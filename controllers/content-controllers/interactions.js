@@ -35,6 +35,7 @@ import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
 import WatchHistory from "../../models/watchHistory.model.js";
+import ContentView from "../../models/contentView.model.js";
 
 // In-memory cache for rate limiting (resets on server restart)
 const watchRateLimit = new Map();
@@ -387,6 +388,17 @@ export const updateWatchTime = async (req, res) => {
 
                     await user.save();
                     await video.save();
+
+                    // ── Immutable unique viewer record (never deleted even if user clears history) ──
+                    const now2 = new Date();
+                    const yr = now2.getFullYear();
+                    const wk = Math.ceil(((now2 - new Date(yr, 0, 1)) / 86400000 + 1) / 7);
+                    const mo = String(now2.getMonth() + 1).padStart(2, '0');
+                    ContentView.updateOne(
+                        { contentId: videoId, userId },
+                        { $setOnInsert: { firstViewedAt: now2, weekBucket: `${yr}-W${String(wk).padStart(2, '0')}`, monthBucket: `${yr}-${mo}` } },
+                        { upsert: true }
+                    ).catch(err => console.error('⚠️ ContentView upsert failed (non-blocking):', err.message));
 
                     // Mark as counted in cache
                     const updatedCache = watchRateLimit.get(recentWatchKey);

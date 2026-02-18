@@ -1,4 +1,5 @@
 import Content from "../../models/content.model.js";
+import User from "../../models/user.model.js";
 import SearchHistory from "../../models/searchHistory.model.js";
 import { getCfUrl } from "../../config/cloudfront.js";
 
@@ -324,6 +325,240 @@ export const searchVideos = async (req, res) => {
 
     } catch (error) {
         console.error('Error searching videos:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+/**
+ * Unified search across ALL content types + channels
+ * GET /api/v2/video/search/unified?q=...&type=all|video|audio|short|post|channel&page=1&limit=20
+ *
+ * Returns:
+ *   { videos, audio, shorts, posts, channels, totalCount, query }
+ *   or when type != 'all': { results: [...], pagination, totalCount, query }
+ */
+export const unifiedSearch = async (req, res) => {
+    try {
+        const { q: query, type = 'all', page = 1, limit = 20 } = req.query;
+        const userId = req.user?.id;
+
+        if (!query || query.trim().length < 1) {
+            return res.json({ videos: [], audio: [], shorts: [], posts: [], channels: [], totalCount: 0, query: '' });
+        }
+
+        const searchTerm = query.trim().toLowerCase();
+        const searchHashtags = extractHashtags(query);
+        const cleanSearchTerm = searchTerm.replace(/#\w+/g, '').trim();
+        const searchWords = cleanSearchTerm.split(/\s+/).filter(w => w.length > 1);
+
+        if (searchWords.length === 0 && searchHashtags.length === 0) {
+            return res.json({ videos: [], audio: [], shorts: [], posts: [], channels: [], totalCount: 0, query });
+        }
+
+        const searchRegex = searchWords.length > 0
+            ? new RegExp(searchWords.join('|'), 'i')
+            : null;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        // ── Helper: score a content item ────────────────────────────────────
+        const scoreItem = (item) => {
+            const title = item.title || '';
+            const description = item.description || '';
+            const channelName = item.userId?.channelName || '';
+            const channelHandle = item.userId?.channelHandle || '';
+            const userName = item.userId?.userName || '';
+            const tags = item.tags || [];
+            const titleHashtags = extractHashtags(title);
+            const descHashtags = extractHashtags(description);
+            const allHashtags = [...new Set([...titleHashtags, ...descHashtags, ...tags])];
+            let score = 0;
+
+            if (searchHashtags.length > 0) score += calculateHashtagScore(searchHashtags, allHashtags);
+            if (searchWords.length > 0) {
+                score += calculateTextScore(searchWords, title, 100, 50, 30);
+                score += calculateTextScore(searchWords, channelName, 80, 35, 20);
+                score += calculateTextScore(searchWords, channelHandle, 75, 30, 18);
+                score += calculateTextScore(searchWords, userName, 65, 25, 15);
+                score += calculateTextScore(searchWords, description, 35, 12, 8);
+                tags.forEach(tag => score += calculateTextScore(searchWords, tag, 50, 30, 15));
+                const multiWordBonus = searchWords.filter(sw => title.toLowerCase().includes(sw)).length;
+                if (multiWordBonus > 1) score += multiWordBonus * 8;
+            }
+            // Recency and popularity boosts
+            const daysSince = (Date.now() - new Date(item.createdAt)) / 86400000;
+            score += Math.max(0, 15 - daysSince * 0.5);
+            score += Math.min((item.views || 0) / 1000, 12);
+            return score;
+        };
+
+        // ── Helper: score a channel (User doc) ───────────────────────────────
+        const scoreChannel = (user) => {
+            const channelName = user.channelName || '';
+            const channelHandle = user.channelHandle || '';
+            const userName = user.userName || '';
+            const bio = user.channelDescription || user.bio || '';
+            let score = 0;
+            if (searchWords.length > 0) {
+                score += calculateTextScore(searchWords, channelName, 120, 60, 35);
+                score += calculateTextScore(searchWords, channelHandle, 110, 55, 30);
+                score += calculateTextScore(searchWords, userName, 90, 40, 25);
+                score += calculateTextScore(searchWords, bio, 30, 10, 5);
+            }
+            // sub count boost
+            const subs = (user.subscriptions?.length || 0);
+            score += Math.min(subs / 100, 15);
+            return score;
+        };
+
+        // ── Build parallel queries based on requested type ────────────────────
+        const wantAll = type === 'all';
+        const contentTypes = [];
+        if (wantAll || type === 'video') contentTypes.push('video');
+        if (wantAll || type === 'audio') contentTypes.push('audio');
+        if (wantAll || type === 'short') contentTypes.push('short');
+        if (wantAll || type === 'post') contentTypes.push('post');
+        const wantChannels = wantAll || type === 'channel';
+
+        // Build mongo filter for content
+        const contentFilter = {
+            visibility: 'public',
+            ...(searchRegex ? { $or: [{ title: searchRegex }, { description: searchRegex }, { tags: searchRegex }] } : {}),
+        };
+
+        // Build parallel fetches
+        const queries = [];
+        if (contentTypes.length > 0) {
+            // Fetch all needed content types in one query, then split
+            queries.push(
+                Content.find({ ...contentFilter, contentType: { $in: contentTypes } })
+                    .populate('userId', 'userName channelName channelHandle channelPicture subscriptions')
+                    .sort({ createdAt: -1 })
+                    .limit(300)
+                    .lean()
+            );
+        } else {
+            queries.push(Promise.resolve([]));
+        }
+
+        if (wantChannels) {
+            const channelRegex = new RegExp(searchWords.join('|') || searchTerm, 'i');
+            queries.push(
+                User.find({
+                    $or: [
+                        { channelName: channelRegex },
+                        { channelHandle: channelRegex },
+                        { userName: channelRegex },
+                    ],
+                })
+                    .select('userName channelName channelHandle channelPicture channelDescription bio subscriptions createdAt')
+                    .limit(50)
+                    .lean()
+            );
+        } else {
+            queries.push(Promise.resolve([]));
+        }
+
+        const [contentDocs, channelDocs] = await Promise.all(queries);
+
+        // ── Score & separate content by type ─────────────────────────────────
+        const buckets = { video: [], audio: [], short: [], post: [] };
+
+        contentDocs.forEach(item => {
+            const score = scoreItem(item);
+            if (score <= 0) return;
+            const thumbnail = getCfUrl(item.thumbnailKey);
+            const channelPic = item.userId?.channelPicture;
+            buckets[item.contentType]?.push({
+                _id: item._id,
+                contentType: item.contentType,
+                title: item.title,
+                description: item.description,
+                duration: item.duration,
+                thumbnailUrl: thumbnail,
+                views: item.views,
+                likes: Array.isArray(item.likes) ? item.likes.length : (item.likes || 0),
+                dislikes: item.dislikes || 0,
+                tags: item.tags || [],
+                createdAt: item.createdAt,
+                user: {
+                    _id: item.userId?._id,
+                    userName: item.userId?.userName,
+                    channelName: item.userId?.channelName,
+                    channelHandle: item.userId?.channelHandle,
+                    channelPicture: channelPic,
+                },
+                searchScore: score,
+            });
+        });
+
+        // Sort each bucket by score
+        Object.keys(buckets).forEach(k => buckets[k].sort((a, b) => b.searchScore - a.searchScore));
+
+        // Score channels
+        const scoredChannels = channelDocs
+            .map(user => {
+                const score = scoreChannel(user);
+                return score > 0 ? {
+                    _id: user._id,
+                    type: 'channel',
+                    userName: user.userName,
+                    channelName: user.channelName || user.userName,
+                    channelHandle: user.channelHandle,
+                    channelPicture: user.channelPicture,
+                    channelDescription: user.channelDescription || user.bio,
+                    subscriberCount: user.subscriptions?.length || 0,
+                    createdAt: user.createdAt,
+                    searchScore: score,
+                } : null;
+            })
+            .filter(Boolean)
+            .sort((a, b) => b.searchScore - a.searchScore);
+
+        // ── Return ────────────────────────────────────────────────────────────
+        if (!wantAll) {
+            // Single-type mode: paginate the one relevant bucket / channel list
+            const list = type === 'channel' ? scoredChannels : buckets[type] || [];
+            const total = list.length;
+            const paginated = list.slice(skip, skip + parseInt(limit));
+            return res.json({
+                results: paginated,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(total / parseInt(limit)),
+                    totalCount: total,
+                    hasNextPage: skip + parseInt(limit) < total,
+                },
+                type,
+                query,
+            });
+        }
+
+        // All-type mode: paginate each bucket, channels in first page
+        const paginateBucket = (arr) => arr.slice(skip, skip + parseInt(limit));
+        const totalCount = Object.values(buckets).reduce((s, a) => s + a.length, 0) + scoredChannels.length;
+
+        // Record search for suggestions
+        SearchHistory.recordSearch(userId, query.trim(), totalCount).catch(() => { });
+
+        res.json({
+            videos: paginateBucket(buckets.video),
+            audio: paginateBucket(buckets.audio),
+            shorts: paginateBucket(buckets.short),
+            posts: paginateBucket(buckets.post),
+            channels: parseInt(page) === 1 ? scoredChannels.slice(0, 6) : [], // channels only on page 1
+            pagination: {
+                currentPage: parseInt(page),
+                hasNextPage: skip + parseInt(limit) < Math.max(...Object.values(buckets).map(a => a.length)),
+                totalCount,
+            },
+            query,
+            searchHashtags,
+            searchWords,
+        });
+
+    } catch (error) {
+        console.error('Error in unified search:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };

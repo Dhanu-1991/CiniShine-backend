@@ -4,7 +4,7 @@
 
 import express from 'express';
 import { shortUploadInit, shortUploadComplete, getShortsPlayerFeed } from '../../controllers/content-controllers/shortsController.js';
-import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
+import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
 const router = express.Router();
 
@@ -12,7 +12,7 @@ const router = express.Router();
 router.post('/init', universalTokenVerifier, shortUploadInit);
 router.post('/complete', universalTokenVerifier, shortUploadComplete);
 
-// Player feed
-router.get('/feed', universalTokenVerifier, getShortsPlayerFeed);
+// Player feed (public)
+router.get('/feed', optionalTokenVerifier, getShortsPlayerFeed);
 
 export default router;

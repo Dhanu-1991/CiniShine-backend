@@ -4,7 +4,7 @@
 
 import express from 'express';
 import { postImageInit, createPost, getSubscriptionPosts } from '../../controllers/content-controllers/postsController.js';
-import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
+import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
 const router = express.Router();
 
@@ -12,7 +12,7 @@ const router = express.Router();
 router.post('/image/init', universalTokenVerifier, postImageInit);
 router.post('/create', universalTokenVerifier, createPost);
 
-// Feed
-router.get('/feed', universalTokenVerifier, getSubscriptionPosts);
+// Feed (public - but shows personalised content if token present)
+router.get('/feed', optionalTokenVerifier, getSubscriptionPosts);
 
 export default router;

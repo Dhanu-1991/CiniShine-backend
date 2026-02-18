@@ -16,6 +16,7 @@ import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
+import ContentView from '../../models/contentView.model.js';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl } from '../../config/cloudfront.js';
 
@@ -372,12 +373,14 @@ export const getContentAnalytics = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
-        // Parallel fetch: comments, reactions, watch history, signed URLs
-        const [commentCount, likes, dislikes, watchEntries, thumbnailUrl, imageUrl] = await Promise.all([
+        // Parallel fetch: comments, reactions, watch history, signed URLs, immutable unique viewer count
+        const [commentCount, likes, dislikes, watchEntries, uniqueViewers, thumbnailUrl, imageUrl] = await Promise.all([
             Comment.countDocuments({ videoId: id, parentCommentId: { $exists: false } }),
             VideoReaction.countDocuments({ videoId: id, type: 'like' }),
             VideoReaction.countDocuments({ videoId: id, type: 'dislike' }),
             WatchHistory.find({ contentId: id }).select('sessions watchTime watchPercentage completedWatch').lean(),
+            // ContentView is IMMUTABLE — never deleted even when user clears history → reliable unique viewer count
+            ContentView.countDocuments({ contentId: id }),
             getCfUrl(content.thumbnailKey),
             getCfUrl(content.imageKey),
         ]);
@@ -435,7 +438,7 @@ export const getContentAnalytics = async (req, res) => {
                 avgWatchPercentage: parseFloat(avgWatchPercent.toFixed(1)),
                 totalWatchSessions,
                 engagementRate,
-                uniqueViewers: watchEntries.length,
+                uniqueViewers: uniqueViewers,  // from ContentView — immutable, not affected by history deletion
             },
             dailyViews: Object.entries(dailyViews).sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, views: count })),
         });

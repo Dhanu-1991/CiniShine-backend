@@ -63,9 +63,9 @@ router.post('/:id/thumbnail', universalTokenVerifier, upload.single('thumbnail')
 // ============================================
 // PLAYER FEEDS (also accessible at root level)
 // ============================================
-router.get('/shorts/feed', universalTokenVerifier, getShortsPlayerFeed);
-router.get('/audio/feed', universalTokenVerifier, getAudioPlayerFeed);
-router.get('/posts/feed', universalTokenVerifier, getSubscriptionPosts);
+router.get('/shorts/feed', optionalTokenVerifier, getShortsPlayerFeed);
+router.get('/audio/feed', optionalTokenVerifier, getAudioPlayerFeed);
+router.get('/posts/feed', optionalTokenVerifier, getSubscriptionPosts);
 
 // ============================================
 // ENGAGEMENT ROUTES (like/dislike for shorts, audio, posts)
@@ -99,6 +99,6 @@ import commentRouter from '../commentRoutes/commentRouter.js';
 router.use('/:videoId/comments', commentRouter);
 
 // Get specific content by ID (legacy)
-router.get('/:id', universalTokenVerifier, getContent);
+router.get('/:id', optionalTokenVerifier, getContent);
 
 export default router;

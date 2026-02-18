@@ -25,8 +25,8 @@ import {
 } from "../../controllers/content-controllers/videoController.js";
 import { getMixedFeed, getRecommendationsWithShorts } from "../../controllers/content-controllers/feedController.js";
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/content-controllers/interactions.js";
-import { searchVideos, getSearchSuggestions, clearSearchHistory } from "../../controllers/content-controllers/search.js";
-import { universalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
+import { searchVideos, getSearchSuggestions, clearSearchHistory, unifiedSearch } from "../../controllers/content-controllers/search.js";
+import { universalTokenVerifier, optionalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 import commentRouter from "../commentRoutes/commentRouter.js";
 
 // Configure multer for thumbnail uploads (memory storage)
@@ -57,21 +57,22 @@ router.put("/user/preferences", universalTokenVerifier, updateUserPreferences);
 router.get("/general/content", getGeneralContent);
 
 // Mixed feed route
-router.get("/feed/mixed", universalTokenVerifier, getMixedFeed);
+router.get("/feed/mixed", optionalTokenVerifier, getMixedFeed);
 
 // Recommendations
-router.get("/:videoId/recommendations", universalTokenVerifier, getRecommendations);
-router.get("/:videoId/recommendations-with-shorts", universalTokenVerifier, getRecommendationsWithShorts);
+router.get("/:videoId/recommendations", optionalTokenVerifier, getRecommendations);
+router.get("/:videoId/recommendations-with-shorts", optionalTokenVerifier, getRecommendationsWithShorts);
 
 // Search
-router.get("/search/suggestions", universalTokenVerifier, getSearchSuggestions);
+router.get("/search/suggestions", optionalTokenVerifier, getSearchSuggestions);
+router.get("/search/unified", optionalTokenVerifier, unifiedSearch);
 router.delete("/search/history", universalTokenVerifier, clearSearchHistory);
-router.get("/search", universalTokenVerifier, searchVideos);
+router.get("/search", optionalTokenVerifier, searchVideos);
 
-// HLS streaming
-router.get('/:id/master.m3u8', universalTokenVerifier, getHLSMasterPlaylist);
-router.get('/:id/variants/:variantFile', universalTokenVerifier, getHLSVariantPlaylist);
-router.get('/:id/segments/:segmentFile', universalTokenVerifier, getHLSSegment);
+// HLS streaming (public - any viewer can stream)
+router.get('/:id/master.m3u8', optionalTokenVerifier, getHLSMasterPlaylist);
+router.get('/:id/variants/:variantFile', optionalTokenVerifier, getHLSVariantPlaylist);
+router.get('/:id/segments/:segmentFile', optionalTokenVerifier, getHLSSegment);
 
 // Like/Dislike
 router.post("/:id/like", universalTokenVerifier, likeVideo);
@@ -90,9 +91,9 @@ router.post("/:id/watch-time", universalTokenVerifier, updateWatchTime);
 router.post("/:id/thumbnail", universalTokenVerifier, upload.single('thumbnail'), uploadVideoThumbnail);
 
 // Status
-router.get("/:id/status", universalTokenVerifier, getVideoStatus);
+router.get("/:id/status", optionalTokenVerifier, getVideoStatus);
 
 // General video route (MUST BE LAST)
-router.get("/:id", universalTokenVerifier, getVideo);
+router.get("/:id", optionalTokenVerifier, getVideo);
 
 export default router;
