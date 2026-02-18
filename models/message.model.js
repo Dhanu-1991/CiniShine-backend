@@ -38,6 +38,16 @@ const MessageSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    // Timestamp when the message was read by the recipient
+    readAt: {
+        type: Date,
+        default: null
+    },
+    // Timestamp when the message was delivered (recipient's client fetched it)
+    deliveredAt: {
+        type: Date,
+        default: null
+    },
     // For request handling: archived means "ignored" by the creator
     archived: {
         type: Boolean,
@@ -65,6 +75,21 @@ const MessageSchema = new mongoose.Schema({
     deletedBySender: {
         type: Boolean,
         default: false
+    },
+    // Per-user soft-delete: stores { userdId: Date } for "delete for me"
+    deletedBy: {
+        type: Map,
+        of: Date,
+        default: {}
+    },
+    // "Delete for everyone" — replaces content with placeholder
+    deletedForEveryone: {
+        type: Boolean,
+        default: false
+    },
+    deletedForEveryoneAt: {
+        type: Date,
+        default: null
     },
     createdAt: {
         type: Date,

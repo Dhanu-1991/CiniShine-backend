@@ -14,6 +14,8 @@ import {
     searchConversations,
     editMessage,
     deleteMessage,
+    bulkDeleteMessages,
+    getMessageInfo,
     // New
     searchCreators,
     hideConversation,
@@ -71,8 +73,14 @@ router.post('/mark-read/:conversationId', markConversationRead);
 // Edit a message
 router.patch('/message/:messageId', editMessage);
 
-// Delete a message
+// Delete a message (supports ?mode=forMe or ?mode=forEveryone)
 router.delete('/message/:messageId', deleteMessage);
+
+// Bulk delete messages
+router.post('/messages/bulk-delete', bulkDeleteMessages);
+
+// Get message info (delivered/read timestamps)
+router.get('/message/:messageId/info', getMessageInfo);
 
 // Hide/soft-delete a conversation from own side
 router.delete('/hide/:conversationId', hideConversation);

@@ -281,8 +281,46 @@ export const getConversationMessages = async (req, res) => {
             Message.countDocuments(messageFilter)
         ]);
 
+        // Mark undelivered messages from the other user as delivered
+        const now = new Date();
+        const undeliveredIds = messages
+            .filter(m => m.senderId.toString() === otherUserId && !m.deliveredAt)
+            .map(m => m._id);
+        if (undeliveredIds.length > 0) {
+            await Message.updateMany(
+                { _id: { $in: undeliveredIds } },
+                { deliveredAt: now }
+            );
+            // Update the lean results in memory
+            messages.forEach(m => {
+                if (undeliveredIds.some(id => id.toString() === m._id.toString())) {
+                    m.deliveredAt = now;
+                }
+            });
+        }
+
+        // Filter out messages deleted by the current user (deletedBy map)
+        // and transform "deleted for everyone" messages
+        const filtered = messages
+            .filter(m => {
+                if (m.deletedBy && m.deletedBy[currentUserId]) return false;
+                // Legacy: if deletedBySender and current user is sender, hide
+                if (m.deletedBySender && m.senderId.toString() === currentUserId) return false;
+                return true;
+            })
+            .map(m => {
+                if (m.deletedForEveryone) {
+                    return {
+                        ...m,
+                        text: 'This message was deleted',
+                        deletedForEveryone: true,
+                    };
+                }
+                return m;
+            });
+
         return res.json({
-            items: messages.reverse(), // Return in chronological order
+            items: filtered.reverse(), // Return in chronological order
             conversationId: conversation._id,
             page,
             limit,
@@ -424,17 +462,18 @@ export const markConversationRead = async (req, res) => {
         conversation.unreadCount.set(userId, 0);
         await conversation.save();
 
-        // Mark all messages from other user as read
+        // Mark all messages from other user as read + set readAt timestamp
         const otherUserId = conversation.participants.find(
             p => p.toString() !== userId
         );
 
+        const now = new Date();
         await Message.updateMany(
             { senderId: otherUserId, recipientId: userId, read: false },
-            { read: true }
+            { read: true, readAt: now }
         );
 
-        return res.json({ message: 'Conversation marked as read' });
+        return res.json({ message: 'Conversation marked as read', readAt: now });
     } catch (error) {
         console.error('Error marking conversation as read:', error);
         return res.status(500).json({ message: 'Failed to mark as read' });
@@ -482,10 +521,131 @@ export const editMessage = async (req, res) => {
 };
 
 /**
- * Delete a sent message (sender only)
+ * Delete a message
  * DELETE /api/v2/chats/message/:messageId
+ * Query: mode=forMe | forEveryone (default: forMe)
+ * 
+ * forMe: soft-delete for the requesting user only
+ * forEveryone: only allowed if sender — replaces content with placeholder
  */
 export const deleteMessage = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageId } = req.params;
+        const mode = req.query.mode || req.body.mode || 'forMe';
+
+        if (!mongoose.Types.ObjectId.isValid(messageId)) {
+            return res.status(400).json({ message: 'Invalid message ID' });
+        }
+
+        const message = await Message.findById(messageId);
+        if (!message) {
+            return res.status(404).json({ message: 'Message not found' });
+        }
+
+        // Verify user is a participant (sender or recipient)
+        const isSender = message.senderId.toString() === userId;
+        const isRecipient = message.recipientId?.toString() === userId;
+        if (!isSender && !isRecipient) {
+            return res.status(403).json({ message: 'Not authorized to delete this message' });
+        }
+
+        if (mode === 'forEveryone') {
+            // Only the sender can delete for everyone
+            if (!isSender) {
+                return res.status(403).json({ message: 'Only the sender can delete for everyone' });
+            }
+            message.deletedForEveryone = true;
+            message.deletedForEveryoneAt = new Date();
+            message.text = 'This message was deleted';
+            await message.save();
+
+            // Update conversation lastMessage if needed
+            const conversation = await Conversation.findOne({
+                participants: { $all: [message.senderId, message.recipientId] }
+            });
+            if (conversation && conversation.lastMessage?.text && conversation.lastMessage.senderId?.toString() === userId) {
+                conversation.lastMessage.text = 'This message was deleted';
+                await conversation.save();
+            }
+
+            return res.json({ message: 'Message deleted for everyone', messageId, mode: 'forEveryone' });
+        }
+
+        // mode === 'forMe' — soft delete for this user only
+        if (!message.deletedBy) message.deletedBy = new Map();
+        message.deletedBy.set(userId, new Date());
+        message.markModified('deletedBy');
+        await message.save();
+
+        return res.json({ message: 'Message deleted for you', messageId, mode: 'forMe' });
+    } catch (error) {
+        console.error('Error deleting message:', error);
+        return res.status(500).json({ message: 'Failed to delete message' });
+    }
+};
+
+/**
+ * Bulk delete messages
+ * POST /api/v2/chats/messages/bulk-delete
+ * Body: { messageIds: string[], mode: 'forMe' | 'forEveryone' }
+ */
+export const bulkDeleteMessages = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { messageIds = [], mode = 'forMe' } = req.body;
+
+        if (!messageIds.length) {
+            return res.status(400).json({ message: 'No message IDs provided' });
+        }
+        if (messageIds.length > 100) {
+            return res.status(400).json({ message: 'Cannot delete more than 100 messages at once' });
+        }
+
+        const validIds = messageIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+        const messages = await Message.find({ _id: { $in: validIds } });
+
+        const results = { deleted: [], failed: [] };
+
+        for (const msg of messages) {
+            const isSender = msg.senderId.toString() === userId;
+            const isRecipient = msg.recipientId?.toString() === userId;
+
+            if (!isSender && !isRecipient) {
+                results.failed.push({ id: msg._id, reason: 'Not authorized' });
+                continue;
+            }
+
+            if (mode === 'forEveryone') {
+                if (!isSender) {
+                    results.failed.push({ id: msg._id, reason: 'Only sender can delete for everyone' });
+                    continue;
+                }
+                msg.deletedForEveryone = true;
+                msg.deletedForEveryoneAt = new Date();
+                msg.text = 'This message was deleted';
+                await msg.save();
+            } else {
+                if (!msg.deletedBy) msg.deletedBy = new Map();
+                msg.deletedBy.set(userId, new Date());
+                msg.markModified('deletedBy');
+                await msg.save();
+            }
+            results.deleted.push(msg._id);
+        }
+
+        return res.json({ message: 'Bulk delete complete', results, mode });
+    } catch (error) {
+        console.error('Error bulk deleting messages:', error);
+        return res.status(500).json({ message: 'Failed to bulk delete' });
+    }
+};
+
+/**
+ * Get message info (delivered, read timestamps) — WhatsApp-like
+ * GET /api/v2/chats/message/:messageId/info
+ */
+export const getMessageInfo = async (req, res) => {
     try {
         const userId = req.user.id;
         const { messageId } = req.params;
@@ -494,40 +654,36 @@ export const deleteMessage = async (req, res) => {
             return res.status(400).json({ message: 'Invalid message ID' });
         }
 
-        const message = await Message.findOne({
-            _id: messageId,
-            senderId: new mongoose.Types.ObjectId(userId)
-        });
+        const message = await Message.findById(messageId)
+            .populate('senderId', 'channelName channelHandle channelPicture userName')
+            .populate('recipientId', 'channelName channelHandle channelPicture userName');
+
         if (!message) {
-            return res.status(404).json({ message: 'Message not found or not yours' });
+            return res.status(404).json({ message: 'Message not found' });
         }
 
-        await message.deleteOne();
+        // Only sender can see full message info
+        if (message.senderId._id.toString() !== userId) {
+            return res.status(403).json({ message: 'Only the sender can view message info' });
+        }
 
-        // If this was the lastMessage in the conversation, update it
-        const conversation = await Conversation.findOne({
-            participants: { $all: [message.senderId, message.recipientId] }
+        return res.json({
+            messageId: message._id,
+            text: message.deletedForEveryone ? 'This message was deleted' : message.text,
+            sentAt: message.createdAt,
+            deliveredAt: message.deliveredAt || null,
+            readAt: message.readAt || null,
+            read: message.read,
+            editedAt: message.editedAt || null,
+            recipient: message.recipientId ? {
+                _id: message.recipientId._id,
+                channelName: message.recipientId.channelName,
+                userName: message.recipientId.userName,
+            } : null,
         });
-        if (conversation && conversation.lastMessage?.text === message.text) {
-            // Fetch the previous message
-            const prev = await Message.findOne({
-                $or: [
-                    { senderId: message.senderId, recipientId: message.recipientId },
-                    { senderId: message.recipientId, recipientId: message.senderId }
-                ]
-            }).sort({ createdAt: -1 });
-            if (prev) {
-                conversation.lastMessage = { text: prev.text, senderId: prev.senderId, createdAt: prev.createdAt };
-            } else {
-                conversation.lastMessage = null;
-            }
-            await conversation.save();
-        }
-
-        return res.json({ message: 'Message deleted', messageId });
     } catch (error) {
-        console.error('Error deleting message:', error);
-        return res.status(500).json({ message: 'Failed to delete message' });
+        console.error('Error getting message info:', error);
+        return res.status(500).json({ message: 'Failed to get message info' });
     }
 };
 
