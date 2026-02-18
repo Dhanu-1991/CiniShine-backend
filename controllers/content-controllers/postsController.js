@@ -9,7 +9,7 @@ import Comment from '../../models/comment.model.js';
 import User from '../../models/user.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { getCfUrl } from '../../../config/cloudfront.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 
 const s3Client = new S3Client({

@@ -17,7 +17,7 @@ import Comment from '../../models/comment.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { getCfUrl } from '../../../config/cloudfront.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,

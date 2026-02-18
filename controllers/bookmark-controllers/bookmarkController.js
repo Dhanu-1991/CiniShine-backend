@@ -11,7 +11,7 @@
 
 import Bookmark from '../../models/bookmark.model.js';
 import Content from '../../models/content.model.js';
-import { getCfUrl } from '../../../config/cloudfront.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
  * Toggle bookmark — if already bookmarked, remove it; otherwise add it.

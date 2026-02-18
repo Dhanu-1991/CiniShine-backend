@@ -14,7 +14,7 @@
 
 import Notification from '../../models/notification.model.js';
 import User from '../../models/user.model.js';
-import { getCfUrl } from '../../../config/cloudfront.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 const MAX_NOTIFICATIONS_PER_USER = 10;
 

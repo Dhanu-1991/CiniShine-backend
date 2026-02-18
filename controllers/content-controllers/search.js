@@ -1,6 +1,6 @@
 import Content from "../../models/content.model.js";
 import SearchHistory from "../../models/searchHistory.model.js";
-import { getCfUrl } from "../../../config/cloudfront.js";
+import { getCfUrl } from "../../config/cloudfront.js";
 
 /**
  * Get search text suggestions (autocomplete)
