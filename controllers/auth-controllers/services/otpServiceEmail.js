@@ -15,17 +15,26 @@ export async function sendOtpToEmail(to, otp) {
   if (resendClient) {
     try {
       const resp = await resendClient.emails.send({
-        from: FROM_ADDRESS,
+        from: process.env.RESEND_FROM || FROM_ADDRESS,
         to,
         subject: "Your OTP Code",
         html: `<h2>Your OTP</h2><p>Your OTP is <b>${otp}</b></p>`,
       });
 
       console.log("Resend response:", resp);
-      if (resp && (resp.id || resp.messageId)) return true;
+      // Resend returns shape { data: { id: '...' } } on success
+      const succeeded = Boolean(resp && (resp.id || resp.messageId || resp.data?.id));
+      if (succeeded) return true;
+      // If Resend responded but without id, treat as failure and don't silently fallback to SES
+      console.error('Resend did not return an id, response:', resp);
     } catch (err) {
       console.error("Resend error:", err);
-      // fallthrough to SES fallback
+      if (err?.message?.includes('domain is not verified') || err?.message?.includes('validation_error')) {
+        console.error('Resend validation error — verify your sending domain at https://resend.com/domains and set RESEND_FROM to a verified domain.');
+        // Do not attempt SES fallback when resend failed due to domain verification — return false
+        return false;
+      }
+      // For other errors, fallthrough to SES fallback
     }
   }
 

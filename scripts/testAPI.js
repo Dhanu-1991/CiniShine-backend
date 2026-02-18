@@ -13,7 +13,7 @@ async function sendEmail() {
         try {
             const response = await resend.emails.send({
                 from: process.env.EMAIL_USER || "admin@watchinit.com",
-                to: "dhanushkumarvr@gmail.com",
+                to: "dhanushkumarvr019@gmail.com",
                 subject: "Your OTP Code",
                 html: "<h1>Your OTP is 983425</h1>",
             });
