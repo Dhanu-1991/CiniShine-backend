@@ -445,10 +445,11 @@ export const unifiedSearch = async (req, res) => {
             const channelRegex = new RegExp(searchWords.join('|') || searchTerm, 'i');
             queries.push(
                 User.find({
+                    channelName: { $exists: true, $ne: '' },
+                    channelHandle: { $exists: true, $ne: '' },
                     $or: [
                         { channelName: channelRegex },
                         { channelHandle: channelRegex },
-                        { userName: channelRegex },
                     ],
                 })
                     .select('userName channelName channelHandle channelPicture channelDescription bio subscriptions createdAt')
