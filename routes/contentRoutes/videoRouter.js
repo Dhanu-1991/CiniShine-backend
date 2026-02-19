@@ -26,6 +26,7 @@ import {
 import { getMixedFeed, getRecommendationsWithShorts } from "../../controllers/content-controllers/feedController.js";
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/content-controllers/interactions.js";
 import { searchVideos, getSearchSuggestions, clearSearchHistory, unifiedSearch } from "../../controllers/content-controllers/search.js";
+import { multipartInit, multipartComplete, multipartAbort } from "../../controllers/content-controllers/multipartUploadController.js";
 import { universalTokenVerifier, optionalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
 import commentRouter from "../commentRoutes/commentRouter.js";
 
@@ -43,7 +44,12 @@ const router = express.Router();
 
 // CRITICAL: Route order matters! Most specific first, general last
 
-// Upload routes
+// Multipart upload routes (fast parallel chunked uploads)
+router.post("/upload/multipart/init", universalTokenVerifier, multipartInit);
+router.post("/upload/multipart/complete", universalTokenVerifier, multipartComplete);
+router.post("/upload/multipart/abort", universalTokenVerifier, multipartAbort);
+
+// Legacy upload routes (single PUT - kept for backward compat)
 router.post("/upload/complete", universalTokenVerifier, uploadComplete);
 router.post("/upload/init", universalTokenVerifier, uploadInit);
 

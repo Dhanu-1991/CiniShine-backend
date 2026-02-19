@@ -23,7 +23,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -668,7 +668,8 @@ export const getShortsPlayerFeed = async (req, res) => {
             if (content && content.contentType === 'short') {
                 // Generate URLs for the starting short (with existence check)
                 const thumbnailUrl = getCfUrl(content.thumbnailKey);
-                const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+                const hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
+                const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
                 const videoUrl = getCfUrl(videoKey);
 
                 // âœ… ADD: Get comment count for starting short
@@ -686,6 +687,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     description: content.description,
                     duration: content.duration,
                     thumbnailUrl,
+                    hlsMasterUrl,
                     videoUrl,
                     views: content.views,
                     likeCount: content.likeCount || 0,
@@ -739,7 +741,8 @@ export const getShortsPlayerFeed = async (req, res) => {
             const Comment = (await import('../../models/comment.model.js')).default;
 
             shorts = await Promise.all(contents.map(async (content) => {
-                const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+                const hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
+                const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
 
                 // âœ… GET comment count for each short
                 const commentCount = await Comment.countDocuments({
@@ -755,6 +758,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     description: content.description,
                     duration: content.duration,
                     thumbnailUrl: getCfUrl(content.thumbnailKey),
+                    hlsMasterUrl,
                     videoUrl: getCfUrl(videoKey),
                     views: content.views,
                     likeCount: content.likeCount || 0,
@@ -969,8 +973,10 @@ export const getSingleContent = async (req, res) => {
             imageUrls = [imageUrl];
         }
 
+        let hlsMasterUrl = null;
         if (content.contentType === 'short') {
-            const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+            hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
+            const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
             mediaUrl = getCfUrl(videoKey);
         } else if (content.contentType === 'audio') {
             const audioKey = content.processedKey || content.originalKey;
@@ -987,6 +993,7 @@ export const getSingleContent = async (req, res) => {
             thumbnailUrl,
             imageUrl: imageUrl || thumbnailUrl,
             imageUrls: imageUrls, // Array of all image URLs for multi-image posts
+            hlsMasterUrl,
             videoUrl: content.contentType === 'short' ? mediaUrl : null,
             audioUrl: content.contentType === 'audio' ? mediaUrl : null,
             views: content.views,

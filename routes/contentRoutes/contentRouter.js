@@ -29,6 +29,7 @@ import { getShortsPlayerFeed } from '../../controllers/content-controllers/short
 import { getAudioPlayerFeed } from '../../controllers/content-controllers/audioController.js';
 import { getSubscriptionPosts } from '../../controllers/content-controllers/postsController.js';
 
+import { multipartInit, multipartComplete, multipartAbort } from '../../controllers/content-controllers/multipartUploadController.js';
 import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
 const router = express.Router();
@@ -47,6 +48,13 @@ const upload = multer({
         }
     }
 });
+
+// ============================================
+// MULTIPART UPLOAD ROUTES (fast parallel chunked uploads)
+// ============================================
+router.post('/upload/multipart/init', universalTokenVerifier, multipartInit);
+router.post('/upload/multipart/complete', universalTokenVerifier, multipartComplete);
+router.post('/upload/multipart/abort', universalTokenVerifier, multipartAbort);
 
 // ============================================
 // MOUNT SUB-ROUTERS

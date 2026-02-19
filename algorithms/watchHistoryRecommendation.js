@@ -44,7 +44,7 @@ import WatchHistory from '../models/watchHistory.model.js';
 import Content from '../models/content.model.js';
 import Comment from '../models/comment.model.js';
 import User from '../models/user.model.js';
-import { getCfUrl } from '../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../config/cloudfront.js';
 
 /**
  * WatchHistoryRecommendationEngine
@@ -411,9 +411,11 @@ export class WatchHistoryRecommendationEngine {
 
                 // Generate video/audio URL for shorts and audio (CloudFront)
                 let videoUrl = null;
+                let hlsMasterUrl = null;
                 let audioUrl = null;
                 if (contentType === 'short') {
-                    const videoKey = content.hlsKey || content.processedKey || content.originalKey;
+                    hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
+                    const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
                     videoUrl = getCfUrl(videoKey);
                 } else if (contentType === 'audio') {
                     const audioKey = content.processedKey || content.originalKey;
@@ -428,6 +430,7 @@ export class WatchHistoryRecommendationEngine {
                     duration: content.duration,
                     thumbnailUrl: getCfUrl(content.thumbnailKey),
                     imageUrl: content.imageKey ? getCfUrl(content.imageKey) : null,
+                    hlsMasterUrl,
                     videoUrl,
                     audioUrl,
                     views: content.views,
