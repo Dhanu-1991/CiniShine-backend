@@ -420,9 +420,10 @@ export const unifiedSearch = async (req, res) => {
         if (wantAll || type === 'post') contentTypes.push('post');
         const wantChannels = wantAll || type === 'channel';
 
-        // Build mongo filter for content
+        // Build mongo filter for content — exclude uploading/processing items
         const contentFilter = {
             visibility: 'public',
+            status: { $nin: ['uploading', 'processing'] },
             ...(searchRegex ? { $or: [{ title: searchRegex }, { description: searchRegex }, { tags: searchRegex }] } : {}),
         };
 
