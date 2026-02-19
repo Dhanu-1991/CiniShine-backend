@@ -43,6 +43,7 @@ import mongoose from 'mongoose';
 import WatchHistory from '../models/watchHistory.model.js';
 import Content from '../models/content.model.js';
 import Comment from '../models/comment.model.js';
+import User from '../models/user.model.js';
 import { getCfUrl } from '../config/cloudfront.js';
 
 /**
@@ -52,15 +53,21 @@ import { getCfUrl } from '../config/cloudfront.js';
 export class WatchHistoryRecommendationEngine {
     constructor() {
         this.weights = {
-            // Content similarity weights
-            tagMatch: 0.25,
-            categoryMatch: 0.15,
-            creatorMatch: 0.20,
+            // ── Personalisation (profile-matching) ──
+            tagMatch: 0.12,
+            categoryMatch: 0.08,
+            creatorMatch: 0.15,
 
-            // Engagement weights  
-            watchTimeWeight: 0.15,
-            completionWeight: 0.10,
-            interactionWeight: 0.15
+            // ── Content quality signals ──
+            avgWatchTimeRatio: 0.20,   // strongest signal (YouTube confirmed)
+            engagementRate: 0.12,
+            creatorPopularity: 0.08,
+            recency: 0.10,
+
+            // ── Exploration & diversity ──
+            newContentBoost: 0.05,
+            randomJitter: 0.05,
+            popularityBaseline: 0.05
         };
     }
 
@@ -181,49 +188,103 @@ export class WatchHistoryRecommendationEngine {
     }
 
     /**
-     * Score a content item against user profile
-     * Watched content is DEPRIORITIZED (not excluded) so small content pools
-     * still return enough results for infinite scroll.
+     * Score a content item against user profile.
+     * Combines personalisation signals (tag/category/creator match from history)
+     * with content quality signals (avgWatchTime, engagement, creator popularity,
+     * recency) and exploration jitter for YouTube-like diversity.
+     *
+     * Weight budget (sums to 1.0):
+     *   Personalisation  35%  (tag 12 + category 8 + creator 15)
+     *   Quality          50%  (avgWatchTime 20 + engagement 12 + creatorPop 8 + recency 10)
+     *   Exploration      15%  (newContent 5 + popularity 5 + random 5)
      */
     scoreContent(content, userProfile, watchedIds) {
+        const w = this.weights;
         let score = 0;
         const isWatched = watchedIds.has(content._id.toString());
 
-        // Tag matching
+        // ── Personalisation signals (user profile matching) ──
+
+        // Tag matching (capped at 1.0 before weighting)
         const contentTags = content.tags || [];
+        let tagScore = 0;
         for (const tag of contentTags) {
             if (userProfile.preferredTags[tag]) {
-                score += userProfile.preferredTags[tag] * this.weights.tagMatch;
+                tagScore += userProfile.preferredTags[tag];
             }
         }
+        score += Math.min(tagScore, 1) * w.tagMatch;
 
         // Category matching
         if (content.category && userProfile.preferredCategories[content.category]) {
-            score += userProfile.preferredCategories[content.category] * this.weights.categoryMatch;
+            score += Math.min(userProfile.preferredCategories[content.category], 1) * w.categoryMatch;
         }
 
-        // Creator matching
+        // Creator matching (prefer creators user already watches)
         const creatorId = (content.userId?._id || content.userId)?.toString();
         if (creatorId && userProfile.preferredCreators[creatorId]) {
-            score += userProfile.preferredCreators[creatorId] * this.weights.creatorMatch;
+            score += Math.min(userProfile.preferredCreators[creatorId], 1) * w.creatorMatch;
         }
 
-        // Popularity boost (normalized)
-        const popularityScore = Math.min((content.views || 0) / 10000, 1);
-        score += popularityScore * 0.1;
+        // ── Content quality signals ──
 
-        // Recency boost
-        const daysSinceCreation = (Date.now() - new Date(content.createdAt)) / (1000 * 60 * 60 * 24);
-        const recencyScore = Math.exp(-daysSinceCreation / 30);
-        score += recencyScore * 0.1;
+        // Average watch-time ratio — strongest quality signal
+        const avgWT = content.averageWatchTime || 0;
+        const dur = content.duration || 0;
+        let watchTimeRatio = 0;
+        if (avgWT > 0 && dur > 0) {
+            watchTimeRatio = Math.min(avgWT / dur, 1);
+        } else if (content.totalWatchTime > 0 && content.views > 0 && dur > 0) {
+            watchTimeRatio = Math.min((content.totalWatchTime / content.views) / dur, 1);
+        }
+        score += watchTimeRatio * w.avgWatchTimeRatio;
 
-        // Random factor for diversity
-        score += Math.random() * 0.05;
+        // Engagement rate: (likes + comments×2) / views, log-capped
+        const views = content.views || 0;
+        const likes = content.likeCount || 0;
+        const comments = content._commentCount || 0;
+        let engagement = 0;
+        if (views > 0) {
+            engagement = Math.min(1, (likes + comments * 2) / views / 0.1);
+        }
+        score += engagement * w.engagementRate;
 
-        // Deprioritize (not exclude) already-watched content
-        // They appear after unwatched content but still fill the feed
+        // Creator popularity (follower count, log-normalised)
+        const followers = content._followerCount || 0;
+        const creatorPop = followers > 0
+            ? Math.min(1, Math.log10(followers + 1) / 5)
+            : 0.05;
+        score += creatorPop * w.creatorPopularity;
+
+        // Recency: two-tier decay (fresh < 48 h gets big boost)
+        const hoursOld = (Date.now() - new Date(content.createdAt)) / 3600000;
+        let recencyScore;
+        if (hoursOld <= 48) {
+            recencyScore = 0.90 + 0.10 * (1 - hoursOld / 48);
+        } else {
+            const daysOld = hoursOld / 24;
+            recencyScore = daysOld <= 30 ? Math.exp(-(daysOld - 2) / 14) : 0.05;
+        }
+        score += recencyScore * w.recency;
+
+        // ── Exploration & diversity ──
+
+        // New content boost (< 24 h old)
+        if (hoursOld < 24) {
+            score += (1 - hoursOld / 24) * w.newContentBoost;
+        }
+
+        // Popularity baseline (views, soft-capped)
+        score += Math.min(views / 10000, 1) * w.popularityBaseline;
+
+        // Random jitter for session diversity
+        score += Math.random() * w.randomJitter;
+
+        // ── Penalties ──
+
+        // Deprioritize already-watched content (70% penalty)
         if (isWatched) {
-            score *= 0.3; // 70% penalty — pushes to end but keeps them available
+            score *= 0.3;
         }
 
         return score;
@@ -255,29 +316,84 @@ export class WatchHistoryRecommendationEngine {
         candidates = await Content.find({
             contentType,
             status: 'completed',
-            visibility: 'public', // STRICT: Only public content in recommendations
+            visibility: 'public',
             _id: { $nin: Array.from(excludeIdSet) }
         })
             .populate('userId', 'userName channelName channelPicture')
             .lean();
 
-        // Score and sort — watched content is deprioritized, not removed
+        // ── Enrich candidates with creator follower counts (single batch query) ──
+        const creatorIds = [...new Set(
+            candidates.map(c => (c.userId?._id || c.userId)?.toString()).filter(Boolean)
+        )];
+        const followerMap = {};
+        if (creatorIds.length > 0) {
+            try {
+                const creatorObjIds = creatorIds.map(id =>
+                    new mongoose.Types.ObjectId(id)
+                );
+                const counts = await User.aggregate([
+                    { $match: { subscriptions: { $in: creatorObjIds } } },
+                    {
+                        $project: {
+                            subscriptions: {
+                                $filter: {
+                                    input: '$subscriptions', as: 's',
+                                    cond: { $in: ['$$s', creatorObjIds] }
+                                }
+                            }
+                        }
+                    },
+                    { $unwind: '$subscriptions' },
+                    { $group: { _id: '$subscriptions', count: { $sum: 1 } } }
+                ]);
+                for (const { _id, count } of counts) {
+                    followerMap[_id.toString()] = count;
+                }
+            } catch (_) {
+                // Non-fatal: scoring still works without follower data
+            }
+        }
+
+        // Batch-fetch comment counts for scoring (single aggregation)
+        const commentCountMap = {};
+        const contentIds = candidates.map(c => c._id);
+        if (contentIds.length > 0) {
+            try {
+                const commentAgg = await Comment.aggregate([
+                    { $match: { videoId: { $in: contentIds }, onModel: 'Content', parentCommentId: null } },
+                    { $group: { _id: '$videoId', count: { $sum: 1 } } }
+                ]);
+                for (const { _id, count } of commentAgg) {
+                    commentCountMap[_id.toString()] = count;
+                }
+            } catch (_) { }
+        }
+
+        // Attach enrichment data to each candidate
+        for (const c of candidates) {
+            const cid = (c.userId?._id || c.userId)?.toString();
+            c._followerCount = cid ? (followerMap[cid] || 0) : 0;
+            c._commentCount = commentCountMap[c._id.toString()] || 0;
+        }
+
+        // ── Score with full algorithm ──
         let scoredContent;
         if (userProfile) {
             scoredContent = candidates.map(content => ({
                 ...content,
                 recommendationScore: this.scoreContent(content, userProfile, watchedIds)
             }));
-
-            scoredContent.sort((a, b) => b.recommendationScore - a.recommendationScore);
         } else {
-            // No history - fallback to popularity + recency
+            // No history — fallback: avgWatchTime + recency + engagement + followers + random
             scoredContent = candidates.map(content => ({
                 ...content,
                 recommendationScore: this.fallbackScore(content)
             }));
-            scoredContent.sort((a, b) => b.recommendationScore - a.recommendationScore);
         }
+
+        // ── Score-band shuffle for YouTube-like controlled randomness ──
+        scoredContent = this.scoreBandShuffle(scoredContent);
 
         // Paginate
         const startIdx = (page - 1) * limit;
@@ -344,26 +460,91 @@ export class WatchHistoryRecommendationEngine {
     }
 
     /**
-     * Fallback scoring for users without watch history
+     * Fallback scoring for users without watch history (guests / new users).
+     * Uses content quality signals only — no personalisation.
+     *
+     * avgWatchTimeRatio 25% | recency 22% | engagement 15%
+     * creatorPopularity 10% | views 10% | newContentBoost 8% | random 10%
      */
     fallbackScore(content) {
         let score = 0;
 
-        // Popularity
-        score += Math.min((content.views || 0) / 10000, 1) * 0.4;
+        // Average watch-time ratio (strongest quality signal even for guests)
+        const avgWT = content.averageWatchTime || 0;
+        const dur = content.duration || 0;
+        if (avgWT > 0 && dur > 0) {
+            score += Math.min(avgWT / dur, 1) * 0.25;
+        } else if (content.totalWatchTime > 0 && content.views > 0 && dur > 0) {
+            score += Math.min((content.totalWatchTime / content.views) / dur, 1) * 0.25;
+        }
 
-        // Recency
-        const daysSinceCreation = (Date.now() - new Date(content.createdAt)) / (1000 * 60 * 60 * 24);
-        score += Math.exp(-daysSinceCreation / 14) * 0.4;
+        // Recency (two-tier decay like YouTube)
+        const hoursOld = (Date.now() - new Date(content.createdAt)) / 3600000;
+        if (hoursOld <= 48) {
+            score += (0.90 + 0.10 * (1 - hoursOld / 48)) * 0.22;
+        } else {
+            const daysOld = hoursOld / 24;
+            score += (daysOld <= 30 ? Math.exp(-(daysOld - 2) / 14) : 0.05) * 0.22;
+        }
 
-        // Engagement rate
-        const engagementRate = (content.likeCount || 0) / Math.max(content.views || 1, 1);
-        score += Math.min(engagementRate * 10, 1) * 0.15;
+        // Engagement rate: likes / views
+        const views = content.views || 0;
+        const likes = content.likeCount || 0;
+        if (views > 0) {
+            score += Math.min(1, likes / views / 0.05) * 0.15;
+        }
 
-        // Random for diversity
-        score += Math.random() * 0.05;
+        // Creator popularity (follower count, log-normalised)
+        const followers = content._followerCount || 0;
+        score += (followers > 0 ? Math.min(1, Math.log10(followers + 1) / 5) : 0.05) * 0.10;
+
+        // Popularity baseline (views, soft-capped)
+        score += Math.min(views / 10000, 1) * 0.10;
+
+        // New content boost (< 24 h)
+        if (hoursOld < 24) {
+            score += (1 - hoursOld / 24) * 0.08;
+        }
+
+        // Random jitter for discovery / freshness
+        score += Math.random() * 0.10;
 
         return score;
+    }
+
+    /**
+     * Shuffle items within score bands for session diversity.
+     * Groups items into bands of ~0.05 score width, shuffles within each band.
+     * Ensures top-quality content stays near the top while varying exact order.
+     */
+    scoreBandShuffle(items) {
+        if (items.length <= 1) return items;
+
+        // Sort by score descending first
+        items.sort((a, b) => b.recommendationScore - a.recommendationScore);
+
+        const bandWidth = 0.05;
+        const result = [];
+        let bandStart = 0;
+
+        while (bandStart < items.length) {
+            const bandThreshold = items[bandStart].recommendationScore - bandWidth;
+            let bandEnd = bandStart + 1;
+            while (bandEnd < items.length && items[bandEnd].recommendationScore >= bandThreshold) {
+                bandEnd++;
+            }
+
+            // Fisher-Yates shuffle within this band
+            const band = items.slice(bandStart, bandEnd);
+            for (let i = band.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [band[i], band[j]] = [band[j], band[i]];
+            }
+            result.push(...band);
+            bandStart = bandEnd;
+        }
+
+        return result;
     }
 
     /**
