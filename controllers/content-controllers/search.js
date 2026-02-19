@@ -470,6 +470,9 @@ export const unifiedSearch = async (req, res) => {
             const score = scoreItem(item);
             if (score <= 0) return;
             const thumbnail = getCfUrl(item.thumbnailKey);
+            // Posts store their image in imageKey (not thumbnailKey)
+            const imageUrl = item.imageKey ? getCfUrl(item.imageKey)
+                : (item.imageKeys?.length ? getCfUrl(item.imageKeys[0]) : null);
             const channelPic = item.userId?.channelPicture;
             buckets[item.contentType]?.push({
                 _id: item._id,
@@ -477,7 +480,8 @@ export const unifiedSearch = async (req, res) => {
                 title: item.title,
                 description: item.description,
                 duration: item.duration,
-                thumbnailUrl: thumbnail,
+                thumbnailUrl: thumbnail || (item.contentType === 'post' ? imageUrl : null),
+                imageUrl,
                 views: item.views,
                 likes: Array.isArray(item.likes) ? item.likes.length : (item.likes || 0),
                 dislikes: item.dislikes || 0,
