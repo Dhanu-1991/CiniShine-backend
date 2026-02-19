@@ -6,6 +6,7 @@ import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { recommendationEngine } from '../../algorithms/recommendationAlgorithm.js';
+import { findSimilarVideos } from '../../algorithms/videoSimilarity.js';
 import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
@@ -151,4 +152,44 @@ export const getMixedFeed = async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 };
+
+/**
+ * Returns a combined response with `videos` (similar videos) and `shorts` (recommended shorts).
+ * Used by the watch page sidebar and API route `/api/v2/video/:videoId/recommendations-with-shorts`.
+ */
+export const getRecommendationsWithShorts = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { videoId } = req.params;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const shortsLimit = parseInt(req.query.shortsLimit) || 4;
+        const seenIds = req.query.seenIds ? req.query.seenIds.split(',').filter(Boolean) : [];
+
+        // Find current video/content
+        const current = await Content.findById(videoId).lean();
+        if (!current) return res.status(404).json({ error: 'Content not found' });
+
+        // Similar videos (content-based)
+        const similar = await findSimilarVideos(current, page, limit);
+
+        // Short recommendations from watch-history engine (personalised / fallback)
+        const shorts = await watchHistoryEngine.getRecommendations(userId, 'short', {
+            page: 1,
+            limit: shortsLimit,
+            excludeIds: seenIds
+        });
+
+        res.json({
+            videos: similar.videos || [],
+            shorts: shorts.content || [],
+            pagination: similar.pagination || { currentPage: page, hasNextPage: false }
+        });
+    } catch (error) {
+        console.error('[Feed] getRecommendationsWithShorts error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+
 
