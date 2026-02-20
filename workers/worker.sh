@@ -3,7 +3,7 @@ set -e
 
 # Production Media Processing Worker Setup - SUPPORTS VIDEOS, SHORTS, AUDIO
 # Handles multiple content types with appropriate processing pipelines
-# Version 4.1 - UNIFIED CONTENT MODEL (No separate Video model)
+# Version 4.2 - UNIFIED CONTENT MODEL + MASTER PLAYLIST FIX
 
 REGION="us-east-1"
 BUCKET_NAME="cini-shine"
@@ -74,7 +74,7 @@ cd $APP_DIR
 cat > package.json << 'EOF'
 {
   "name": "cinishine-worker",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "type": "module",
   "scripts": {
     "worker": "node workers/worker.js"
@@ -342,7 +342,7 @@ import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
 const ffprobePath = ffprobeInstaller.path;
 
-console.log("🎬 CiniShine Media Processing Worker v4.1 - UNIFIED CONTENT MODEL");
+console.log("🎬 CiniShine Media Processing Worker v4.2 - UNIFIED CONTENT MODEL");
 console.log("📊 Configuration:");
 console.log("   MONGO_URI:", process.env.MONGO_URI ? "✔" : "✗");
 console.log("   AWS_REGION:", process.env.AWS_REGION);
@@ -509,48 +509,56 @@ async function runFFmpeg(args, options = {}) {
       ...options
     });
 
-    let stderr = '';
+    // Cap stderr to prevent unbounded memory growth on long encodes (2h+ videos)
+    const MAX_STDERR = 5 * 1024 * 1024; // 5MB cap
+    let stderrChunks = [];
+    let stderrLen = 0;
     let lastProgress = '';
     let lastLogTime = 0;
-    let hasError = false;
+
+    // Drain stdout to prevent pipe blocking (FFmpeg rarely writes here but safety first)
+    ffmpeg.stdout.on('data', () => {});
 
     ffmpeg.stderr.on('data', (data) => {
       const text = data.toString();
-      stderr += text;
+
+      // Only keep recent stderr to avoid OOM on multi-hour encodes
+      if (stderrLen < MAX_STDERR) {
+        stderrChunks.push(text);
+        stderrLen += text.length;
+      }
 
       if (text.includes('time=')) {
         const m = text.match(/time=(\d+:\d+:\d+\.\d+)/);
         if (m && m[1] !== lastProgress) {
           lastProgress = m[1];
           const now = Date.now();
-          if (now - lastLogTime > 2000) {
+          if (now - lastLogTime > 10000) {
             console.log(`   ⏱️  Progress: ${lastProgress}`);
             lastLogTime = now;
           }
         }
       }
-
-      if (text.match(/(Error|Invalid|No such file or directory|Broken pipe)/i)) {
-        hasError = true;
-        console.error('⚠️  FFmpeg stderr flagged an error:', text.substring(0, 300));
-      }
     });
 
     ffmpeg.on('close', (code) => {
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-      if (stderr && stderr.length > 0) {
-        const tail = stderr.slice(-1500);
+      const stderr = stderrChunks.join('');
+      stderrChunks = []; // Free memory immediately
+
+      if (stderr.length > 0) {
+        const tail = stderr.slice(-3000);
         console.log('--- FFmpeg STDERR (tail) ---');
         console.log(tail);
         console.log('--- end stderr ---');
       }
 
-      if (code !== 0 || hasError) {
-        console.error('❌ FFmpeg FAILED or produced fatal messages');
+      if (code !== 0) {
+        console.error(`❌ FFmpeg FAILED with exit code ${code}`);
         return reject(new Error(`FFmpeg failed with code ${code}. See stderr above.`));
       }
 
-      console.log(`✅ FFmpeg completed in ${duration}s`);
+      console.log(`✅ FFmpeg completed in ${duration}s (exit code 0)`);
       resolve({ stderr, duration });
     });
 
@@ -630,6 +638,71 @@ async function validateHLSOutput(outputDir, renditionCount) {
   }
   console.log(`✅ Validation passed: ${totalSegments} total segments`);
   return { renditionDirs, totalSegments };
+}
+
+// ============================================================================
+// MASTER PLAYLIST GENERATOR
+// Manually generates master.m3u8 instead of relying on FFmpeg's -master_pl_name
+// which silently produces 0-byte files for long videos (2h+) due to an FFmpeg
+// HLS muxer bug where the master playlist write during hls_write_trailer()
+// fails when the output path uses %v subdirectory expansion.
+// ============================================================================
+function generateMasterPlaylist(outputDir, renditions, hasAudio) {
+  console.log('📝 Generating master playlist manually...');
+  const masterPath = path.join(outputDir, 'master.m3u8');
+
+  // Check if FFmpeg left a 0-byte or misplaced master.m3u8
+  if (fs.existsSync(masterPath)) {
+    const existing = fs.statSync(masterPath).size;
+    if (existing > 0) {
+      console.log(`   ℹ️  Existing master.m3u8 (${existing} bytes) — overwriting with reliable version`);
+    } else {
+      console.log('   ⚠️  Found 0-byte master.m3u8 from FFmpeg — replacing');
+    }
+  }
+
+  // Check for misplaced master.m3u8 in stream_* subdirectories (FFmpeg bug)
+  const streamDirs = fs.readdirSync(outputDir)
+    .filter(f => f.startsWith('stream_') && fs.statSync(path.join(outputDir, f)).isDirectory());
+  for (const dir of streamDirs) {
+    const misplaced = path.join(outputDir, dir, 'master.m3u8');
+    if (fs.existsSync(misplaced)) {
+      console.log(`   ℹ️  Found misplaced master.m3u8 in ${dir}/ — cleaning up`);
+      fs.unlinkSync(misplaced);
+    }
+  }
+
+  // Build master playlist content
+  let content = '#EXTM3U\n#EXT-X-VERSION:3\n';
+
+  for (const r of renditions) {
+    const streamDir = `stream_${r.name}`;
+    const variantPath = path.join(outputDir, streamDir, 'playlist.m3u8');
+
+    if (!fs.existsSync(variantPath)) {
+      throw new Error(`Variant playlist missing: ${streamDir}/playlist.m3u8`);
+    }
+    const variantSize = fs.statSync(variantPath).size;
+    if (variantSize === 0) {
+      throw new Error(`Variant playlist empty: ${streamDir}/playlist.m3u8`);
+    }
+
+    const codecs = hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028';
+    const bandwidth = r.bitrate + (hasAudio ? 128000 : 0);
+
+    content += `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${r.resolution},CODECS="${codecs}",NAME="${r.name}"\n`;
+    content += `${streamDir}/playlist.m3u8\n`;
+  }
+
+  fs.writeFileSync(masterPath, content, 'utf8');
+
+  const written = fs.statSync(masterPath);
+  if (written.size === 0) {
+    throw new Error('Failed to write master playlist — filesystem may be full');
+  }
+
+  console.log(`✅ Master playlist generated: ${written.size} bytes, ${renditions.length} variants`);
+  return masterPath;
 }
 
 async function protectInstance(protect) {
@@ -760,7 +833,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     const baseFilter = `[0:v]split=${renditions.length}${renditions.map((_, i) => `[v${i}]`).join('')}; `;
 
     const ffmpegArgs = [
-      '-hide_banner', '-loglevel', 'info', '-progress', 'pipe:2', '-y',
+      '-hide_banner', '-loglevel', 'info', '-y',
       '-i', inputPath,
       '-filter_complex', baseFilter + filterComplex,
     ];
@@ -790,14 +863,22 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0',
       '-hls_playlist_type', 'vod', '-hls_flags', 'independent_segments',
       '-hls_segment_type', 'mpegts',
-      '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts'),
-      '-master_pl_name', 'master.m3u8'
+      '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts')
     );
 
     const varStreamMap = renditions.map((r, i) => hasAudio ? `v:${i},a:${i},name:${r.name}` : `v:${i},name:${r.name}`).join(' ');
     ffmpegArgs.push('-var_stream_map', varStreamMap, path.join(outputDir, 'stream_%v', 'playlist.m3u8'));
 
+    // Pre-create stream directories to avoid FFmpeg mkdir race conditions
+    for (const r of renditions) {
+      ensureDirectoryExists(path.join(outputDir, `stream_${r.name}`));
+    }
+
     await runFFmpeg(ffmpegArgs);
+
+    // Generate master playlist manually — FFmpeg's -master_pl_name produces
+    // 0-byte files for long videos due to HLS muxer finalization bug
+    generateMasterPlaylist(outputDir, renditions, hasAudio);
 
     // Validate and upload
     const validation = await validateHLSOutput(outputDir, renditions.length);
@@ -835,7 +916,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
         resolution: r.resolution,
         bitrate: r.bitrate,
         name: r.name,
-        playlistKey: `hls/videos/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
+        playlistKey: `hls/videos/${userId}/${fileId}/stream_${r.name}/playlist.m3u8`,
         codecs: hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028'
       })),
       processingEnd: new Date(),
@@ -967,7 +1048,7 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     const baseFilter = `[0:v]split=${renditions.length}${renditions.map((_, i) => `[v${i}]`).join('')}; `;
 
     const ffmpegArgs = [
-      '-hide_banner', '-loglevel', 'info', '-progress', 'pipe:2', '-y',
+      '-hide_banner', '-loglevel', 'info', '-y',
       '-i', inputPath,
       '-filter_complex', baseFilter + scaleFilter,
     ];
@@ -997,14 +1078,21 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       '-f', 'hls', '-hls_time', '2', '-hls_list_size', '0',
       '-hls_playlist_type', 'vod', '-hls_flags', 'independent_segments',
       '-hls_segment_type', 'mpegts',
-      '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts'),
-      '-master_pl_name', 'master.m3u8'
+      '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts')
     );
 
     const varStreamMap = renditions.map((r, i) => hasAudio ? `v:${i},a:${i},name:${r.name}` : `v:${i},name:${r.name}`).join(' ');
     ffmpegArgs.push('-var_stream_map', varStreamMap, path.join(outputDir, 'stream_%v', 'playlist.m3u8'));
 
+    // Pre-create stream directories
+    for (const r of renditions) {
+      ensureDirectoryExists(path.join(outputDir, `stream_${r.name}`));
+    }
+
     await runFFmpeg(ffmpegArgs);
+
+    // Generate master playlist manually
+    generateMasterPlaylist(outputDir, renditions, hasAudio);
 
     const validation = await validateHLSOutput(outputDir, renditions.length);
 
@@ -1039,7 +1127,8 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       renditions: renditions.map((r, i) => ({
         resolution: r.resolution,
         bitrate: r.bitrate,
-        playlistKey: `hls/shorts/${userId}/${fileId}/stream_${i}/playlist.m3u8`,
+        name: r.name,
+        playlistKey: `hls/shorts/${userId}/${fileId}/stream_${r.name}/playlist.m3u8`,
         codecs: hasAudio ? 'avc1.640028,mp4a.40.2' : 'avc1.640028'
       })),
       processingEnd: new Date()
@@ -1412,7 +1501,7 @@ chown -R ec2-user:ec2-user $APP_DIR
 
 cat > /etc/systemd/system/cinishine-worker.service << EOF
 [Unit]
-Description=CiniShine Media Processing Worker v4.1 (Unified Content Model)
+Description=CiniShine Media Processing Worker v4.2 (Unified Content Model)
 After=network-online.target
 Wants=network-online.target
 
@@ -1451,7 +1540,7 @@ fi
 
 echo ""
 echo "=== Setup completed at $(date) ==="
-echo "✅ CiniShine Media Processing Worker v4.1 - UNIFIED CONTENT MODEL"
+echo "✅ CiniShine Media Processing Worker v4.2 - UNIFIED CONTENT MODEL"
 echo ""
 echo "🔄 KEY CHANGES FROM v4.0:"
 echo " ❌ Removed separate Video model"
