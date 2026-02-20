@@ -12,6 +12,7 @@
  *   Called when a creator uploads new content to notify all subscribers.
  */
 
+import mongoose from 'mongoose';
 import Notification from '../../models/notification.model.js';
 import User from '../../models/user.model.js';
 import { getCfUrl } from '../../config/cloudfront.js';
@@ -79,16 +80,36 @@ export const createUploadNotifications = async (creatorId, contentId, contentTyp
 
 /**
  * Get user notifications (max 10, newest first)
+ * Only returns notifications for content that has completed processing.
  * GET /api/v2/notifications
  */
 export const getNotifications = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const notifications = await Notification.find({ userId })
-            .sort({ createdAt: -1 })
-            .limit(MAX_NOTIFICATIONS_PER_USER)
-            .lean();
+        const notifications = await Notification.aggregate([
+            { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+            { $sort: { createdAt: -1 } },
+            { $limit: MAX_NOTIFICATIONS_PER_USER * 2 }, // fetch more to account for filtered-out processing items
+            {
+                $lookup: {
+                    from: 'contents',
+                    localField: 'contentId',
+                    foreignField: '_id',
+                    as: 'content'
+                }
+            },
+            {
+                $match: {
+                    $or: [
+                        { 'content.status': 'completed' },
+                        { 'content': { $size: 0 } } // keep if content was deleted (graceful)
+                    ]
+                }
+            },
+            { $limit: MAX_NOTIFICATIONS_PER_USER },
+            { $project: { content: 0 } } // remove the joined field
+        ]);
 
         return res.json({
             items: notifications,
@@ -122,14 +143,35 @@ export const dismissNotification = async (req, res) => {
 };
 
 /**
- * Get unread notification count
+ * Get unread notification count (only for completed content)
  * GET /api/v2/notifications/unread-count
  */
 export const getUnreadNotificationCount = async (req, res) => {
     try {
         const userId = req.user.id;
-        const count = await Notification.countDocuments({ userId, read: false });
-        return res.json({ count });
+        const result = await Notification.aggregate([
+            { $match: { userId: new mongoose.Types.ObjectId(userId), read: false } },
+            {
+                $lookup: {
+                    from: 'contents',
+                    localField: 'contentId',
+                    foreignField: '_id',
+                    as: 'content'
+                }
+            },
+            {
+                $match: {
+                    $or: [
+                        { 'content.status': 'completed' },
+                        { 'content': { $size: 0 } }
+                    ]
+                }
+            },
+            { $count: 'total' }
+        ]);
+
+        const count = result.length > 0 ? result[0].total : 0;
+        return res.json({ unreadCount: count });
     } catch (error) {
         console.error('Error fetching unread count:', error);
         return res.status(500).json({ message: 'Failed to fetch unread count' });

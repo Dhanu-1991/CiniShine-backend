@@ -389,6 +389,9 @@ export const unifiedSearch = async (req, res) => {
             const daysSince = (Date.now() - new Date(item.createdAt)) / 86400000;
             score += Math.max(0, 15 - daysSince * 0.5);
             score += Math.min((item.views || 0) / 1000, 12);
+            // Creator follower count boost — popular creators' content ranks higher
+            const creatorFollowers = item.userId?.subscriptions?.length || 0;
+            score += Math.min(creatorFollowers / 100, 10);
             return score;
         };
 

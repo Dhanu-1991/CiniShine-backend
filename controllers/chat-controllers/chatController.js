@@ -419,10 +419,13 @@ export const getUnreadCount = async (req, res) => {
 
         let chatsUnread = 0;
         let requestsUnread = 0;
+        let groupsUnread = 0;
 
         conversations.forEach(conv => {
             const unread = conv.unreadCount?.get?.(userId) || (conv.unreadCount?.[userId]) || 0;
-            if (conv.accepted || conv.initiatorId?.toString() === userId) {
+            if (conv.isGroup) {
+                groupsUnread += unread;
+            } else if (conv.accepted || conv.initiatorId?.toString() === userId) {
                 chatsUnread += unread;
             } else {
                 requestsUnread += unread;
@@ -432,7 +435,8 @@ export const getUnreadCount = async (req, res) => {
         return res.json({
             chatsUnread,
             requestsUnread,
-            totalUnread: chatsUnread + requestsUnread
+            groupsUnread,
+            totalUnread: chatsUnread + requestsUnread + groupsUnread
         });
     } catch (error) {
         console.error('Error fetching unread count:', error);
