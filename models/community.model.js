@@ -98,8 +98,7 @@ const CommunitySchema = new mongoose.Schema({
     timestamps: true
 });
 
-CommunitySchema.index({ communityId: 1 });
-CommunitySchema.index({ slug: 1 });
+// communityId, slug, and name already have unique:true which auto-creates indexes
 CommunitySchema.index({ type: 1, isSearchVisible: 1 });
 CommunitySchema.index({ ownerId: 1 });
 CommunitySchema.index({ createdAt: -1 });
