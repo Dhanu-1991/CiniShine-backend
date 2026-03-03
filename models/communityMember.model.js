@@ -35,7 +35,19 @@ const CommunityMemberSchema = new mongoose.Schema({
         type: String,
         enum: ['manual', 'invite', 'request', 'import_backfill'],
         default: 'manual'
-    }
+    },
+    // Ban tracking
+    bannedAt: Date,
+    bannedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+    banReason: {
+        type: String,
+        trim: true,
+        maxlength: 500
+    },
+    banExpiresAt: Date  // For temporary bans (null = permanent)
 }, {
     timestamps: true
 });

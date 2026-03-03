@@ -134,8 +134,10 @@ export const getCommunityFeed = async (req, res) => {
             memberships.forEach(m => { membershipMap[m.communityId.toString()] = m; });
         }
 
-        // ── Apply visibility/backfill rules ──
+        // ── Apply visibility/backfill rules + deduplicate ──
         const feed = [];
+        const seenContentIds = new Set(); // Prevent duplicate content from multi-community membership
+
         for (const link of links) {
             const content = contentMap[link.contentId.toString()];
             if (!content) continue;
@@ -145,6 +147,10 @@ export const getCommunityFeed = async (req, res) => {
 
             // Skip private channel-only content
             if (content.visibility === 'private') continue;
+
+            // Deduplicate: if this content already appeared from another community, skip
+            if (!communityId && seenContentIds.has(link.contentId.toString())) continue;
+            seenContentIds.add(link.contentId.toString());
 
             // Visibility checks for imported content
             if (link.isImported && community.importedContentFlag) {
@@ -180,17 +186,25 @@ export const getCommunityFeed = async (req, res) => {
             // Filter: my_posts
             if (filter === 'my_posts' && content.userId?._id?.toString() !== userId) continue;
 
-            feed.push({
+            // For mixed feed (no communityId), only include creator info — no community name
+            // For single community feed, include community info
+            const feedItem = {
                 ...content,
                 _linkId: link._id,
-                communityId: link.communityId,
-                communityName: community.name,
-                communitySlug: community.slug,
-                communityHandle: community.communityId,
-                communityType: community.type,
-                communityAvatarUrl: community.avatarUrl,
                 isImported: link.isImported
-            });
+            };
+
+            if (communityId) {
+                // Specific community view — include community metadata
+                feedItem.communityId = link.communityId;
+                feedItem.communityName = community.name;
+                feedItem.communitySlug = community.slug;
+                feedItem.communityHandle = community.communityId;
+                feedItem.communityType = community.type;
+                feedItem.communityAvatarUrl = community.avatarUrl;
+            }
+
+            feed.push(feedItem);
         }
 
         return res.json({

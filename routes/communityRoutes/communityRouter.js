@@ -16,7 +16,13 @@ import {
     getUserPostableCommunities,
     clearImportedContent,
     searchCommunities,
-    getJoinedCommunities
+    getJoinedCommunities,
+    unbanMember,
+    listBannedMembers,
+    changeRole,
+    transferOwnership,
+    updateRules,
+    getRules
 } from '../../controllers/community-controllers/communityController.js';
 import {
     getCommunityFeed,
@@ -48,9 +54,19 @@ router.post('/:id/join', universalTokenVerifier, joinCommunity);
 router.post('/:id/leave', universalTokenVerifier, leaveCommunity);
 router.get('/:id/members', optionalTokenVerifier, listMembers);
 router.get('/:id/pending', universalTokenVerifier, listPendingRequests);
+router.get('/:id/banned', universalTokenVerifier, listBannedMembers);
 router.post('/:id/approve/:memberId', universalTokenVerifier, approveJoinRequest);
 router.post('/:id/reject/:memberId', universalTokenVerifier, rejectJoinRequest);
 router.post('/:id/ban/:targetUserId', universalTokenVerifier, banMember);
+router.post('/:id/unban/:targetUserId', universalTokenVerifier, unbanMember);
+
+// ── Role management ──
+router.post('/:id/role/:targetUserId', universalTokenVerifier, changeRole);
+router.post('/:id/transfer', universalTokenVerifier, transferOwnership);
+
+// ── Rules ──
+router.get('/:id/rules', optionalTokenVerifier, getRules);
+router.put('/:id/rules', universalTokenVerifier, updateRules);
 
 // ── Settings ──
 router.put('/:id/posting-policy', universalTokenVerifier, updatePostingPolicy);

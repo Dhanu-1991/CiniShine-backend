@@ -415,11 +415,22 @@ export const updateCommunity = async (req, res) => {
         }
 
         const allowedFields = ['name', 'description', 'avatarUrl', 'bannerUrl', 'isSearchVisible', 'postingPolicy', 'settings'];
+
+        // Only OWNER can change community type and name
+        if (member.role === 'OWNER') {
+            allowedFields.push('type');
+        }
+
         const updates = {};
         for (const field of allowedFields) {
             if (req.body[field] !== undefined) {
                 updates[field] = req.body[field];
             }
+        }
+
+        // Validate type if changing
+        if (updates.type && !['PUBLIC', 'PRIVATE'].includes(updates.type)) {
+            return res.status(400).json({ error: 'Type must be PUBLIC or PRIVATE' });
         }
 
         // If name changes, regenerate slug
@@ -632,6 +643,7 @@ export const banMember = async (req, res) => {
     try {
         const userId = req.user?.id;
         const { id, targetUserId } = req.params;
+        const { reason, expiresAt } = req.body || {};
 
         const callerMember = await CommunityMember.findOne({
             communityId: id,
@@ -659,14 +671,28 @@ export const banMember = async (req, res) => {
             return res.status(403).json({ error: 'Cannot ban a member with equal or higher role' });
         }
 
+        // MODERATOR can only do temporary bans
+        if (callerMember.role === 'MODERATOR' && !expiresAt) {
+            return res.status(403).json({ error: 'Moderators can only issue temporary bans. Provide an expiresAt date.' });
+        }
+
         targetMember.status = 'BANNED';
         targetMember.role = 'BANNED';
+        targetMember.bannedAt = new Date();
+        targetMember.bannedBy = userId;
+        targetMember.banReason = reason || null;
+        targetMember.banExpiresAt = expiresAt ? new Date(expiresAt) : null;
         await targetMember.save();
 
         await Community.findByIdAndUpdate(id, { $inc: { memberCount: -1 } });
-        await logAction(userId, id, 'member_banned', { bannedUserId: targetUserId });
+        await logAction(userId, id, 'member_banned', {
+            bannedUserId: targetUserId,
+            reason,
+            temporary: !!expiresAt,
+            expiresAt
+        });
 
-        return res.json({ message: 'Member banned' });
+        return res.json({ message: 'Member banned', membership: targetMember });
     } catch (error) {
         console.error('banMember error:', error);
         return res.status(500).json({ error: 'Failed to ban member' });
@@ -975,6 +1001,302 @@ export const getJoinedCommunities = async (req, res) => {
     } catch (error) {
         console.error('getJoinedCommunities error:', error);
         return res.status(500).json({ error: 'Failed to get joined communities' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/unban/:targetUserId — Unban a member
+// ═══════════════════════════════════════════════════
+export const unbanMember = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id, targetUserId } = req.params;
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN'] }
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Only owners and admins can unban members' });
+        }
+
+        const targetMember = await CommunityMember.findOne({
+            communityId: id,
+            userId: targetUserId,
+            status: 'BANNED'
+        });
+
+        if (!targetMember) {
+            return res.status(404).json({ error: 'Banned member not found' });
+        }
+
+        targetMember.role = 'MEMBER';
+        targetMember.status = 'ACTIVE';
+        targetMember.bannedAt = null;
+        targetMember.bannedBy = null;
+        targetMember.banReason = null;
+        targetMember.banExpiresAt = null;
+        await targetMember.save();
+
+        await Community.findByIdAndUpdate(id, { $inc: { memberCount: 1 } });
+        await logAction(userId, id, 'member_unbanned', { unbannedUserId: targetUserId });
+
+        return res.json({ message: 'Member unbanned', membership: targetMember });
+    } catch (error) {
+        console.error('unbanMember error:', error);
+        return res.status(500).json({ error: 'Failed to unban member' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// GET /api/v2/communities/:id/banned — List banned members
+// ═══════════════════════════════════════════════════
+export const listBannedMembers = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN', 'MODERATOR'] }
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Not authorized' });
+        }
+
+        const banned = await CommunityMember.find({
+            communityId: id,
+            status: 'BANNED'
+        })
+            .sort({ bannedAt: -1 })
+            .populate('userId', 'userName channelName channelPicture channelHandle')
+            .populate('bannedBy', 'userName channelName')
+            .lean();
+
+        return res.json({ banned });
+    } catch (error) {
+        console.error('listBannedMembers error:', error);
+        return res.status(500).json({ error: 'Failed to list banned members' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/role/:targetUserId — Change member role
+// ═══════════════════════════════════════════════════
+// Role change rules from spec:
+// OWNER → Can assign ADMIN, MODERATOR; can demote ADMIN → MOD/MEMBER, MODERATOR → MEMBER
+// ADMIN → Can assign MODERATOR; can demote MODERATOR → MEMBER
+// MODERATOR/MEMBER → Cannot assign roles
+export const changeRole = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id, targetUserId } = req.params;
+        const { newRole } = req.body;
+
+        if (!newRole || !['ADMIN', 'MODERATOR', 'MEMBER'].includes(newRole)) {
+            return res.status(400).json({ error: 'newRole must be ADMIN, MODERATOR, or MEMBER' });
+        }
+
+        // Can't change own role
+        if (userId === targetUserId) {
+            return res.status(400).json({ error: 'Cannot change your own role' });
+        }
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            status: 'ACTIVE'
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Not an active member' });
+        }
+
+        const roleHierarchy = { OWNER: 4, ADMIN: 3, MODERATOR: 2, MEMBER: 1, PENDING: 0, BANNED: -1 };
+
+        // Only OWNER and ADMIN can change roles
+        if (!['OWNER', 'ADMIN'].includes(callerMember.role)) {
+            return res.status(403).json({ error: 'Only owner and admins can change roles' });
+        }
+
+        const targetMember = await CommunityMember.findOne({
+            communityId: id,
+            userId: targetUserId,
+            status: 'ACTIVE'
+        });
+
+        if (!targetMember) {
+            return res.status(404).json({ error: 'Active member not found' });
+        }
+
+        // Cannot modify OWNER role
+        if (targetMember.role === 'OWNER') {
+            return res.status(403).json({ error: 'Cannot change the owner\'s role. Use transfer ownership instead.' });
+        }
+
+        // ADMIN restrictions: can only promote MEMBER → MODERATOR or demote MODERATOR → MEMBER
+        if (callerMember.role === 'ADMIN') {
+            if (newRole === 'ADMIN') {
+                return res.status(403).json({ error: 'Only the owner can promote to ADMIN' });
+            }
+            // ADMIN can't modify other ADMINs
+            if (targetMember.role === 'ADMIN') {
+                return res.status(403).json({ error: 'Only the owner can modify admin roles' });
+            }
+        }
+
+        // Prevent promoting to a role >= caller's role (except OWNER promoting to ADMIN)
+        if (callerMember.role !== 'OWNER' && roleHierarchy[newRole] >= roleHierarchy[callerMember.role]) {
+            return res.status(403).json({ error: 'Cannot promote to a role equal to or above your own' });
+        }
+
+        const oldRole = targetMember.role;
+        targetMember.role = newRole;
+        await targetMember.save();
+
+        await logAction(userId, id, 'role_changed', {
+            targetUserId,
+            oldRole,
+            newRole
+        });
+
+        return res.json({
+            message: `Role changed from ${oldRole} to ${newRole}`,
+            membership: targetMember
+        });
+    } catch (error) {
+        console.error('changeRole error:', error);
+        return res.status(500).json({ error: 'Failed to change role' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/transfer — Transfer ownership
+// ═══════════════════════════════════════════════════
+export const transferOwnership = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { newOwnerId } = req.body;
+
+        if (!newOwnerId) {
+            return res.status(400).json({ error: 'newOwnerId is required' });
+        }
+
+        // Verify caller is OWNER
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            role: 'OWNER',
+            status: 'ACTIVE'
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Only the owner can transfer ownership' });
+        }
+
+        // Target must be an ACTIVE ADMIN
+        const targetMember = await CommunityMember.findOne({
+            communityId: id,
+            userId: newOwnerId,
+            role: 'ADMIN',
+            status: 'ACTIVE'
+        });
+
+        if (!targetMember) {
+            return res.status(400).json({ error: 'New owner must be an active ADMIN of this community' });
+        }
+
+        // Promote target to OWNER
+        targetMember.role = 'OWNER';
+        await targetMember.save();
+
+        // Demote current owner to ADMIN
+        await CommunityMember.findOneAndUpdate(
+            { communityId: id, userId, role: 'OWNER' },
+            { role: 'ADMIN' }
+        );
+
+        // Update community ownerId
+        await Community.findByIdAndUpdate(id, { ownerId: newOwnerId });
+
+        await logAction(userId, id, 'ownership_transferred', { oldOwnerId: userId, newOwnerId });
+
+        return res.json({ message: 'Ownership transferred successfully' });
+    } catch (error) {
+        console.error('transferOwnership error:', error);
+        return res.status(500).json({ error: 'Failed to transfer ownership' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// PUT /api/v2/communities/:id/rules — Update community rules
+// ═══════════════════════════════════════════════════
+export const updateRules = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { rules } = req.body; // Array of { title, description }
+
+        if (!Array.isArray(rules)) {
+            return res.status(400).json({ error: 'rules must be an array of { title, description }' });
+        }
+
+        if (rules.length > 20) {
+            return res.status(400).json({ error: 'Maximum 20 rules allowed' });
+        }
+
+        // Only OWNER and ADMIN can manage rules
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN'] }
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Only owners and admins can manage community rules' });
+        }
+
+        // Validate rules
+        const sanitizedRules = rules.map((r, i) => ({
+            title: (r.title || `Rule ${i + 1}`).substring(0, 200),
+            description: (r.description || '').substring(0, 1000)
+        }));
+
+        const community = await Community.findByIdAndUpdate(
+            id,
+            { rules: sanitizedRules },
+            { new: true }
+        ).select('rules');
+
+        await logAction(userId, id, 'rules_updated', { ruleCount: sanitizedRules.length });
+
+        return res.json({ rules: community.rules });
+    } catch (error) {
+        console.error('updateRules error:', error);
+        return res.status(500).json({ error: 'Failed to update rules' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// GET /api/v2/communities/:id/rules — Get community rules
+// ═══════════════════════════════════════════════════
+export const getRules = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const community = await Community.findById(id).select('rules name').lean();
+        if (!community) return res.status(404).json({ error: 'Community not found' });
+        return res.json({ rules: community.rules || [], communityName: community.name });
+    } catch (error) {
+        console.error('getRules error:', error);
+        return res.status(500).json({ error: 'Failed to get rules' });
     }
 };
 

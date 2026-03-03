@@ -80,6 +80,11 @@ const CommunitySchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    // Community rules/guidelines
+    rules: [{
+        title: { type: String, trim: true, maxlength: 200 },
+        description: { type: String, trim: true, maxlength: 1000 }
+    }],
     // Extensible settings
     settings: {
         type: mongoose.Schema.Types.Mixed,
