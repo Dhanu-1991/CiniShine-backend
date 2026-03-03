@@ -13,8 +13,9 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import mongoose from "mongoose";
-import Content from "../../models/content.model.js";
-import { createUploadNotifications } from "../notification-controllers/notificationController.js";
+import Content from "../../models/content.model.js"; import ContentToCommunity from '../../models/contentToCommunity.model.js';
+import Community from '../../models/community.model.js';
+import CommunityMember from '../../models/communityMember.model.js'; import { createUploadNotifications } from "../notification-controllers/notificationController.js";
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -203,7 +204,25 @@ export const multipartComplete = async (req, res) => {
                 content.thumbnailKey
             ).catch((err) => console.error("Notification error:", err));
         }
-
+        // Link content to communities if requested
+        const postToCommunities = req.body.postToCommunities;
+        if (postToCommunities && Array.isArray(postToCommunities) && postToCommunities.length > 0 && content) {
+            try {
+                const links = postToCommunities.map(cId => ({
+                    contentId: content._id,
+                    communityId: cId,
+                    isImported: false,
+                    createdAt: new Date()
+                }));
+                await ContentToCommunity.insertMany(links, { ordered: false }).catch(() => { });
+                await Community.updateMany(
+                    { _id: { $in: postToCommunities } },
+                    { $inc: { contentCount: 1 } }
+                );
+            } catch (communityErr) {
+                console.error('Community linking error:', communityErr.message);
+            }
+        }
         console.log(`✅ Multipart upload completed: ${fileId} (${sortedParts.length} parts)`);
 
         res.json({

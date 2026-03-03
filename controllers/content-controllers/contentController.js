@@ -24,6 +24,8 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
+import ContentToCommunity from '../../models/contentToCommunity.model.js';
+import Community from '../../models/community.model.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -375,6 +377,26 @@ export const createPost = async (req, res) => {
         });
 
         console.log(`âœ… Post created: ${fileId} by user ${userId}`);
+
+        // Link content to communities if requested
+        const postToCommunities = req.body.postToCommunities;
+        if (postToCommunities && Array.isArray(postToCommunities) && postToCommunities.length > 0) {
+            try {
+                const links = postToCommunities.map(cId => ({
+                    contentId: fileId,
+                    communityId: cId,
+                    isImported: false,
+                    createdAt: new Date()
+                }));
+                await ContentToCommunity.insertMany(links, { ordered: false }).catch(() => { });
+                await Community.updateMany(
+                    { _id: { $in: postToCommunities } },
+                    { $inc: { contentCount: 1 } }
+                );
+            } catch (communityErr) {
+                console.error('Community linking error:', communityErr.message);
+            }
+        }
 
         res.json({
             success: true,

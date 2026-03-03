@@ -504,6 +504,7 @@ async function runFFmpeg(args, options = {}) {
 
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
+    let hasError = false; 
     const ffmpeg = spawn(ffmpegPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       ...options
@@ -528,17 +529,22 @@ async function runFFmpeg(args, options = {}) {
         stderrLen += text.length;
       }
 
-      if (text.includes('time=')) {
-        const m = text.match(/time=(\d+:\d+:\d+\.\d+)/);
-        if (m && m[1] !== lastProgress) {
-          lastProgress = m[1];
-          const now = Date.now();
-          if (now - lastLogTime > 10000) {
-            console.log(`   ⏱️  Progress: ${lastProgress}`);
-            lastLogTime = now;
-          }
-        }
+      // progress parsing
+  if (text.includes('out_time=')) {           // -progress pipe:2 format
+    const m = text.match(/out_time=(\d+:\d+:\d+)/);
+    if (m) {
+      const now = Date.now();
+      if (now - lastLogTime > 10000) {
+        console.log(`   ⏱️  Progress: ${m[1]}`);
+        lastLogTime = now;
       }
+    }
+  }
+  // keep error detection
+  if (text.match(/(No space left on device|Broken pipe)/i)) {
+    hasError = true;
+    console.error('⚠️  FFmpeg fatal:', text.substring(0, 300));
+  }
     });
 
     ffmpeg.on('close', (code) => {
@@ -742,7 +748,9 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
 
   let tempDir;
   let visibilityExtender;
+  let hasError = false;
   const processStart = Date.now();
+  let processingSucceeded = false;
 
   try {
     // ✅ Use Content model instead of Video
@@ -833,7 +841,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     const baseFilter = `[0:v]split=${renditions.length}${renditions.map((_, i) => `[v${i}]`).join('')}; `;
 
     const ffmpegArgs = [
-      '-hide_banner', '-loglevel', 'info', '-y',
+      '-hide_banner', '-loglevel', 'error', '-progress', 'pipe:2', '-y',
       '-i', inputPath,
       '-filter_complex', baseFilter + filterComplex,
     ];
@@ -1260,6 +1268,7 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
       const cacheControl = file.endsWith('.ts') ? 'max-age=31536000' : 'max-age=300';
       await uploadToS3WithRetry(filePath, fileKey, contentType, cacheControl);
     }
+    processingSucceeded = true;
 
     await Content.findByIdAndUpdate(fileId, {
       status: 'completed',

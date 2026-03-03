@@ -22,6 +22,7 @@ import profilePicRouter from "./routes/pictureRoutes/profilePicRouter.js";
 import bookmarkRouter from "./routes/bookmarkRoutes/bookmarkRouter.js";
 import chatRouter from "./routes/chatRoutes/chatRouter.js";
 import notificationRouter from "./routes/notificationRoutes/notificationRouter.js";
+import communityRouter from "./routes/communityRoutes/communityRouter.js";
 import { issueCloudFrontCookies } from "./config/cloudfront.js";
 import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
 
@@ -78,6 +79,7 @@ app.use("/api/v2/profile", profileRouter); // Creator profile
 app.use("/api/v2/bookmarks", bookmarkRouter); // Bookmarks
 app.use("/api/v2/chats", chatRouter); // Chat / Messaging
 app.use("/api/v2/notifications", notificationRouter); // Notifications
+app.use("/api/v2/communities", communityRouter); // Communities
 
 // CloudFront signed cookies endpoint (protected — user must be logged in)
 app.get("/api/v2/auth/cloudfront-cookies", universalTokenVerifier, issueCloudFrontCookies);

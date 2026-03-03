@@ -164,6 +164,23 @@ const ContentSchema = new mongoose.Schema({
     postContent: String,
 
     // ============================================
+    // COMMUNITY IMPORT METADATA
+    // ============================================
+    importedFromChannel: {
+        type: Boolean,
+        default: false
+    },
+    importedByCommunityId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Community'
+    },
+    importedAt: Date,
+    importedByUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+
+    // ============================================
     // TIMESTAMPS
     // ============================================
     createdAt: {
