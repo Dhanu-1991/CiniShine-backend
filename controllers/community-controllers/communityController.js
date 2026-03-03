@@ -1302,3 +1302,223 @@ export const getRules = async (req, res) => {
 
 // Export helpers for use in other controllers
 export { checkPostingAuth, logAction };
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/remove/:targetUserId — Remove a member
+// ═══════════════════════════════════════════════════
+export const removeMember = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id, targetUserId } = req.params;
+
+        if (userId === targetUserId) {
+            return res.status(400).json({ error: 'Cannot remove yourself. Use leave instead.' });
+        }
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN', 'MODERATOR'] }
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Not authorized to remove members' });
+        }
+
+        const targetMember = await CommunityMember.findOne({
+            communityId: id,
+            userId: targetUserId
+        });
+
+        if (!targetMember) {
+            return res.status(404).json({ error: 'Member not found' });
+        }
+
+        const roleHierarchy = { OWNER: 4, ADMIN: 3, MODERATOR: 2, MEMBER: 1, PENDING: 0, BANNED: -1 };
+        if (roleHierarchy[targetMember.role] >= roleHierarchy[callerMember.role]) {
+            return res.status(403).json({ error: 'Cannot remove a member with equal or higher role' });
+        }
+
+        await CommunityMember.deleteOne({ _id: targetMember._id });
+        if (targetMember.status === 'ACTIVE') {
+            await Community.findByIdAndUpdate(id, { $inc: { memberCount: -1 } });
+        }
+
+        await logAction(userId, id, 'member_removed', { removedUserId: targetUserId, removedRole: targetMember.role });
+
+        return res.json({ message: 'Member removed' });
+    } catch (error) {
+        console.error('removeMember error:', error);
+        return res.status(500).json({ error: 'Failed to remove member' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// PUT /api/v2/communities/:id/settings — Update detailed community settings
+// ═══════════════════════════════════════════════════
+// OWNER can update ALL settings. ADMIN can update limited settings.
+export const updateCommunitySettings = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN'] }
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Only owners and admins can update settings' });
+        }
+
+        const updates = {};
+        const {
+            name, description, avatarUrl, bannerUrl,
+            isSearchVisible, postingPolicy, type,
+            importedVisibility
+        } = req.body;
+
+        // Both OWNER and ADMIN can update these:
+        if (description !== undefined) updates.description = description;
+        if (avatarUrl !== undefined) updates.avatarUrl = avatarUrl;
+        if (bannerUrl !== undefined) updates.bannerUrl = bannerUrl;
+
+        // ADMIN can update rules and posting policy
+        if (postingPolicy !== undefined) {
+            if (!['ANY_MEMBER', 'ADMINS_ONLY', 'MODS_AND_ADMINS', 'OWNER_ONLY'].includes(postingPolicy)) {
+                return res.status(400).json({ error: 'Invalid posting policy' });
+            }
+            updates.postingPolicy = postingPolicy;
+        }
+
+        // OWNER-only settings
+        if (callerMember.role === 'OWNER') {
+            if (name !== undefined) {
+                updates.name = name;
+                updates.slug = name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').substring(0, 120);
+                const existingSlug = await Community.findOne({ slug: updates.slug, _id: { $ne: id } }).lean();
+                if (existingSlug) updates.slug = `${updates.slug}-${Date.now().toString(36)}`;
+            }
+            if (type !== undefined) {
+                if (!['PUBLIC', 'PRIVATE'].includes(type)) {
+                    return res.status(400).json({ error: 'Type must be PUBLIC or PRIVATE' });
+                }
+                updates.type = type;
+            }
+            if (isSearchVisible !== undefined) updates.isSearchVisible = !!isSearchVisible;
+            if (importedVisibility !== undefined) {
+                if (!['VISIBLE_TO_ALL', 'MEMBERS_ONLY', 'NO_BACKFILL'].includes(importedVisibility)) {
+                    return res.status(400).json({ error: 'Invalid importedVisibility value' });
+                }
+                updates.importedVisibility = importedVisibility;
+            }
+        } else {
+            // ADMIN tried to change OWNER-only fields
+            if (type !== undefined) return res.status(403).json({ error: 'Only the owner can change community type' });
+            if (name !== undefined) return res.status(403).json({ error: 'Only the owner can change community name' });
+            if (isSearchVisible !== undefined) return res.status(403).json({ error: 'Only the owner can change search visibility' });
+            if (importedVisibility !== undefined) return res.status(403).json({ error: 'Only the owner can change import visibility' });
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: 'No valid fields to update' });
+        }
+
+        const community = await Community.findByIdAndUpdate(id, { $set: updates }, { new: true })
+            .populate('ownerId', 'userName channelName channelPicture channelHandle');
+
+        await logAction(userId, id, 'settings_updated', updates);
+
+        return res.json({ community });
+    } catch (error) {
+        console.error('updateCommunitySettings error:', error);
+        return res.status(500).json({ error: 'Failed to update settings' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/reimport — Re-import channel content
+// ═══════════════════════════════════════════════════
+export const reimportChannelContent = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { importedVisibility = 'VISIBLE_TO_ALL' } = req.body;
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            role: 'OWNER',
+            status: 'ACTIVE'
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Only the owner can re-import content' });
+        }
+
+        if (!['VISIBLE_TO_ALL', 'MEMBERS_ONLY', 'NO_BACKFILL'].includes(importedVisibility)) {
+            return res.status(400).json({ error: 'Invalid importedVisibility' });
+        }
+
+        // Get all channel content
+        const channelContents = await Content.find({
+            userId,
+            contentType: { $in: ['video', 'short', 'audio', 'post'] },
+            status: { $in: ['completed', 'uploading'] },
+            visibility: { $ne: 'private' }
+        }).select('_id').lean();
+
+        // Get existing links to avoid duplicates
+        const existingLinks = await ContentToCommunity.find({
+            communityId: id,
+            contentId: { $in: channelContents.map(c => c._id) }
+        }).select('contentId').lean();
+        const existingSet = new Set(existingLinks.map(l => l.contentId.toString()));
+
+        const newContents = channelContents.filter(c => !existingSet.has(c._id.toString()));
+
+        if (newContents.length > 0) {
+            const links = newContents.map(c => ({
+                contentId: c._id,
+                communityId: id,
+                isImported: true,
+                createdAt: new Date()
+            }));
+            await ContentToCommunity.insertMany(links, { ordered: false }).catch(() => {});
+        }
+
+        // Create import event
+        const CommunityImportEvent = (await import('../../models/communityImportEvent.model.js')).default;
+        const importEvent = await CommunityImportEvent.create({
+            communityId: id,
+            importedByUserId: userId,
+            importedAt: new Date(),
+            importedCount: newContents.length,
+            visibility: importedVisibility,
+            status: 'completed'
+        });
+
+        await Community.findByIdAndUpdate(id, {
+            importedContentFlag: true,
+            importedVisibility,
+            importEventId: importEvent._id,
+            importedAt: new Date(),
+            $inc: { contentCount: newContents.length }
+        });
+
+        await logAction(userId, id, 'content_reimported', { newCount: newContents.length, totalChannel: channelContents.length });
+
+        return res.json({
+            message: `Re-imported ${newContents.length} new content items`,
+            newCount: newContents.length,
+            skippedCount: channelContents.length - newContents.length,
+            totalChannelContent: channelContents.length
+        });
+    } catch (error) {
+        console.error('reimportChannelContent error:', error);
+        return res.status(500).json({ error: 'Failed to re-import content' });
+    }
+};

@@ -22,7 +22,10 @@ import {
     changeRole,
     transferOwnership,
     updateRules,
-    getRules
+    getRules,
+    removeMember,
+    updateCommunitySettings,
+    reimportChannelContent
 } from '../../controllers/community-controllers/communityController.js';
 import {
     getCommunityFeed,
@@ -59,6 +62,7 @@ router.post('/:id/approve/:memberId', universalTokenVerifier, approveJoinRequest
 router.post('/:id/reject/:memberId', universalTokenVerifier, rejectJoinRequest);
 router.post('/:id/ban/:targetUserId', universalTokenVerifier, banMember);
 router.post('/:id/unban/:targetUserId', universalTokenVerifier, unbanMember);
+router.post('/:id/remove/:targetUserId', universalTokenVerifier, removeMember);
 
 // ── Role management ──
 router.post('/:id/role/:targetUserId', universalTokenVerifier, changeRole);
@@ -70,9 +74,11 @@ router.put('/:id/rules', universalTokenVerifier, updateRules);
 
 // ── Settings ──
 router.put('/:id/posting-policy', universalTokenVerifier, updatePostingPolicy);
+router.put('/:id/settings', universalTokenVerifier, updateCommunitySettings);
 
 // ── Import management ──
 router.delete('/:id/imported', universalTokenVerifier, clearImportedContent);
+router.post('/:id/reimport', universalTokenVerifier, reimportChannelContent);
 router.get('/:id/import-status', universalTokenVerifier, getImportStatus);
 
 export default router;
