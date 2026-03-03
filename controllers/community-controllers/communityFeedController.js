@@ -39,45 +39,37 @@ export const getCommunityFeed = async (req, res) => {
             }
             targetCommunityIds = [new mongoose.Types.ObjectId(communityId)];
         } else {
+            // ONLY show content from communities the user has JOINED
+            if (!userId) return res.json({ feed: [], nextCursor: null });
+
+            const userMemberships = await CommunityMember.find({
+                userId, status: 'ACTIVE'
+            }).select('communityId').lean();
+
+            if (userMemberships.length === 0) {
+                return res.json({ feed: [], nextCursor: null });
+            }
+
+            const memberCommunityIds = userMemberships.map(m => m.communityId);
+
             switch (filter) {
                 case 'public': {
-                    const publicComms = await Community.find({ type: 'PUBLIC', isSearchVisible: true })
-                        .select('_id').lean();
+                    const publicComms = await Community.find({
+                        _id: { $in: memberCommunityIds }, type: 'PUBLIC'
+                    }).select('_id').lean();
                     targetCommunityIds = publicComms.map(c => c._id);
                     break;
                 }
                 case 'private': {
-                    if (!userId) return res.json({ feed: [], nextCursor: null });
-                    const privMemberships = await CommunityMember.find({
-                        userId, status: 'ACTIVE'
-                    }).select('communityId').lean();
-                    const privIds = privMemberships.map(m => m.communityId);
                     const privComms = await Community.find({
-                        _id: { $in: privIds }, type: 'PRIVATE'
+                        _id: { $in: memberCommunityIds }, type: 'PRIVATE'
                     }).select('_id').lean();
                     targetCommunityIds = privComms.map(c => c._id);
                     break;
                 }
                 default: {
-                    // 'all' — communities the user is a member of + public communities
-                    const allPublic = await Community.find({ type: 'PUBLIC', isSearchVisible: true })
-                        .select('_id').lean();
-                    targetCommunityIds = allPublic.map(c => c._id);
-
-                    if (userId) {
-                        const userMemberships = await CommunityMember.find({
-                            userId, status: 'ACTIVE'
-                        }).select('communityId').lean();
-                        const memberIds = userMemberships.map(m => m.communityId);
-                        // Merge, dedupe
-                        const idSet = new Set(targetCommunityIds.map(id => id.toString()));
-                        for (const mid of memberIds) {
-                            if (!idSet.has(mid.toString())) {
-                                targetCommunityIds.push(mid);
-                                idSet.add(mid.toString());
-                            }
-                        }
-                    }
+                    // 'all' / 'my_posts' — all communities user is a member of
+                    targetCommunityIds = memberCommunityIds;
                 }
             }
         }
@@ -128,7 +120,7 @@ export const getCommunityFeed = async (req, res) => {
         const communityIds = [...new Set(links.map(l => l.communityId.toString()))];
         const communities = await Community.find({
             _id: { $in: communityIds.map(id => new mongoose.Types.ObjectId(id)) }
-        }).select('name slug type importedVisibility importedAt importedContentFlag avatarUrl').lean();
+        }).select('name slug communityId type importedVisibility importedAt importedContentFlag avatarUrl').lean();
         const communityMap = {};
         communities.forEach(c => { communityMap[c._id.toString()] = c; });
 
@@ -194,6 +186,7 @@ export const getCommunityFeed = async (req, res) => {
                 communityId: link.communityId,
                 communityName: community.name,
                 communitySlug: community.slug,
+                communityHandle: community.communityId,
                 communityType: community.type,
                 communityAvatarUrl: community.avatarUrl,
                 isImported: link.isImported

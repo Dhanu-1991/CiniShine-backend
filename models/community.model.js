@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import crypto from 'crypto';
 
 /**
  * Community Model
@@ -6,6 +7,14 @@ import mongoose from 'mongoose';
  * content import from creator channels, and visibility/backfill rules.
  */
 const CommunitySchema = new mongoose.Schema({
+    communityId: {
+        type: String,
+        unique: true,
+        sparse: true,
+        trim: true,
+        lowercase: true,
+        maxlength: 60
+    },
     name: {
         type: String,
         required: [true, 'Community name is required'],
@@ -34,8 +43,7 @@ const CommunitySchema = new mongoose.Schema({
     ownerId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
-        index: true
+        required: true
     },
     avatarUrl: {
         type: String,
@@ -90,10 +98,24 @@ const CommunitySchema = new mongoose.Schema({
     timestamps: true
 });
 
+CommunitySchema.index({ communityId: 1 });
 CommunitySchema.index({ slug: 1 });
 CommunitySchema.index({ type: 1, isSearchVisible: 1 });
 CommunitySchema.index({ ownerId: 1 });
 CommunitySchema.index({ createdAt: -1 });
+
+// Auto-generate communityId before save if not set
+CommunitySchema.pre('save', function (next) {
+    if (!this.communityId) {
+        const base = this.name
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, '')
+            .replace(/\s+/g, '_')
+            .substring(0, 40);
+        this.communityId = `${base}_${crypto.randomBytes(4).toString('hex')}`;
+    }
+    next();
+});
 
 const Community = mongoose.model('Community', CommunitySchema);
 export default Community;

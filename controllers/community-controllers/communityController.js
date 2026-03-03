@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Community from '../../models/community.model.js';
 import CommunityMember from '../../models/communityMember.model.js';
 import CommunityImportEvent from '../../models/communityImportEvent.model.js';
@@ -339,9 +340,18 @@ export const getCommunity = async (req, res) => {
         const userId = req.user?.id;
         const { id } = req.params;
 
-        const community = await Community.findById(id)
-            .populate('ownerId', 'userName channelName channelPicture channelHandle')
-            .lean();
+        // Support lookup by ObjectId or communityId handle
+        let community;
+        if (mongoose.Types.ObjectId.isValid(id)) {
+            community = await Community.findById(id)
+                .populate('ownerId', 'userName channelName channelPicture channelHandle')
+                .lean();
+        }
+        if (!community) {
+            community = await Community.findOne({ communityId: id })
+                .populate('ownerId', 'userName channelName channelPicture channelHandle')
+                .lean();
+        }
 
         if (!community) {
             return res.status(404).json({ error: 'Community not found' });
@@ -841,6 +851,130 @@ export const clearImportedContent = async (req, res) => {
     } catch (error) {
         console.error('clearImportedContent error:', error);
         return res.status(500).json({ error: 'Failed to clear imported content' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// GET /api/v2/communities/search — Search/discover communities
+// ═══════════════════════════════════════════════════
+export const searchCommunities = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { q = '', type, cursor, limit = 20 } = req.query;
+        const pageLimit = Math.min(parseInt(limit) || 20, 50);
+
+        // Only search visible communities
+        const query = { isSearchVisible: true };
+
+        // Text search
+        if (q.trim()) {
+            const escaped = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            query.$or = [
+                { name: { $regex: escaped, $options: 'i' } },
+                { description: { $regex: escaped, $options: 'i' } },
+                { communityId: { $regex: escaped, $options: 'i' } }
+            ];
+        }
+
+        // Type filter
+        if (type && ['PUBLIC', 'PRIVATE'].includes(type)) {
+            query.type = type;
+        }
+
+        if (cursor) {
+            query._id = { ...query._id, $lt: cursor };
+        }
+
+        const communities = await Community.find(query)
+            .sort({ memberCount: -1, createdAt: -1 })
+            .limit(pageLimit + 1)
+            .populate('ownerId', 'userName channelName channelPicture channelHandle')
+            .lean();
+
+        const hasMore = communities.length > pageLimit;
+        if (hasMore) communities.pop();
+
+        // Enrich with membership info
+        let enriched = communities;
+        if (userId) {
+            const communityIds = communities.map(c => c._id);
+            const memberships = await CommunityMember.find({
+                communityId: { $in: communityIds },
+                userId
+            }).lean();
+            const memberMap = {};
+            memberships.forEach(m => { memberMap[m.communityId.toString()] = m; });
+
+            enriched = communities.map(c => ({
+                ...c,
+                membership: memberMap[c._id.toString()] || null,
+                isJoined: !!(memberMap[c._id.toString()] && memberMap[c._id.toString()].status === 'ACTIVE'),
+                isPending: !!(memberMap[c._id.toString()] && memberMap[c._id.toString()].status === 'PENDING'),
+                isOwner: c.ownerId?._id?.toString() === userId || c.ownerId?.toString() === userId
+            }));
+        } else {
+            enriched = communities.map(c => ({
+                ...c,
+                membership: null,
+                isJoined: false,
+                isPending: false,
+                isOwner: false
+            }));
+        }
+
+        return res.json({
+            communities: enriched,
+            nextCursor: hasMore ? communities[communities.length - 1]._id : null
+        });
+    } catch (error) {
+        console.error('searchCommunities error:', error);
+        return res.status(500).json({ error: 'Failed to search communities' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// GET /api/v2/communities/joined — Communities the user has joined
+// ═══════════════════════════════════════════════════
+export const getJoinedCommunities = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        const memberships = await CommunityMember.find({
+            userId,
+            status: { $in: ['ACTIVE', 'PENDING'] }
+        }).sort({ joinedAt: -1 }).lean();
+
+        if (memberships.length === 0) {
+            return res.json({ communities: [] });
+        }
+
+        const communityIds = memberships.map(m => m.communityId);
+        const communities = await Community.find({ _id: { $in: communityIds } })
+            .populate('ownerId', 'userName channelName channelPicture channelHandle')
+            .lean();
+
+        const communityMap = {};
+        communities.forEach(c => { communityMap[c._id.toString()] = c; });
+
+        const result = memberships
+            .map(m => {
+                const c = communityMap[m.communityId.toString()];
+                if (!c) return null;
+                return {
+                    ...c,
+                    membership: m,
+                    memberRole: m.role,
+                    memberStatus: m.status,
+                    isOwner: c.ownerId?._id?.toString() === userId || c.ownerId?.toString() === userId
+                };
+            })
+            .filter(Boolean);
+
+        return res.json({ communities: result });
+    } catch (error) {
+        console.error('getJoinedCommunities error:', error);
+        return res.status(500).json({ error: 'Failed to get joined communities' });
     }
 };
 

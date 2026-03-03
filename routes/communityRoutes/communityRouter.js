@@ -14,7 +14,9 @@ import {
     listPendingRequests,
     updatePostingPolicy,
     getUserPostableCommunities,
-    clearImportedContent
+    clearImportedContent,
+    searchCommunities,
+    getJoinedCommunities
 } from '../../controllers/community-controllers/communityController.js';
 import {
     getCommunityFeed,
@@ -26,7 +28,9 @@ import {
 const router = express.Router();
 
 // ── Feed & discovery (comes before :id routes to avoid conflicts) ──
-router.get('/feed', optionalTokenVerifier, getCommunityFeed);
+router.get('/feed', universalTokenVerifier, getCommunityFeed);
+router.get('/search', optionalTokenVerifier, searchCommunities);
+router.get('/joined', universalTokenVerifier, getJoinedCommunities);
 router.get('/unread-count', universalTokenVerifier, getCommunityUnreadCount);
 router.get('/user-communities', universalTokenVerifier, getUserPostableCommunities);
 
