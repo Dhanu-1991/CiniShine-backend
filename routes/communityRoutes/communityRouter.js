@@ -33,6 +33,16 @@ import {
     getCommunityUnreadCount,
     getImportStatus
 } from '../../controllers/community-controllers/communityFeedController.js';
+import {
+    sendChatMessage,
+    getChatMessages,
+    editChatMessage,
+    deleteChatMessage,
+    reportContent,
+    getContentCommunities,
+    getRecommendedCommunities,
+    updateFeedWatchTime
+} from '../../controllers/community-controllers/communityChatController.js';
 
 const router = express.Router();
 
@@ -42,6 +52,13 @@ router.get('/search', optionalTokenVerifier, searchCommunities);
 router.get('/joined', universalTokenVerifier, getJoinedCommunities);
 router.get('/unread-count', universalTokenVerifier, getCommunityUnreadCount);
 router.get('/user-communities', universalTokenVerifier, getUserPostableCommunities);
+router.get('/recommended', universalTokenVerifier, getRecommendedCommunities);
+
+// ── Reports ──
+router.post('/report', universalTokenVerifier, reportContent);
+
+// ── Feed watch time ──
+router.post('/feed-watch-time', universalTokenVerifier, updateFeedWatchTime);
 
 // ── Content posting to communities ──
 router.post('/content', universalTokenVerifier, postContentToCommunities);
@@ -80,5 +97,14 @@ router.put('/:id/settings', universalTokenVerifier, updateCommunitySettings);
 router.delete('/:id/imported', universalTokenVerifier, clearImportedContent);
 router.post('/:id/reimport', universalTokenVerifier, reimportChannelContent);
 router.get('/:id/import-status', universalTokenVerifier, getImportStatus);
+
+// ── Community Chat ──
+router.post('/:id/chat', universalTokenVerifier, sendChatMessage);
+router.get('/:id/chat', universalTokenVerifier, getChatMessages);
+router.patch('/:id/chat/:messageId', universalTokenVerifier, editChatMessage);
+router.delete('/:id/chat/:messageId', universalTokenVerifier, deleteChatMessage);
+
+// ── Content communities (for chat community picker) ──
+router.get('/content-communities/:contentId', universalTokenVerifier, getContentCommunities);
 
 export default router;
