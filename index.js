@@ -39,6 +39,7 @@ const corsOptions = {
     "http://127.0.0.1:5175",
     "https://frontend-six-black-29.vercel.app",
     "https://watchinit.com",
+    "https://cineshine-private.vercel.app"
   ],
   credentials: true,
 };
