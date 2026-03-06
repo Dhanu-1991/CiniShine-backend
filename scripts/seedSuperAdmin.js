@@ -1,36 +1,49 @@
 /**
- * Auto Seed SuperAdmin (Production Safe)
+ * Auto Seed SuperAdmin (Standalone Script)
  *
- * This runs automatically on server start and creates the first SuperAdmin
- * only if none exists.
+ * Run manually:
+ *   node scripts/seedSuperAdmin.js
  *
- * After creation it will never run again because a SuperAdmin already exists.
+ * Requires env:
+ *   MONGO_URI
+ *   SUPERADMIN_CONTACT
+ *   SUPERADMIN_PASSWORD
  */
 
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import dotenv from "dotenv";
 
-export async function seedSuperAdmin() {
+dotenv.config();
+
+async function seedSuperAdmin() {
     try {
-        const Admin = (await import("../models/admin.model.js")).default;
-
         const contact = process.env.SUPERADMIN_CONTACT;
         const password = process.env.SUPERADMIN_PASSWORD;
         const name = process.env.SUPERADMIN_NAME || "SuperAdmin";
 
         if (!contact || !password) {
-            console.log("⚠️ SUPERADMIN env vars not provided. Skipping seed.");
-            return;
+            console.log("❌ SUPERADMIN_CONTACT or SUPERADMIN_PASSWORD missing.");
+            process.exit(1);
         }
+
+        console.log("🔌 Connecting to MongoDB...");
+
+        await mongoose.connect(process.env.MONGO_URI);
+
+        console.log("✅ MongoDB connected");
+
+        const Admin = (await import("../models/admin.model.js")).default;
 
         const normalizedContact = contact.toLowerCase().trim();
 
-        // Check if any superadmin already exists
+        // Check if superadmin exists
         const existingSuper = await Admin.findOne({ role: "superadmin" });
 
         if (existingSuper) {
-            console.log("ℹ️ SuperAdmin already exists. Skipping seed.");
-            return;
+            console.log("ℹ️ SuperAdmin already exists.");
+            await mongoose.disconnect();
+            process.exit(0);
         }
 
         const salt = await bcrypt.genSalt(12);
@@ -44,10 +57,19 @@ export async function seedSuperAdmin() {
             status: "active",
         });
 
-        console.log("✅ SuperAdmin created successfully!");
+        console.log("🎉 SuperAdmin created successfully!");
         console.log(`Contact: ${normalizedContact}`);
+
+        await mongoose.disconnect();
+
+        console.log("🔒 MongoDB connection closed");
+
+        process.exit(0);
 
     } catch (err) {
         console.error("❌ SuperAdmin seed error:", err);
+        process.exit(1);
     }
 }
+
+seedSuperAdmin();
