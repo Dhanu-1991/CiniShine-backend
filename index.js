@@ -25,6 +25,7 @@ import notificationRouter from "./routes/notificationRoutes/notificationRouter.j
 import communityRouter from "./routes/communityRoutes/communityRouter.js";
 import { issueCloudFrontCookies } from "./config/cloudfront.js";
 import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
+import adminRouter from "./routes/adminRoutes/adminRouter.js";
 
 const app = express();
 
@@ -39,6 +40,7 @@ const corsOptions = {
     "http://127.0.0.1:5175",
     "https://frontend-six-black-29.vercel.app",
     "https://watchinit.com",
+    "https://admin.watchinit.com",
     "https://cineshine-private.vercel.app"
   ],
   credentials: true,
@@ -81,6 +83,9 @@ app.use("/api/v2/bookmarks", bookmarkRouter); // Bookmarks
 app.use("/api/v2/chats", chatRouter); // Chat / Messaging
 app.use("/api/v2/notifications", notificationRouter); // Notifications
 app.use("/api/v2/communities", communityRouter); // Communities
+
+// Admin panel
+app.use("/api/admin", adminRouter);
 
 // CloudFront signed cookies endpoint (protected — user must be logged in)
 app.get("/api/v2/auth/cloudfront-cookies", universalTokenVerifier, issueCloudFrontCookies);

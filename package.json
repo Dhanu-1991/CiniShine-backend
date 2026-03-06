@@ -8,6 +8,8 @@
     "dev": "nodemon index.js",
     "start": "node index.js",
     "worker": "node workers/worker.js",
+    "worker:purge": "node workers/archivePurgeWorker.js",
+    "seed:superadmin": "node scripts/seedSuperAdmin.js",
     "test": "node --test tests/features.test.js"
   },
   "keywords": [],
