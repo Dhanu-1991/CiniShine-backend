@@ -5,8 +5,17 @@ import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
 import ContentView from '../../models/contentView.model.js';
 import User from '../../models/user.model.js';
+import Community from '../../models/community.model.js';
+import CommunityMember from '../../models/communityMember.model.js';
+import Comment from '../../models/comment.model.js';
+import VideoReaction from '../../models/videoReaction.model.js';
+import WatchHistory from '../../models/watchHistory.model.js';
+import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 const ARCHIVE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const s3 = new S3Client({ region: process.env.AWS_REGION });
+const BUCKET = process.env.S3_BUCKET;
 
 function getClientIp(req) {
     return req.ip || req.connection?.remoteAddress || '';
@@ -61,11 +70,21 @@ export const hideContent = async (req, res) => {
 /**
  * POST /admin/content/:id/remove
  * Move content to 24h archive (soft delete). Content becomes unavailable to users.
+ * Regular admins can only remove content through the reports workflow (takedown).
+ * SuperAdmins can remove any content directly.
  */
 export const removeContent = async (req, res) => {
     try {
         const { id } = req.params;
         const { reason } = req.body;
+
+        // Role check: only superadmin can directly remove content
+        if (req.admin.role !== 'superadmin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Only SuperAdmins can remove content directly. Admins must use the reports workflow to take down content.'
+            });
+        }
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid content ID' });
@@ -118,9 +137,9 @@ export const removeContent = async (req, res) => {
             reason: reason || ''
         });
 
-        // Mark content as hidden so it doesn't appear to users
+        // Mark content as removed so it doesn't appear anywhere
         content.visibility = 'private';
-        content.status = 'failed'; // Re-purpose status to indicate removed
+        content.status = 'removed';
         await content.save();
 
         await AdminAuditLog.create({
@@ -136,14 +155,15 @@ export const removeContent = async (req, res) => {
         await AdminNotification.create({
             type: 'content_removed',
             title: 'Content Removed',
-            message: `"${content.title || 'Untitled'}" archived by ${req.admin.name}. Auto-delete in 24h.`,
+            message: `"${content.title || 'Untitled'}" archived by ${req.admin.name}. Can be permanently deleted after 24h.`,
             severity: 'info',
             metadata: { content_id: content._id, admin_id: req.admin._id }
         });
 
         return res.status(200).json({
             success: true,
-            message: 'Content moved to archive. Will be permanently deleted in 24 hours.',
+            message: 'Content moved to archive. Can be permanently deleted after 24 hours.',
+            archive_id: (await ContentArchive.findOne({ content_id: content._id, permanently_deleted: false, restored_at: null }))._id,
             delete_scheduled_at: new Date(now.getTime() + ARCHIVE_TTL_MS)
         });
     } catch (error) {
@@ -222,7 +242,8 @@ export const restoreContent = async (req, res) => {
 
 /**
  * DELETE /admin/content/:id
- * Disabled until archive TTL expires — enforced server-side.
+ * Permanently delete content after 24h cooldown. Manual action by admin.
+ * Deletes S3 assets (thumbnails, originals, HLS) + MongoDB related docs.
  */
 export const deleteContent = async (req, res) => {
     try {
@@ -240,17 +261,80 @@ export const deleteContent = async (req, res) => {
 
         if (archive.delete_scheduled_at > new Date()) {
             const remaining = archive.delete_scheduled_at.getTime() - Date.now();
-            const hours = Math.ceil(remaining / (1000 * 60 * 60));
+            const hours = Math.floor(remaining / (1000 * 60 * 60));
+            const minutes = Math.ceil((remaining % (1000 * 60 * 60)) / (1000 * 60));
             return res.status(403).json({
                 success: false,
-                message: `Cannot permanently delete until archive window expires (~${hours}h remaining). The system will auto-purge.`
+                message: `Cooldown period active. ${hours}h ${minutes}m remaining before permanent deletion is allowed.`
             });
         }
 
-        // Manual purge is allowed after TTL — but normally the worker handles this
+        // Delete S3 assets
+        const keysToDelete = [
+            archive.thumbnailKey,
+            archive.originalKey,
+            archive.hlsMasterKey,
+            archive.imageKey,
+            ...(archive.imageKeys || [])
+        ].filter(Boolean);
+
+        for (const key of keysToDelete) {
+            try {
+                await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+            } catch (e) {
+                console.error(`Failed to delete S3 key ${key}:`, e.message);
+            }
+        }
+
+        // Delete HLS directory (all segments/playlists)
+        if (archive.hlsPrefix) {
+            try {
+                let continuationToken;
+                do {
+                    const listRes = await s3.send(new ListObjectsV2Command({
+                        Bucket: BUCKET,
+                        Prefix: archive.hlsPrefix,
+                        ContinuationToken: continuationToken,
+                    }));
+                    const objects = listRes.Contents || [];
+                    for (const obj of objects) {
+                        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: obj.Key }));
+                    }
+                    continuationToken = listRes.IsTruncated ? listRes.NextContinuationToken : undefined;
+                } while (continuationToken);
+            } catch (e) {
+                console.error(`Failed to delete HLS prefix ${archive.hlsPrefix}:`, e.message);
+            }
+        }
+
+        // Delete related MongoDB documents
+        const contentId = archive.content_id;
+        await Promise.all([
+            Content.deleteOne({ _id: contentId }),
+            Comment.deleteMany({ contentId }),
+            VideoReaction.deleteMany({ contentId }),
+            WatchHistory.deleteMany({ contentId }),
+            ContentView.deleteMany({ contentId }),
+        ]);
+
+        // Mark archive as permanently deleted
+        archive.permanently_deleted = true;
+        archive.permanently_deleted_at = new Date();
+        await archive.save();
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'content_purge',
+            target_type: 'content',
+            target_id: contentId,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: `Permanently deleted content and S3 assets`
+        });
+
         return res.status(200).json({
             success: true,
-            message: 'Content will be purged by the scheduled worker.'
+            message: 'Content permanently deleted including all S3 assets.'
         });
     } catch (error) {
         console.error('Delete content error:', error);
@@ -447,6 +531,274 @@ export const searchCreators = async (req, res) => {
         });
     } catch (error) {
         console.error('Search creators error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * GET /admin/creator/:id/profile
+ * Full creator profile: user info, subscriber count, content stats, communities.
+ */
+export const getCreatorProfile = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid creator ID' });
+        }
+
+        const creator = await User.findById(id).select('-password -viewHistory');
+        if (!creator) {
+            return res.status(404).json({ success: false, message: 'Creator not found' });
+        }
+
+        const [subscriberCount, contentCount, communities] = await Promise.all([
+            User.countDocuments({ subscriptions: id }),
+            Content.countDocuments({ userId: id, status: { $in: ['completed', 'removed'] } }),
+            CommunityMember.find({ userId: id, status: 'ACTIVE' })
+                .populate('communityId', 'name slug type avatarUrl')
+                .lean()
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            creator,
+            subscriberCount,
+            contentCount,
+            communities: communities.map(cm => cm.communityId).filter(Boolean)
+        });
+    } catch (error) {
+        console.error('Creator profile error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * GET /admin/creator/:id/studio
+ * All content (public + private + removed) for a creator. Admin sees everything.
+ */
+export const getCreatorStudio = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { page = 1, limit = 20, contentType, status } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid creator ID' });
+        }
+
+        const filter = { userId: id };
+        if (contentType) filter.contentType = contentType;
+        if (status) filter.status = status;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const [contents, total] = await Promise.all([
+            Content.find(filter)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
+            Content.countDocuments(filter)
+        ]);
+
+        // Check archive status for removed content
+        const removedIds = contents.filter(c => c.status === 'removed').map(c => c._id);
+        let archiveMap = {};
+        if (removedIds.length) {
+            const archives = await ContentArchive.find({ content_id: { $in: removedIds }, permanently_deleted: false });
+            archiveMap = Object.fromEntries(archives.map(a => [a.content_id.toString(), a]));
+        }
+
+        const enrichedContents = contents.map(c => ({
+            ...c,
+            archive: archiveMap[c._id.toString()] || null
+        }));
+
+        return res.status(200).json({
+            success: true,
+            contents: enrichedContents,
+            pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        console.error('Creator studio error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/creator/:id/ban
+ * SuperAdmin: Ban a channel completely. Hides all content, marks user as banned.
+ */
+export const banChannel = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid creator ID' });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (user.channelBanned) {
+            return res.status(400).json({ success: false, message: 'Channel is already banned' });
+        }
+
+        // Ban the user
+        user.channelBanned = true;
+        user.channelBannedAt = new Date();
+        user.channelBanReason = reason || 'Banned by SuperAdmin';
+        await user.save();
+
+        // Hide all their content
+        await Content.updateMany(
+            { userId: id, status: 'completed' },
+            { $set: { visibility: 'private', status: 'removed' } }
+        );
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'channel_ban',
+            target_type: 'user',
+            target_id: id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: reason || 'Channel banned'
+        });
+
+        await AdminNotification.create({
+            type: 'channel_banned',
+            title: 'Channel Banned',
+            message: `Channel "${user.channelName || user.userName}" banned by ${req.admin.name}.`,
+            severity: 'critical',
+            metadata: { user_id: id, admin_id: req.admin._id }
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Channel banned successfully. All content hidden.'
+        });
+    } catch (error) {
+        console.error('Ban channel error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/creator/:id/unban
+ * SuperAdmin: Unban a channel. Restores content visibility.
+ */
+export const unbanChannel = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (!user.channelBanned) {
+            return res.status(400).json({ success: false, message: 'Channel is not banned' });
+        }
+
+        user.channelBanned = false;
+        user.channelBannedAt = null;
+        user.channelBanReason = null;
+        await user.save();
+
+        // Restore content that was hidden by the ban (only 'removed' status)
+        await Content.updateMany(
+            { userId: id, status: 'removed' },
+            { $set: { visibility: 'public', status: 'completed' } }
+        );
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'channel_unban',
+            target_type: 'user',
+            target_id: id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: 'Channel unbanned'
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Channel unbanned. Content restored to public.'
+        });
+    } catch (error) {
+        console.error('Unban channel error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/creator/:id/ban-request
+ * Admin requests SuperAdmin to ban a channel.
+ */
+export const requestBanChannel = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid creator ID' });
+        }
+
+        if (!reason || reason.trim().length < 5) {
+            return res.status(400).json({ success: false, message: 'Reason is required (at least 5 characters)' });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (user.channelBanned) {
+            return res.status(400).json({ success: false, message: 'Channel is already banned' });
+        }
+
+        // Check for existing pending ban request
+        const existingRequest = await AdminNotification.findOne({
+            type: 'ban_request',
+            'metadata.user_id': id,
+            'metadata.status': 'pending'
+        });
+        if (existingRequest) {
+            return res.status(400).json({ success: false, message: 'A ban request for this channel is already pending' });
+        }
+
+        await AdminNotification.create({
+            type: 'ban_request',
+            title: 'Channel Ban Request',
+            message: `Admin "${req.admin.name}" requests ban for channel "${user.channelName || user.userName}". Reason: ${reason.trim()}`,
+            severity: 'warning',
+            metadata: {
+                user_id: id,
+                requested_by: req.admin._id,
+                reason: reason.trim(),
+                status: 'pending'
+            }
+        });
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'ban_request',
+            target_type: 'user',
+            target_id: id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: reason.trim()
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Ban request sent to SuperAdmin for review'
+        });
+    } catch (error) {
+        console.error('Ban request error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };

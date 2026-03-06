@@ -84,6 +84,19 @@ const ConversationSchema = new mongoose.Schema({
         of: Date,
         default: {}
     },
+    // ─── Admin conversation fields ──────────────────────────────────
+    isAdminConversation: {
+        type: Boolean,
+        default: false
+    },
+    adminId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+    },
+    adminName: {
+        type: String,
+        default: null
+    },
     updatedAt: {
         type: Date,
         default: Date.now

@@ -21,7 +21,8 @@ import {
     getSingleContent,
     updateContentWatchTime,
     updateContentEngagement,
-    getContentEngagementStatus
+    getContentEngagementStatus,
+    reportContent
 } from '../../controllers/content-controllers/sharedContentController.js';
 
 // Shorts feed (also mounted via sub-router, kept for backward compat)
@@ -81,6 +82,11 @@ router.get('/posts/feed', optionalTokenVerifier, getSubscriptionPosts);
 router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
 router.get('/:id/engagement/status', universalTokenVerifier, getContentEngagementStatus);
 router.post('/:id/watch-time', universalTokenVerifier, updateContentWatchTime);
+
+// ============================================
+// REPORT ROUTE (report any content - same model as community feed)
+// ============================================
+router.post('/:id/report', universalTokenVerifier, reportContent);
 
 // ============================================
 // GET ROUTES

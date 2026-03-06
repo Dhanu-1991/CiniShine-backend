@@ -29,11 +29,10 @@ export const adminTokenVerifier = async (req, res, next) => {
         if (admin.status === 'pending') {
             return res.status(403).json({ success: false, message: 'Account pending approval' });
         }
-        if (admin.locked_until && admin.locked_until > new Date()) {
+        if (admin.locked_until) {
             return res.status(403).json({
                 success: false,
-                message: 'Account is locked',
-                locked_until: admin.locked_until
+                message: 'Account is permanently locked. Contact a SuperAdmin to unlock.'
             });
         }
 

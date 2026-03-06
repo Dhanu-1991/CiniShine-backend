@@ -105,6 +105,19 @@ const userSchema = new mongoose.Schema({
         ipAddress: String,
         userAgent: String
     }],
+    // Admin channel ban
+    channelBanned: {
+        type: Boolean,
+        default: false
+    },
+    channelBannedAt: {
+        type: Date,
+        default: null
+    },
+    channelBanReason: {
+        type: String,
+        default: null
+    },
 });
 
 const User = mongoose.model("User", userSchema);

@@ -96,7 +96,7 @@ const ContentSchema = new mongoose.Schema({
     // Processing status
     status: {
         type: String,
-        enum: ['uploading', 'processing', 'completed', 'failed'],
+        enum: ['uploading', 'processing', 'completed', 'failed', 'removed'],
         default: 'uploading'
     },
     processingStart: Date,

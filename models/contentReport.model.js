@@ -52,12 +52,26 @@ const ContentReportSchema = new mongoose.Schema({
     },
     reviewedBy: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        ref: 'Admin',
         default: null
     },
     reviewedAt: {
         type: Date,
         default: null
+    },
+    takenDown: {
+        type: Boolean,
+        default: false
+    },
+    takenDownAt: {
+        type: Date,
+        default: null
+    },
+    takedownJustification: {
+        type: String,
+        maxlength: 2000,
+        trim: true,
+        default: ''
     },
     createdAt: {
         type: Date,

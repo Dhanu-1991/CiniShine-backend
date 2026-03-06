@@ -91,6 +91,19 @@ const MessageSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    // Admin message fields
+    isAdminMessage: {
+        type: Boolean,
+        default: false
+    },
+    adminId: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+    },
+    adminName: {
+        type: String,
+        default: null
+    },
     createdAt: {
         type: Date,
         default: Date.now

@@ -39,6 +39,7 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import Comment from '../../models/comment.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
+import ContentReport from '../../models/contentReport.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl } from '../../config/cloudfront.js';
 
@@ -529,5 +530,54 @@ export const getContentEngagementStatus = async (req, res) => {
     } catch (error) {
         console.error('❌ Error fetching engagement status:', error);
         res.status(500).json({ error: 'Failed to fetch engagement status' });
+    }
+};
+
+/**
+ * POST /api/v2/content/:id/report
+ * Report content (video, short, post, audio) — uses same ContentReport model as community feed.
+ */
+export const reportContent = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        const { id } = req.params;
+        const { reason, description } = req.body;
+
+        if (!id || !reason) {
+            return res.status(400).json({ error: 'Content ID and reason are required' });
+        }
+
+        const validReasons = ['spam', 'harassment', 'hate_speech', 'violence', 'nudity', 'misinformation', 'copyright', 'off_topic', 'other'];
+        if (!validReasons.includes(reason)) {
+            return res.status(400).json({ error: 'Invalid reason' });
+        }
+
+        // Verify content exists
+        const content = await Content.findById(id);
+        if (!content) {
+            return res.status(404).json({ error: 'Content not found' });
+        }
+
+        // Check if user already reported this content
+        const existing = await ContentReport.findOne({ contentId: id, reporterId: userId });
+        if (existing) {
+            return res.status(409).json({ error: 'You have already reported this content' });
+        }
+
+        await ContentReport.create({
+            reporterId: userId,
+            contentId: id,
+            communityId: null,
+            reason,
+            description: description?.trim() || ''
+        });
+
+        return res.status(201).json({ message: 'Report submitted successfully' });
+    } catch (error) {
+        if (error.code === 11000) return res.status(409).json({ error: 'You have already reported this content' });
+        console.error('reportContent error:', error);
+        return res.status(500).json({ error: 'Failed to submit report' });
     }
 };

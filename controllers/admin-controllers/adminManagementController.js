@@ -195,3 +195,48 @@ export const listAdmins = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
+
+/**
+ * POST /admin/unlock-admin/:id
+ * SuperAdmin unlocks a permanently locked admin account.
+ */
+export const unlockAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const admin = await Admin.findById(id);
+        if (!admin) {
+            return res.status(404).json({ success: false, message: 'Admin not found' });
+        }
+
+        if (!admin.locked_until) {
+            return res.status(400).json({ success: false, message: 'Admin is not locked' });
+        }
+
+        admin.locked_until = null;
+        admin.failed_attempts_count = 0;
+        await admin.save();
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'admin_unlock',
+            target_type: 'admin',
+            target_id: admin._id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: `SuperAdmin unlocked admin "${admin.name}"`
+        });
+
+        await AdminNotification.create({
+            type: 'admin_unlocked',
+            title: 'Admin Account Unlocked',
+            message: `Admin "${admin.name}" (${admin.contact}) was unlocked by ${req.admin.name}.`,
+            severity: 'info',
+            metadata: { admin_id: admin._id }
+        });
+
+        return res.status(200).json({ success: true, message: 'Admin account unlocked successfully' });
+    } catch (error) {
+        console.error('Unlock admin error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};

@@ -12,7 +12,6 @@ import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js'
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_OTP_ATTEMPTS = 3;
 const MAX_LOGIN_ATTEMPTS = 3;
-const LOCKOUT_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_MIN_LENGTH = 8;
 
 function getClientIp(req) {
@@ -53,11 +52,10 @@ export const adminSignin = async (req, res) => {
         if (admin.status === 'blocked') {
             return res.status(403).json({ success: false, message: 'Account is blocked' });
         }
-        if (admin.locked_until && admin.locked_until > new Date()) {
+        if (admin.locked_until) {
             return res.status(403).json({
                 success: false,
-                message: 'Account is locked due to failed attempts',
-                locked_until: admin.locked_until
+                message: 'Account is permanently locked due to failed attempts. Contact a SuperAdmin to unlock.'
             });
         }
 
@@ -66,15 +64,15 @@ export const adminSignin = async (req, res) => {
             admin.failed_attempts_count += 1;
 
             if (admin.failed_attempts_count >= MAX_LOGIN_ATTEMPTS) {
-                admin.locked_until = new Date(Date.now() + LOCKOUT_DURATION_MS);
+                admin.locked_until = new Date();
                 admin.failed_attempts_count = 0;
                 await admin.save();
 
-                // Create notification for all admins
+                // Create notification for dashboard
                 await AdminNotification.create({
                     type: 'account_locked',
                     title: 'Admin Account Locked',
-                    message: `Admin "${admin.name}" (${admin.contact}) locked due to ${MAX_LOGIN_ATTEMPTS} failed login attempts.`,
+                    message: `Admin "${admin.name}" (${admin.contact}) permanently locked due to ${MAX_LOGIN_ATTEMPTS} failed password attempts. SuperAdmin must unlock.`,
                     severity: 'critical',
                     metadata: { admin_id: admin._id }
                 });
@@ -86,12 +84,12 @@ export const adminSignin = async (req, res) => {
                     target_id: admin._id,
                     ip: getClientIp(req),
                     user_agent: req.headers['user-agent'] || '',
-                    note: 'Account locked after 3 failed password attempts'
+                    note: 'Account permanently locked after 3 failed password attempts'
                 });
 
                 return res.status(403).json({
                     success: false,
-                    message: 'Account locked for 24 hours due to too many failed attempts'
+                    message: 'Account permanently locked due to too many failed attempts. Contact a SuperAdmin to unlock.'
                 });
             }
 
@@ -184,18 +182,18 @@ export const adminVerifyOtp = async (req, res) => {
         if (session.attempts >= MAX_OTP_ATTEMPTS) {
             await OtpSession.findByIdAndDelete(otpSessionId);
 
-            // Lock account if this was a login OTP
+            // Lock account permanently if this was a login OTP
             if (session.admin_id) {
                 const admin = await Admin.findById(session.admin_id);
                 if (admin) {
-                    admin.locked_until = new Date(Date.now() + LOCKOUT_DURATION_MS);
+                    admin.locked_until = new Date();
                     admin.failed_attempts_count = 0;
                     await admin.save();
 
                     await AdminNotification.create({
                         type: 'account_locked',
                         title: 'Admin Account Locked (OTP)',
-                        message: `Admin "${admin.name}" locked due to ${MAX_OTP_ATTEMPTS} failed OTP attempts.`,
+                        message: `Admin "${admin.name}" permanently locked due to ${MAX_OTP_ATTEMPTS} failed OTP attempts. SuperAdmin must unlock.`,
                         severity: 'critical',
                         metadata: { admin_id: admin._id }
                     });
@@ -207,14 +205,14 @@ export const adminVerifyOtp = async (req, res) => {
                         target_id: admin._id,
                         ip: getClientIp(req),
                         user_agent: req.headers['user-agent'] || '',
-                        note: 'Account locked after 3 failed OTP attempts'
+                        note: 'Account permanently locked after 3 failed OTP attempts'
                     });
                 }
             }
 
             return res.status(403).json({
                 success: false,
-                message: 'Too many failed OTP attempts. Account locked for 24 hours.'
+                message: 'Too many failed OTP attempts. Account permanently locked. Contact a SuperAdmin.'
             });
         }
 
@@ -261,7 +259,7 @@ export const adminVerifyOtp = async (req, res) => {
             const token = jwt.sign(
                 { adminId: admin._id, role: admin.role },
                 process.env.JWT_SECRET,
-                { expiresIn: '8h' }
+                { expiresIn: '12h' }
             );
 
             await AdminAuditLog.create({

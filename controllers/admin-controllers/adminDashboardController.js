@@ -8,6 +8,7 @@ import ContentArchive from '../../models/contentArchive.model.js';
 import User from '../../models/user.model.js';
 import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
+import WatchHistory from '../../models/watchHistory.model.js';
 
 /**
  * GET /admin/dashboard
@@ -17,6 +18,7 @@ export const getDashboard = async (req, res) => {
     try {
         const now = new Date();
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const fifteenMinAgo = new Date(now.getTime() - 15 * 60 * 1000);
 
         const [
             totalContent,
@@ -30,7 +32,12 @@ export const getDashboard = async (req, res) => {
             totalAdmins,
             latestReports,
             latestFeedback,
-            notifications
+            notifications,
+            contentUploading,
+            contentProcessing,
+            contentFailed,
+            contentCompleted,
+            activeUsersResult
         ] = await Promise.all([
             Content.countDocuments({ status: 'completed' }),
             User.countDocuments({}),
@@ -52,7 +59,13 @@ export const getDashboard = async (req, res) => {
             Feedback.find().sort({ createdAt: -1 }).limit(5),
             AdminNotification.find()
                 .sort({ createdAt: -1 })
-                .limit(10)
+                .limit(10),
+            Content.countDocuments({ status: 'uploading' }),
+            Content.countDocuments({ status: 'processing' }),
+            Content.countDocuments({ status: 'failed' }),
+            Content.countDocuments({ status: 'completed' }),
+            // Active users: distinct users with watch activity in last 15 min
+            WatchHistory.distinct('userId', { updatedAt: { $gte: fifteenMinAgo } })
         ]);
 
         return res.status(200).json({
@@ -67,7 +80,12 @@ export const getDashboard = async (req, res) => {
                     recentLogins,
                     todayViews: todayViews[0]?.views || 0,
                     pendingAdminRequests,
-                    totalAdmins
+                    totalAdmins,
+                    contentUploading,
+                    contentProcessing,
+                    contentFailed,
+                    contentCompleted,
+                    activeUsers: activeUsersResult?.length || 0
                 },
                 latestReports,
                 latestFeedback,
@@ -152,16 +170,54 @@ export const listReports = async (req, res) => {
 
 /**
  * POST /admin/reports/:id/resolve
- * Resolve or dismiss a report.
+ * Resolve, dismiss, or take down a report.
+ * action: 'resolved' | 'dismissed' | 'takedown'
+ * For takedown: justification is required and content becomes permanently invisible.
  */
 export const resolveReport = async (req, res) => {
     try {
         const { id } = req.params;
-        const { action, note } = req.body; // action: 'resolved' | 'dismissed'
+        const { action, note, justification } = req.body;
 
         const report = await ContentReport.findById(id);
         if (!report) {
             return res.status(404).json({ success: false, message: 'Report not found' });
+        }
+
+        if (action === 'takedown') {
+            if (!justification || justification.trim().length < 10) {
+                return res.status(400).json({ success: false, message: 'Takedown requires a justification (at least 10 characters)' });
+            }
+
+            // Mark report as taken down
+            report.status = 'resolved';
+            report.takenDown = true;
+            report.takenDownAt = new Date();
+            report.takedownJustification = justification.trim();
+            report.reviewedBy = req.admin._id;
+            report.reviewedAt = new Date();
+            await report.save();
+
+            // Mark content as removed — once taken down, never visible again
+            const Content = (await import('../../models/content.model.js')).default;
+            const content = await Content.findById(report.contentId);
+            if (content) {
+                content.status = 'removed';
+                content.visibility = 'private';
+                await content.save();
+            }
+
+            await AdminAuditLog.create({
+                admin_id: req.admin._id,
+                action: 'report_takedown',
+                target_type: 'report',
+                target_id: report._id,
+                ip: req.ip || '',
+                user_agent: req.headers['user-agent'] || '',
+                note: justification.trim()
+            });
+
+            return res.status(200).json({ success: true, message: 'Content taken down permanently' });
         }
 
         report.status = action === 'dismissed' ? 'dismissed' : 'resolved';

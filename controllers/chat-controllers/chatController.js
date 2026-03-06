@@ -38,7 +38,39 @@ export const sendMessage = async (req, res) => {
 
         // Check if recipient exists
         const recipient = await User.findById(recipientId);
+
+        // If recipient not a regular user, check if this is a reply in an admin conversation
         if (!recipient) {
+            const adminConv = await Conversation.findOne({
+                isAdminConversation: true,
+                adminId: recipientId,
+                participants: new mongoose.Types.ObjectId(senderId)
+            });
+            if (adminConv) {
+                // Creator replying to admin
+                const message = await Message.create({
+                    senderId,
+                    recipientId: null,
+                    text: text.trim(),
+                    senderIsSubscriber: false,
+                    accepted: true,
+                    conversationId: adminConv._id,
+                    isAdminMessage: false
+                });
+                adminConv.lastMessage = { text: text.trim(), senderId, createdAt: new Date() };
+                adminConv.updatedAt = new Date();
+                await adminConv.save();
+                return res.status(201).json({
+                    message: 'Message sent',
+                    data: {
+                        messageId: message._id,
+                        conversationId: adminConv._id,
+                        isRequest: false,
+                        text: message.text,
+                        createdAt: message.createdAt
+                    }
+                });
+            }
             return res.status(404).json({ message: 'Recipient not found' });
         }
 
@@ -147,6 +179,28 @@ export const getConversations = async (req, res) => {
 
         // Map conversations to include other user info
         const items = conversations.map(conv => {
+            // Handle admin conversations — no second participant, show admin info
+            if (conv.isAdminConversation) {
+                return {
+                    _id: conv._id,
+                    otherUser: {
+                        _id: conv.adminId || 'admin',
+                        userName: conv.adminName || 'Admin',
+                        channelName: conv.adminName || 'WatchInit Admin',
+                        channelHandle: null,
+                        channelPicture: null,
+                        profilePicture: null
+                    },
+                    isAdminConversation: true,
+                    adminName: conv.adminName,
+                    lastMessage: conv.lastMessage,
+                    unreadCount: conv.unreadCount?.get?.(userId) || (conv.unreadCount?.[userId]) || 0,
+                    accepted: true,
+                    updatedAt: conv.updatedAt,
+                    createdAt: conv.createdAt
+                };
+            }
+
             const otherUser = conv.participants.find(
                 p => p._id.toString() !== userId
             );
@@ -255,22 +309,40 @@ export const getConversationMessages = async (req, res) => {
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 30));
         const skip = (page - 1) * limit;
 
-        // Find conversation
+        // Find conversation (normal 2-participant or admin conversation)
         const sortedParticipants = [currentUserId, otherUserId].sort();
-        const conversation = await Conversation.findOne({
+        let conversation = await Conversation.findOne({
             participants: { $all: sortedParticipants, $size: 2 }
         });
+
+        // If not found, try admin conversation (admin has no User participant)
+        let isAdminConv = false;
+        if (!conversation) {
+            conversation = await Conversation.findOne({
+                isAdminConversation: true,
+                adminId: otherUserId,
+                participants: new mongoose.Types.ObjectId(currentUserId)
+            });
+            if (conversation) isAdminConv = true;
+        }
 
         if (!conversation) {
             return res.json({ items: [], page, limit, total: 0, hasMore: false });
         }
 
-        const messageFilter = {
-            $or: [
-                { senderId: currentUserId, recipientId: otherUserId },
-                { senderId: otherUserId, recipientId: currentUserId }
-            ]
-        };
+        // Build message filter
+        let messageFilter;
+        if (isAdminConv) {
+            // Admin conversations: all messages in this conversation
+            messageFilter = { conversationId: conversation._id };
+        } else {
+            messageFilter = {
+                $or: [
+                    { senderId: currentUserId, recipientId: otherUserId },
+                    { senderId: otherUserId, recipientId: currentUserId }
+                ]
+            };
+        }
 
         const [messages, total] = await Promise.all([
             Message.find(messageFilter)

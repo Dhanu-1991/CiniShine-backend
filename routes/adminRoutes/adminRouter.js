@@ -4,16 +4,20 @@ import {
     forgotPasswordRequest, forgotPasswordApprove, adminResetPassword
 } from '../../controllers/admin-controllers/adminAuthController.js';
 import {
-    approveSignup, rejectSignup, listRequests, removeAdmin, listAdmins
+    approveSignup, rejectSignup, listRequests, removeAdmin, listAdmins, unlockAdmin
 } from '../../controllers/admin-controllers/adminManagementController.js';
 import {
     hideContent, removeContent, restoreContent, deleteContent,
-    listArchive, getContentDetails, getCreatorAnalytics, searchCreators
+    listArchive, getContentDetails, getCreatorAnalytics, searchCreators,
+    getCreatorProfile, getCreatorStudio, banChannel, unbanChannel, requestBanChannel
 } from '../../controllers/admin-controllers/adminContentController.js';
 import {
     getDashboard, listReports, resolveReport, listFeedbacks, listEnquiries,
     listAuditLogs, listNotifications, markNotificationRead
 } from '../../controllers/admin-controllers/adminDashboardController.js';
+import {
+    adminSendMessage, adminGetMessages, adminGetConversations
+} from '../../controllers/admin-controllers/adminChatController.js';
 import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
@@ -52,7 +56,17 @@ adminRouter.get('/archive', listArchive);
 
 // Creator analytics & search
 adminRouter.get('/creator/:id/analytics', getCreatorAnalytics);
+adminRouter.get('/creator/:id/profile', getCreatorProfile);
+adminRouter.get('/creator/:id/studio', getCreatorStudio);
 adminRouter.get('/search/creators', searchCreators);
+
+// Admin chat with creators
+adminRouter.post('/chat/send', adminSendMessage);
+adminRouter.get('/chat/conversations', adminGetConversations);
+adminRouter.get('/chat/:creatorId', adminGetMessages);
+
+// Admin ban request (admin requests superadmin to ban a channel)
+adminRouter.post('/creator/:id/ban-request', requestBanChannel);
 
 // Audit logs
 adminRouter.get('/audit-logs', listAuditLogs);
@@ -70,5 +84,8 @@ adminRouter.post('/reject-signup', requireSuperAdmin, auditLog('signup_rejected'
 adminRouter.post('/forgot-password-approve', requireSuperAdmin, auditLog('forgot_password_approved', 'admin'), forgotPasswordApprove);
 adminRouter.delete('/remove-admin/:id', requireSuperAdmin, auditLog('admin_remove', 'admin'), removeAdmin);
 adminRouter.get('/list-admins', requireSuperAdmin, listAdmins);
+adminRouter.post('/creator/:id/ban', requireSuperAdmin, banChannel);
+adminRouter.post('/creator/:id/unban', requireSuperAdmin, unbanChannel);
+adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
 
 export default adminRouter;
