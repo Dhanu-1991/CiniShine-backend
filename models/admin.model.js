@@ -46,7 +46,6 @@ const AdminSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
-AdminSchema.index({ contact: 1 }, { unique: true });
 AdminSchema.index({ status: 1 });
 AdminSchema.index({ role: 1 });
 
