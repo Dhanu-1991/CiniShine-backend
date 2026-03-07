@@ -409,11 +409,11 @@ export class WatchHistoryRecommendationEngine {
                     parentCommentId: null
                 });
 
-                // Generate video/audio URL for shorts and audio (CloudFront)
+                // Generate video/audio URL for all media types (CloudFront)
                 let videoUrl = null;
                 let hlsMasterUrl = null;
                 let audioUrl = null;
-                if (contentType === 'short') {
+                if (contentType === 'video' || contentType === 'short') {
                     hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
                     const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
                     videoUrl = getCfUrl(videoKey);

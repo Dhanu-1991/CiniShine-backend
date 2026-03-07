@@ -1,7 +1,7 @@
 import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import SearchHistory from "../../models/searchHistory.model.js";
-import { getCfUrl } from "../../config/cloudfront.js";
+import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 
 /**
  * Get search text suggestions (autocomplete)
@@ -423,10 +423,10 @@ export const unifiedSearch = async (req, res) => {
         if (wantAll || type === 'post') contentTypes.push('post');
         const wantChannels = wantAll || type === 'channel';
 
-        // Build mongo filter for content — exclude uploading/processing items
+        // Build mongo filter for content — only show completed items
         const contentFilter = {
             visibility: 'public',
-            status: { $nin: ['uploading', 'processing'] },
+            status: 'completed',
             ...(searchRegex ? { $or: [{ title: searchRegex }, { description: searchRegex }, { tags: searchRegex }] } : {}),
         };
 
@@ -477,6 +477,20 @@ export const unifiedSearch = async (req, res) => {
             const imageUrl = item.imageKey ? getCfUrl(item.imageKey)
                 : (item.imageKeys?.length ? getCfUrl(item.imageKeys[0]) : null);
             const channelPic = item.userId?.channelPicture;
+
+            // Generate media URLs for hover play
+            let hlsMasterUrl = null;
+            let videoUrl = null;
+            let audioUrl = null;
+            if (item.contentType === 'video' || item.contentType === 'short') {
+                hlsMasterUrl = item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null;
+                const videoKey = item.hlsMasterKey || item.processedKey || item.originalKey;
+                videoUrl = getCfUrl(videoKey);
+            } else if (item.contentType === 'audio') {
+                const audioKey = item.processedKey || item.originalKey;
+                audioUrl = getCfUrl(audioKey);
+            }
+
             buckets[item.contentType]?.push({
                 _id: item._id,
                 contentType: item.contentType,
@@ -485,6 +499,9 @@ export const unifiedSearch = async (req, res) => {
                 duration: item.duration,
                 thumbnailUrl: thumbnail || (item.contentType === 'post' ? imageUrl : null),
                 imageUrl,
+                hlsMasterUrl,
+                videoUrl,
+                audioUrl,
                 views: item.views,
                 likes: Array.isArray(item.likes) ? item.likes.length : (item.likes || 0),
                 dislikes: item.dislikes || 0,

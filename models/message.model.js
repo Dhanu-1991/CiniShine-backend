@@ -104,6 +104,11 @@ const MessageSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Track which group members have read this message
+    readBy: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
     createdAt: {
         type: Date,
         default: Date.now

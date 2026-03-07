@@ -11,6 +11,11 @@ const feedbackSchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
 }, { timestamps: true });
 
 const Feedback = mongoose.model("Feedback", feedbackSchema);

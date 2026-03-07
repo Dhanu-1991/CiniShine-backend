@@ -538,16 +538,29 @@ export const markConversationRead = async (req, res) => {
         conversation.unreadCount.set(userId, 0);
         await conversation.save();
 
-        // Mark all messages from other user as read + set readAt timestamp
-        const otherUserId = conversation.participants.find(
-            p => p.toString() !== userId
-        );
-
         const now = new Date();
-        await Message.updateMany(
-            { senderId: otherUserId, recipientId: userId, read: false },
-            { read: true, readAt: now }
-        );
+
+        if (conversation.isGroup) {
+            // Group: add userId to readBy for messages not yet read by this user
+            await Message.updateMany(
+                {
+                    conversationId: conversation._id,
+                    senderId: { $ne: new mongoose.Types.ObjectId(userId) },
+                    readBy: { $ne: new mongoose.Types.ObjectId(userId) }
+                },
+                { $addToSet: { readBy: new mongoose.Types.ObjectId(userId) } }
+            );
+        } else {
+            // DM: Mark all messages from other user as read + set readAt timestamp
+            const otherUserId = conversation.participants.find(
+                p => p.toString() !== userId
+            );
+
+            await Message.updateMany(
+                { senderId: otherUserId, recipientId: userId, read: false },
+                { read: true, readAt: now }
+            );
+        }
 
         return res.json({ message: 'Conversation marked as read', readAt: now });
     } catch (error) {
@@ -787,12 +800,14 @@ export const searchConversations = async (req, res) => {
 
         const matchingUserIds = matchingUsers.map(u => u._id);
 
-        // Find conversations with these users
+        // Find conversations where current user is a participant AND
+        // the other participant matches the search query
         const conversations = await Conversation.find({
-            participants: {
-                $all: [new mongoose.Types.ObjectId(userId)],
-            },
-            'participants': { $in: matchingUserIds },
+            $and: [
+                { participants: new mongoose.Types.ObjectId(userId) },
+                { participants: { $in: matchingUserIds } }
+            ],
+            isGroup: { $ne: true },
             archived: false
         })
             .sort({ updatedAt: -1 })
@@ -1149,7 +1164,8 @@ export const getGroupMessages = async (req, res) => {
             Message.countDocuments({ conversationId: new mongoose.Types.ObjectId(conversationId) })
         ]);
 
-        // Apply CF URLs
+        // Apply CF URLs and compute readByAll
+        const memberCount = conv.participants.length;
         const items = messages.reverse().map(m => ({
             ...m,
             sender: m.senderId ? {
@@ -1161,7 +1177,9 @@ export const getGroupMessages = async (req, res) => {
                         ? m.senderId.channelPicture
                         : `https://${process.env.CLOUDFRONT_DOMAIN}/${m.senderId.channelPicture}`)
                     : null
-            } : null
+            } : null,
+            // readByAll: true if all other members (excluding sender) have read it
+            readByAll: (m.readBy?.length || 0) >= (memberCount - 1)
         }));
 
         return res.json({
@@ -1296,6 +1314,13 @@ export const searchMessages = async (req, res) => {
 
         if (!query) return res.json({ items: [] });
 
+        // Verify conversation exists between these two users
+        const sortedParticipants = [currentUserId, otherUserId].sort();
+        const conv = await Conversation.findOne({
+            participants: { $all: sortedParticipants, $size: 2 }
+        }).lean();
+        if (!conv) return res.json({ items: [] });
+
         const messages = await Message.find({
             $or: [
                 { senderId: currentUserId, recipientId: otherUserId },
@@ -1320,10 +1345,19 @@ export const searchMessages = async (req, res) => {
  */
 export const searchGroupMessages = async (req, res) => {
     try {
+        const userId = req.user.id;
         const { conversationId } = req.params;
         const query = req.query.q?.trim();
 
         if (!query) return res.json({ items: [] });
+
+        // Verify user is a member of this group
+        const conv = await Conversation.findOne({
+            _id: conversationId,
+            isGroup: true,
+            participants: new mongoose.Types.ObjectId(userId)
+        }).lean();
+        if (!conv) return res.status(403).json({ message: 'Not a member of this group' });
 
         const messages = await Message.find({
             conversationId: new mongoose.Types.ObjectId(conversationId),
