@@ -203,7 +203,7 @@ export const getConversations = async (req, res) => {
             }
 
             const otherUser = conv.participants.find(
-                p => p._id.toString() !== userId
+                p => p && p._id && p._id.toString() !== userId
             );
             return {
                 _id: conv._id,
@@ -266,7 +266,7 @@ export const getRequests = async (req, res) => {
 
         const items = conversations.map(conv => {
             const otherUser = conv.participants.find(
-                p => p._id.toString() !== userId
+                p => p && p._id && p._id.toString() !== userId
             );
             return {
                 _id: conv._id,

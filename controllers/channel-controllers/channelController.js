@@ -24,7 +24,7 @@ export const getChannelPage = async (req, res) => {
 
         if (!channelIdentifier) return res.status(400).json({ error: 'Channel identifier required' });
 
-        // Find user by channelHandle first, then fall back to channelName
+        // Find user by channelHandle first, then fall back to channelName, then _id
         let user = await User.findOne({
             channelHandle: channelIdentifier.toLowerCase()
         });
@@ -32,6 +32,9 @@ export const getChannelPage = async (req, res) => {
             user = await User.findOne({
                 channelName: { $regex: new RegExp(`^${channelIdentifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
             });
+        }
+        if (!user && mongoose.Types.ObjectId.isValid(channelIdentifier)) {
+            user = await User.findById(channelIdentifier);
         }
 
         if (!user) return res.status(404).json({ error: 'Channel not found' });
@@ -157,6 +160,9 @@ export const getChannelContent = async (req, res) => {
                 channelName: { $regex: new RegExp(`^${channelIdentifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
             });
         }
+        if (!user && mongoose.Types.ObjectId.isValid(channelIdentifier)) {
+            user = await User.findById(channelIdentifier);
+        }
         if (!user) return res.status(404).json({ error: 'Channel not found' });
 
         // STRICT: Only public + completed content
@@ -256,58 +262,36 @@ export const getChannelFollowers = async (req, res) => {
                 channelName: { $regex: new RegExp(`^${channelIdentifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
             });
         }
+        if (!user && mongoose.Types.ObjectId.isValid(channelIdentifier)) {
+            user = await User.findById(channelIdentifier);
+        }
         if (!user) return res.status(404).json({ error: 'Channel not found' });
 
-        // Find users (creators only) who have this channel in their subscriptions
-        const followers = await User.aggregate([
-            {
-                $match: {
-                    subscriptions: user._id,
-                    channelName: { $exists: true },
-                    $and: [
-                        { channelName: { $ne: null } },
-                        { channelName: { $ne: '' } }
-                    ]
-                }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    let: { followerId: '$_id' },
-                    pipeline: [
-                        { $match: { $expr: { $in: ['$$followerId', '$subscriptions'] } } },
-                        { $count: 'count' }
-                    ],
-                    as: 'followerStats'
-                }
-            },
-            {
-                $addFields: {
-                    followerCount: {
-                        $ifNull: [{ $arrayElemAt: ['$followerStats.count', 0] }, 0]
-                    }
-                }
-            },
-            { $sort: { followerCount: -1 } },
-            { $limit: 20 },
-            {
-                $project: {
-                    _id: 1,
-                    channelName: 1,
-                    channelHandle: 1,
-                    channelPicture: 1,
-                    followerCount: 1
-                }
-            }
-        ]);
+        // Find creator followers (users who subscribe to this channel)
+        const rawFollowers = await User.find({
+            subscriptions: user._id,
+            channelName: { $exists: true, $nin: [null, ''] }
+        })
+            .select('_id channelName channelHandle channelPicture subscriberCountOverride')
+            .limit(50)
+            .lean();
 
-        // Resolve CloudFront URLs for channel pictures
-        const followersWithUrls = followers.map(f => ({
-            ...f,
-            channelPicture: f.channelPicture ? getCfUrl(f.channelPicture) : null
-        }));
+        // Get follower counts efficiently with parallel individual queries
+        const followers = await Promise.all(
+            rawFollowers.map(async (f) => ({
+                _id: f._id,
+                channelName: f.channelName,
+                channelHandle: f.channelHandle,
+                channelPicture: f.channelPicture ? getCfUrl(f.channelPicture) : null,
+                followerCount: f.subscriberCountOverride != null
+                    ? f.subscriberCountOverride
+                    : await User.countDocuments({ subscriptions: f._id })
+            }))
+        );
 
-        res.json({ followers: followersWithUrls });
+        // Sort by follower count and take top 20
+        followers.sort((a, b) => b.followerCount - a.followerCount);
+        res.json({ followers: followers.slice(0, 20) });
     } catch (error) {
         console.error('❌ Error fetching channel followers:', error);
         res.status(500).json({ error: 'Failed to fetch followers' });
