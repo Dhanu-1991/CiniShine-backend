@@ -339,31 +339,103 @@ export const getRecommendedCommunities = async (req, res) => {
 // ═══════════════════════════════════════════════════
 // POST /api/v2/communities/:id/chat/watch-time — Update watch time for content viewed in community feed
 // ═══════════════════════════════════════════════════
+
+// Rate limiter for feed watch time: userId:contentId → last update timestamp
+const feedWatchTimeRateLimit = new Map();
+const FEED_RATE_LIMIT_WINDOW = 30 * 1000; // 30s between updates per user+content
+
 export const updateFeedWatchTime = async (req, res) => {
     try {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-        const { contentId, watchTime } = req.body;
+        const { contentId, watchTime, duration: clientDuration } = req.body;
         if (!contentId || !watchTime || watchTime <= 0) return res.status(400).json({ error: 'contentId and positive watchTime required' });
 
-        // Update content watch time
-        await Content.findByIdAndUpdate(contentId, {
-            $inc: { totalWatchTime: Math.floor(watchTime), views: 0 }
-        });
+        // Rate limit: 30s between calls for the same user+content
+        const rateKey = `${userId}:${contentId}`;
+        const lastUpdate = feedWatchTimeRateLimit.get(rateKey);
+        if (lastUpdate && Date.now() - lastUpdate < FEED_RATE_LIMIT_WINDOW) {
+            return res.json({ message: 'Rate limited, skipped', rateLimited: true });
+        }
+        feedWatchTimeRateLimit.set(rateKey, Date.now());
 
-        // Update or create watch history
+        const content = await Content.findById(contentId);
+        if (!content) return res.status(404).json({ error: 'Content not found' });
+
+        // Fix missing duration if client provides one
+        if ((!content.duration || content.duration === 0) && clientDuration && clientDuration > 0) {
+            content.duration = clientDuration;
+        }
+
+        const watchTimeSeconds = watchTime / 1000;
+
+        // Minimum watch threshold before counting a view:
+        // Shorts (<60s): 2s | Audio: 5s | Posts: 3s | Videos: 10s
+        const viewThresholds = { short: 2, audio: 5, post: 3, video: 10 };
+        const threshold = viewThresholds[content.contentType] || 5;
+
+        // Always accumulate total watch time
+        content.totalWatchTime = (content.totalWatchTime || 0) + watchTimeSeconds;
+
+        // Only increment views if threshold met AND user hasn't viewed recently
+        let viewCounted = false;
+        const existingHistory = await WatchHistory.findOne({ userId, contentId });
+        const viewCooldown = content.contentType === 'short' ? 60000 : 300000; // 1min shorts, 5min others
+
+        if (watchTimeSeconds >= threshold) {
+            const canCountView = !existingHistory ||
+                (Date.now() - new Date(existingHistory.lastWatchedAt).getTime() > viewCooldown);
+            if (canCountView) {
+                content.views = (content.views || 0) + 1;
+                viewCounted = true;
+            }
+        }
+
+        content.averageWatchTime = content.views > 0
+            ? content.totalWatchTime / content.views : 0;
+        await content.save();
+
+        // Upsert WatchHistory for the recommendation engine
+        const watchPercentage = content.duration > 0
+            ? Math.min(100, (watchTimeSeconds / content.duration) * 100) : 0;
+        const completedWatch = watchPercentage >= 80;
+
         await WatchHistory.findOneAndUpdate(
             { userId, contentId },
             {
-                $inc: { watchTime: Math.floor(watchTime), watchCount: 0 },
-                $set: { lastWatchedAt: new Date() },
-                $setOnInsert: { firstWatchedAt: new Date(), contentType: 'video' }
+                $set: {
+                    contentType: content.contentType,
+                    lastWatchedAt: new Date(),
+                    watchPercentage: Math.max(watchPercentage, existingHistory?.watchPercentage || 0),
+                    completedWatch: completedWatch || existingHistory?.completedWatch || false,
+                    'contentMetadata.title': content.title,
+                    'contentMetadata.tags': content.tags || [],
+                    'contentMetadata.category': content.category,
+                    'contentMetadata.creatorId': content.userId,
+                    'contentMetadata.duration': content.duration
+                },
+                $inc: {
+                    watchTime: watchTimeSeconds,
+                    watchCount: viewCounted ? 1 : 0
+                },
+                $setOnInsert: { firstWatchedAt: new Date() },
+                $push: {
+                    sessions: {
+                        $each: [{
+                            startedAt: new Date(Date.now() - watchTime),
+                            endedAt: new Date(),
+                            watchTime: watchTimeSeconds,
+                            completedWatch
+                        }],
+                        $slice: -20
+                    }
+                }
             },
             { upsert: true }
         );
 
-        return res.json({ success: true });
+        return res.json({ success: true, viewCounted, views: content.views });
     } catch (error) {
         console.error('updateFeedWatchTime error:', error);
         return res.status(500).json({ error: 'Failed to update watch time' });

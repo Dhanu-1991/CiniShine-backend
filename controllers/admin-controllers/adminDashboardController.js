@@ -25,6 +25,7 @@ export const getDashboard = async (req, res) => {
             totalCreators,
             pendingReports,
             totalFeedback,
+            totalEnquiries,
             archivedContentCount,
             recentLogins,
             todayViews,
@@ -32,6 +33,7 @@ export const getDashboard = async (req, res) => {
             totalAdmins,
             latestReports,
             latestFeedback,
+            latestEnquiries,
             notifications,
             contentUploading,
             contentProcessing,
@@ -43,6 +45,7 @@ export const getDashboard = async (req, res) => {
             User.countDocuments({}),
             ContentReport.countDocuments({ status: 'pending' }),
             Feedback.countDocuments({}),
+            Enquiry.countDocuments({}),
             ContentArchive.countDocuments({ permanently_deleted: false, restored_at: null }),
             AdminAuditLog.countDocuments({ action: 'login', timestamp: { $gte: today } }),
             Content.aggregate([
@@ -56,7 +59,8 @@ export const getDashboard = async (req, res) => {
                 .limit(5)
                 .populate('contentId', 'title contentType')
                 .populate('reporterId', 'userName'),
-            Feedback.find().sort({ createdAt: -1 }).limit(5),
+            Feedback.find().sort({ createdAt: -1 }).limit(5).populate('userId', 'userName email'),
+            Enquiry.find().sort({ createdAt: -1 }).limit(5),
             AdminNotification.find()
                 .sort({ createdAt: -1 })
                 .limit(10),
@@ -85,10 +89,12 @@ export const getDashboard = async (req, res) => {
                     contentProcessing,
                     contentFailed,
                     contentCompleted,
-                    activeUsers: activeUsersResult?.length || 0
+                    activeUsers: activeUsersResult?.length || 0,
+                    totalEnquiries
                 },
                 latestReports,
                 latestFeedback,
+                latestEnquiries,
                 notifications
             }
         });
@@ -170,9 +176,9 @@ export const listReports = async (req, res) => {
 
 /**
  * POST /admin/reports/:id/resolve
- * Resolve, dismiss, or take down a report.
- * action: 'resolved' | 'dismissed' | 'takedown'
- * For takedown: justification is required and content becomes permanently invisible.
+ * Resolve or take down a report.
+ * action: 'resolved' | 'takedown'
+ * For takedown: justification is required, content is archived with 24h cooldown.
  */
 export const resolveReport = async (req, res) => {
     try {
@@ -189,23 +195,67 @@ export const resolveReport = async (req, res) => {
                 return res.status(400).json({ success: false, message: 'Takedown requires a justification (at least 10 characters)' });
             }
 
+            const content = await Content.findById(report.contentId);
+            if (!content) {
+                return res.status(404).json({ success: false, message: 'Content not found' });
+            }
+
+            // Check if already archived
+            const existingArchive = await ContentArchive.findOne({
+                content_id: content._id,
+                permanently_deleted: false,
+                restored_at: null
+            });
+            if (existingArchive) {
+                return res.status(400).json({ success: false, message: 'Content is already archived' });
+            }
+
+            const now = new Date();
+            const ARCHIVE_TTL_MS = 24 * 60 * 60 * 1000;
+
+            // Build HLS prefix for later S3 cleanup
+            let hlsPrefix = '';
+            if (content.hlsMasterKey) {
+                hlsPrefix = content.hlsMasterKey.substring(0, content.hlsMasterKey.lastIndexOf('/') + 1);
+            }
+
+            // Create archive entry with S3 key snapshot
+            await ContentArchive.create({
+                content_id: content._id,
+                originalKey: content.originalKey || '',
+                hlsMasterKey: content.hlsMasterKey || '',
+                thumbnailKey: content.thumbnailKey || '',
+                imageKey: content.imageKey || '',
+                imageKeys: content.imageKeys || [],
+                hlsPrefix,
+                content_snapshot: {
+                    title: content.title,
+                    contentType: content.contentType,
+                    userId: content.userId,
+                    description: content.description,
+                    tags: content.tags,
+                    views: content.views,
+                    createdAt: content.createdAt
+                },
+                removed_by_admin: req.admin._id,
+                removed_at: now,
+                delete_scheduled_at: new Date(now.getTime() + ARCHIVE_TTL_MS),
+                reason: justification.trim()
+            });
+
+            // Mark content as removed
+            content.status = 'removed';
+            content.visibility = 'private';
+            await content.save();
+
             // Mark report as taken down
             report.status = 'resolved';
             report.takenDown = true;
-            report.takenDownAt = new Date();
+            report.takenDownAt = now;
             report.takedownJustification = justification.trim();
             report.reviewedBy = req.admin._id;
-            report.reviewedAt = new Date();
+            report.reviewedAt = now;
             await report.save();
-
-            // Mark content as removed — once taken down, never visible again
-            const Content = (await import('../../models/content.model.js')).default;
-            const content = await Content.findById(report.contentId);
-            if (content) {
-                content.status = 'removed';
-                content.visibility = 'private';
-                await content.save();
-            }
 
             await AdminAuditLog.create({
                 admin_id: req.admin._id,
@@ -217,17 +267,30 @@ export const resolveReport = async (req, res) => {
                 note: justification.trim()
             });
 
-            return res.status(200).json({ success: true, message: 'Content taken down permanently' });
+            await AdminNotification.create({
+                type: 'content_removed',
+                title: 'Content Taken Down',
+                message: `"${content.title || 'Untitled'}" taken down via report by ${req.admin.name}. Can be permanently deleted after 24h.`,
+                severity: 'warning',
+                metadata: { content_id: content._id, report_id: report._id, admin_id: req.admin._id }
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: 'Content archived. Can be permanently deleted after 24 hours.',
+                delete_scheduled_at: new Date(now.getTime() + ARCHIVE_TTL_MS)
+            });
         }
 
-        report.status = action === 'dismissed' ? 'dismissed' : 'resolved';
+        // Resolve without takedown
+        report.status = 'resolved';
         report.reviewedBy = req.admin._id;
         report.reviewedAt = new Date();
         await report.save();
 
         await AdminAuditLog.create({
             admin_id: req.admin._id,
-            action: action === 'dismissed' ? 'report_dismiss' : 'report_resolve',
+            action: 'report_resolve',
             target_type: 'report',
             target_id: report._id,
             ip: req.ip || '',
@@ -235,7 +298,7 @@ export const resolveReport = async (req, res) => {
             note: note || ''
         });
 
-        return res.status(200).json({ success: true, message: `Report ${report.status}` });
+        return res.status(200).json({ success: true, message: 'Report resolved' });
     } catch (error) {
         console.error('Resolve report error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });

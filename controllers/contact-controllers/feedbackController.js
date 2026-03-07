@@ -11,8 +11,10 @@ export const handleFeedback = async (req, res) => {
     if (req.user?.id) {
       userId = req.user.id;
       if (!feedbackEmail) {
-        const user = await User.findById(req.user.id).select("email").lean();
-        feedbackEmail = user?.email || email;
+        const user = await User.findById(req.user.id)
+          .select("email contact")
+          .lean();
+        feedbackEmail = user?.email || user?.contact || email;
       }
     }
 

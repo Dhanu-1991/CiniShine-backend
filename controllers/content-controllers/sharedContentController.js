@@ -206,6 +206,7 @@ export const getSingleContent = async (req, res) => {
 
         const content = await Content.findById(id).populate('userId', 'userName channelName channelHandle channelPicture');
         if (!content) return res.status(404).json({ error: 'Content not found' });
+        if (content.status === 'removed') return res.status(410).json({ error: 'This content has been removed and is no longer available' });
 
         const commentCount = await Comment.countDocuments({ videoId: content._id, onModel: 'Content', parentCommentId: null });
         const thumbnailUrl = getCfUrl(content.thumbnailKey);

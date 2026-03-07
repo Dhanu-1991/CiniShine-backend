@@ -47,6 +47,10 @@ export const getVideo = async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
+        if (video.status === 'removed') {
+            return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+        }
+
         // Generate CloudFront URL for thumbnail (optional)
         const thumbnailUrl = getCfUrl(video.thumbnailKey);
 

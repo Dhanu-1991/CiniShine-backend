@@ -4,6 +4,6 @@ import { handleFeedback } from '../../controllers/contact-controllers/feedbackCo
 import { optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 const contactRouter = express.Router();
 
-contactRouter.post('/enquiry', handleEnquiry);
+contactRouter.post('/enquiry', optionalTokenVerifier, handleEnquiry);
 contactRouter.post('/feedback', optionalTokenVerifier, handleFeedback);
 export default contactRouter;

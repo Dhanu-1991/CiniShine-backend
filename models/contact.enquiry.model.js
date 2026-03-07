@@ -11,6 +11,11 @@ const enquirySchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+  },
 }, { timestamps: true });
 
 const Enquiry = mongoose.model("Enquiry", enquirySchema);
