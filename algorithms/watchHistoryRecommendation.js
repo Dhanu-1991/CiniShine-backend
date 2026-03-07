@@ -319,7 +319,7 @@ export class WatchHistoryRecommendationEngine {
             visibility: 'public',
             _id: { $nin: Array.from(excludeIdSet) }
         })
-            .populate('userId', 'userName channelName channelPicture')
+            .populate('userId', 'userName channelName channelHandle channelPicture')
             .lean();
 
         // ── Enrich candidates with creator follower counts (single batch query) ──
@@ -439,9 +439,11 @@ export class WatchHistoryRecommendationEngine {
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName || 'Unknown',
                     channelPicture: content.userId?.channelPicture || null,
+                    channelHandle: content.userId?.channelHandle || null,
                     userId: content.userId?._id || content.userId,
                     status: content.status,
                     tags: content.tags,
+                    category: content.category,
                     artist: content.artist,
                     album: content.album,
                     audioCategory: content.audioCategory,

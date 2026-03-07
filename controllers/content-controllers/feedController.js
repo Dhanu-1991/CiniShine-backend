@@ -8,7 +8,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { recommendationEngine } from '../../algorithms/recommendationAlgorithm.js';
 import { findSimilarVideos } from '../../algorithms/videoSimilarity.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
 /**
  * Generate CloudFront URL for S3 objects (replaces S3 signed URLs)
@@ -354,11 +354,11 @@ export const getCategoryFeed = async (req, res) => {
                 .sort(sortOverride)
                 .skip((page - 1) * limit)
                 .limit(limit + 1) // +1 to check hasNextPage
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .lean();
         } else {
             candidates = await Content.find(query)
-                .populate('userId', 'userName channelName channelPicture')
+                .populate('userId', 'userName channelName channelHandle channelPicture')
                 .lean();
         }
 
@@ -385,24 +385,45 @@ export const getCategoryFeed = async (req, res) => {
             results = scored.slice(startIdx, startIdx + limit);
         }
 
-        // Normalize output format
-        const content = results.map(c => ({
-            _id: c._id,
-            contentType: c.contentType || 'video',
-            title: c.title,
-            description: c.description,
-            duration: c.duration,
-            thumbnailUrl: getCfUrl(c.thumbnailKey),
-            views: c.views,
-            likeCount: c.likeCount || 0,
-            createdAt: c.createdAt,
-            channelName: c.channelName || c.userId?.channelName || c.userId?.userName || 'Unknown',
-            channelPicture: c.userId?.channelPicture || null,
-            userId: c.userId?._id || c.userId,
-            status: c.status,
-            tags: c.tags,
-            category: c.category,
-        }));
+        // Normalize output format (include all fields needed by frontend cards)
+        const content = results.map(c => {
+            const contentType = c.contentType || 'video';
+            let videoUrl = null;
+            let hlsMasterUrl = null;
+            let audioUrl = null;
+            if (contentType === 'video' || contentType === 'short') {
+                hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
+                const videoKey = c.hlsMasterKey || c.processedKey || c.originalKey;
+                if (videoKey) videoUrl = getCfUrl(videoKey);
+            } else if (contentType === 'audio') {
+                const audioKey = c.processedKey || c.originalKey;
+                if (audioKey) audioUrl = getCfUrl(audioKey);
+            }
+            return {
+                _id: c._id,
+                contentType,
+                title: c.title,
+                description: c.description,
+                duration: c.duration,
+                thumbnailUrl: getCfUrl(c.thumbnailKey),
+                hlsMasterUrl,
+                videoUrl,
+                audioUrl,
+                views: c.views,
+                likeCount: c.likeCount || 0,
+                createdAt: c.createdAt,
+                channelName: c.channelName || c.userId?.channelName || c.userId?.userName || 'Unknown',
+                channelPicture: c.userId?.channelPicture || null,
+                channelHandle: c.userId?.channelHandle || null,
+                userId: c.userId?._id || c.userId,
+                status: c.status,
+                tags: c.tags,
+                category: c.category,
+                artist: c.artist,
+                album: c.album,
+                postContent: c.postContent,
+            };
+        });
 
         res.json({
             content,

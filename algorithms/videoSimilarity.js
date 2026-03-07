@@ -35,7 +35,7 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
             contentType: 'video',
             status: 'completed',
             _id: { $ne: currentVideo._id }
-        }).populate('userId', 'userName channelName channelPicture roles createdAt');
+        }).populate('userId', 'userName channelName channelHandle channelPicture roles createdAt');
 
         // Batch-fetch follower counts for all candidate creators
         const creatorIds = [...new Set(
@@ -96,6 +96,7 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
             user: video.userId,
             channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
             channelPicture: video.userId?.channelPicture || null,
+            channelHandle: video.userId?.channelHandle || null,
             tags: video.tags,
             category: video.category,
             similarityScore: video.similarityScore
