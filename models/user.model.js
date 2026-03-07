@@ -105,6 +105,21 @@ const userSchema = new mongoose.Schema({
         ipAddress: String,
         userAgent: String
     }],
+    // Last login tracking
+    lastLoginAt: {
+        type: Date,
+        default: null
+    },
+    // Subscriber count override (superadmin can set this)
+    subscriberCountOverride: {
+        type: Number,
+        default: null
+    },
+    // Unique viewers override (superadmin can set this)
+    uniqueViewersOverride: {
+        type: Number,
+        default: null
+    },
     // Admin channel ban
     channelBanned: {
         type: Boolean,

@@ -20,7 +20,11 @@ const signIn = async (req, res, next) => {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
-    // 3. Generate token
+    // 3. Track login time
+    user.lastLoginAt = new Date();
+    await user.save();
+
+    // 4. Generate token
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRATION,
     });

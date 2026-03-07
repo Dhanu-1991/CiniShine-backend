@@ -424,7 +424,7 @@ export const getCreatorAnalytics = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
         }
 
-        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriptions');
+        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriptions subscriberCountOverride uniqueViewersOverride');
         if (!creator) {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
@@ -453,12 +453,18 @@ export const getCreatorAnalytics = async (req, res) => {
         ]);
 
         // Unique viewers
-        const uniqueViewers = await ContentView.countDocuments({
+        const computedUniqueViewers = await ContentView.countDocuments({
             contentId: { $in: await Content.find({ userId: id }).distinct('_id') }
         });
+        const uniqueViewers = creator.uniqueViewersOverride !== null && creator.uniqueViewersOverride !== undefined
+            ? creator.uniqueViewersOverride
+            : computedUniqueViewers;
 
         // Subscriber count (users who have this creator in their subscriptions)
-        const subscriberCount = await User.countDocuments({ subscriptions: id });
+        const computedSubscriberCount = await User.countDocuments({ subscriptions: id });
+        const subscriberCount = creator.subscriberCountOverride !== null && creator.subscriberCountOverride !== undefined
+            ? creator.subscriberCountOverride
+            : computedSubscriberCount;
 
         return res.status(200).json({
             success: true,
@@ -475,6 +481,7 @@ export const getCreatorAnalytics = async (req, res) => {
                 ...(stats || { totalContent: 0, totalViews: 0, totalLikes: 0, totalDislikes: 0, totalShares: 0, totalWatchTime: 0, avgWatchTime: 0 }),
                 uniqueViewers,
                 subscriberCount,
+                subscriberCountOverride: creator.subscriberCountOverride,
                 contentByType
             }
         });
@@ -552,7 +559,9 @@ export const getCreatorProfile = async (req, res) => {
         }
 
         const [subscriberCount, contentCount, communities] = await Promise.all([
-            User.countDocuments({ subscriptions: id }),
+            creator.subscriberCountOverride !== null && creator.subscriberCountOverride !== undefined
+                ? Promise.resolve(creator.subscriberCountOverride)
+                : User.countDocuments({ subscriptions: id }),
             Content.countDocuments({ userId: id, status: { $in: ['completed', 'removed'] } }),
             CommunityMember.find({ userId: id, status: 'ACTIVE' })
                 .populate('communityId', 'name slug type avatarUrl')
@@ -799,6 +808,215 @@ export const requestBanChannel = async (req, res) => {
         });
     } catch (error) {
         console.error('Ban request error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * PATCH /admin/content/:id/stats
+ * SuperAdmin: Update content viewcount and totalWatchTime.
+ */
+export const updateContentStats = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { views, totalWatchTime } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid content ID' });
+        }
+
+        const content = await Content.findById(id);
+        if (!content) {
+            return res.status(404).json({ success: false, message: 'Content not found' });
+        }
+
+        const updates = {};
+        if (views !== undefined) {
+            const parsed = parseInt(views, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Views must be a non-negative integer' });
+            }
+            updates.views = parsed;
+            content.views = parsed;
+        }
+        if (totalWatchTime !== undefined) {
+            const parsed = parseFloat(totalWatchTime);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Total watch time must be a non-negative number' });
+            }
+            updates.totalWatchTime = parsed;
+            content.totalWatchTime = parsed;
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ success: false, message: 'No valid fields to update' });
+        }
+
+        await content.save();
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'stats_update',
+            target_type: 'content',
+            target_id: content._id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: `Updated content stats: ${JSON.stringify(updates)}`
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Content stats updated',
+            updates
+        });
+    } catch (error) {
+        console.error('Update content stats error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * PATCH /admin/creator/:id/stats
+ * SuperAdmin: Update creator subscriberCount and totalWatchTime.
+ */
+export const updateCreatorStats = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { subscriberCount, totalWatchTime, totalViews, totalLikes, uniqueViewers } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid creator ID' });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'Creator not found' });
+        }
+
+        const updates = {};
+
+        if (subscriberCount !== undefined) {
+            const parsed = parseInt(subscriberCount, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Subscriber count must be a non-negative integer' });
+            }
+            user.subscriberCountOverride = parsed;
+            updates.subscriberCount = parsed;
+        }
+
+        const contentList = await Content.find({ userId: id, status: { $ne: 'removed' } });
+
+        if (totalViews !== undefined) {
+            const parsed = parseInt(totalViews, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Total views must be a non-negative integer' });
+            }
+            updates.totalViews = parsed;
+            // Distribute views proportionally across content
+            const currentTotal = contentList.reduce((sum, c) => sum + (c.views || 0), 0);
+            if (contentList.length > 0 && currentTotal > 0) {
+                const ratio = parsed / currentTotal;
+                for (const c of contentList) {
+                    c.views = Math.round((c.views || 0) * ratio);
+                    await c.save();
+                }
+            } else if (contentList.length > 0) {
+                const perContent = Math.round(parsed / contentList.length);
+                for (const c of contentList) {
+                    c.views = perContent;
+                    await c.save();
+                }
+            }
+        }
+
+        if (totalLikes !== undefined) {
+            const parsed = parseInt(totalLikes, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Total likes must be a non-negative integer' });
+            }
+            updates.totalLikes = parsed;
+            // Distribute likes proportionally across content
+            const currentTotal = contentList.reduce((sum, c) => sum + (c.likeCount || 0), 0);
+            if (contentList.length > 0 && currentTotal > 0) {
+                const ratio = parsed / currentTotal;
+                for (const c of contentList) {
+                    c.likeCount = Math.round((c.likeCount || 0) * ratio);
+                    await c.save();
+                }
+            } else if (contentList.length > 0) {
+                const perContent = Math.round(parsed / contentList.length);
+                for (const c of contentList) {
+                    c.likeCount = perContent;
+                    await c.save();
+                }
+            }
+        }
+
+        if (totalWatchTime !== undefined) {
+            const parsed = parseFloat(totalWatchTime);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Total watch time must be a non-negative number' });
+            }
+            updates.totalWatchTime = parsed;
+            // Update the aggregate totalWatchTime on all content by the creator
+            const currentTotal = contentList.reduce((sum, c) => sum + (c.totalWatchTime || 0), 0);
+            if (contentList.length > 0 && currentTotal > 0) {
+                // Scale proportionally
+                const ratio = parsed / currentTotal;
+                for (const c of contentList) {
+                    c.totalWatchTime = Math.round((c.totalWatchTime || 0) * ratio);
+                    // Auto-update averageWatchTime: totalWatchTime / views (or 0 if no views)
+                    c.averageWatchTime = c.views > 0 ? Math.round(c.totalWatchTime / c.views) : 0;
+                    await c.save();
+                }
+            } else if (contentList.length > 0) {
+                // Distribute evenly
+                const perContent = Math.round(parsed / contentList.length);
+                for (const c of contentList) {
+                    c.totalWatchTime = perContent;
+                    c.averageWatchTime = c.views > 0 ? Math.round(perContent / c.views) : 0;
+                    await c.save();
+                }
+            }
+            // Calculate new average watch time across all content
+            const totalViewsNow = contentList.reduce((sum, c) => sum + (c.views || 0), 0);
+            updates.avgWatchTime = totalViewsNow > 0 ? Math.round(parsed / totalViewsNow) : 0;
+        }
+
+        if (uniqueViewers !== undefined) {
+            const parsed = parseInt(uniqueViewers, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Unique viewers must be a non-negative integer' });
+            }
+            updates.uniqueViewers = parsed;
+            // Note: uniqueViewers is computed from ContentView documents.
+            // We store the override value and return it in analytics.
+            user.uniqueViewersOverride = parsed;
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ success: false, message: 'No valid fields to update' });
+        }
+
+        await user.save();
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'stats_update',
+            target_type: 'user',
+            target_id: user._id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: `Updated creator stats: ${JSON.stringify(updates)}`
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Creator stats updated',
+            updates
+        });
+    } catch (error) {
+        console.error('Update creator stats error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };

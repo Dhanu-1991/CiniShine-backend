@@ -17,9 +17,10 @@ const AdminAuditLogSchema = new mongoose.Schema({
             'signup', 'signup_approved', 'signup_rejected',
             'forgot_password_request', 'forgot_password_approved', 'forgot_password_reset',
             'content_hide', 'content_unhide', 'content_remove', 'content_restore', 'content_purge',
-            'report_review', 'report_resolve', 'report_dismiss',
-            'admin_remove', 'admin_block', 'admin_unblock',
+            'report_review', 'report_resolve', 'report_dismiss', 'report_takedown',
+            'admin_remove', 'admin_block', 'admin_unblock', 'admin_unlock',
             'channel_ban', 'channel_unban', 'admin_message_sent',
+            'ban_request', 'stats_update',
             'otp_sent', 'otp_verified', 'otp_failed',
             'other'
         ]

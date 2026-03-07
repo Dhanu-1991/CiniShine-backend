@@ -261,7 +261,11 @@ export const getChannelFollowers = async (req, res) => {
             {
                 $match: {
                     subscriptions: user._id,
-                    channelName: { $exists: true, $ne: null, $ne: '' }
+                    channelName: { $exists: true },
+                    $and: [
+                        { channelName: { $ne: null } },
+                        { channelName: { $ne: '' } }
+                    ]
                 }
             },
             {

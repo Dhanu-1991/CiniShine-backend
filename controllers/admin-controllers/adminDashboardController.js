@@ -47,7 +47,7 @@ export const getDashboard = async (req, res) => {
             Feedback.countDocuments({}),
             Enquiry.countDocuments({}),
             ContentArchive.countDocuments({ permanently_deleted: false, restored_at: null }),
-            AdminAuditLog.countDocuments({ action: 'login', timestamp: { $gte: today } }),
+            User.countDocuments({ lastLoginAt: { $gte: today } }),
             Content.aggregate([
                 { $match: { updatedAt: { $gte: today } } },
                 { $group: { _id: null, views: { $sum: '$views' } } }
@@ -69,7 +69,7 @@ export const getDashboard = async (req, res) => {
             Content.countDocuments({ status: 'failed' }),
             Content.countDocuments({ status: 'completed' }),
             // Active users: distinct users with watch activity in last 15 min
-            WatchHistory.distinct('userId', { updatedAt: { $gte: fifteenMinAgo } })
+            WatchHistory.distinct('userId', { lastWatchedAt: { $gte: fifteenMinAgo } })
         ]);
 
         return res.status(200).json({

@@ -705,20 +705,75 @@ export const banMember = async (req, res) => {
 export const listMembers = async (req, res) => {
     try {
         const { id } = req.params;
-        const { status = 'ACTIVE', page = 1, limit = 20 } = req.query;
+        const { status = 'ACTIVE', page = 1, limit = 200, search } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const members = await CommunityMember.find({
-            communityId: id,
-            status
-        })
-            .sort({ joinedAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .populate('userId', 'userName channelName channelPicture channelHandle')
-            .lean();
+        // Role weight for sorting: OWNER > ADMIN > MODERATOR > MEMBER
+        const roleWeight = { OWNER: 4, ADMIN: 3, MODERATOR: 2, MEMBER: 1 };
 
-        const total = await CommunityMember.countDocuments({ communityId: id, status });
+        const matchFilter = { communityId: new mongoose.Types.ObjectId(id), status };
+
+        const pipeline = [
+            { $match: matchFilter },
+            // Populate user data
+            { $lookup: { from: 'users', localField: 'userId', foreignField: '_id', as: 'userInfo' } },
+            { $unwind: '$userInfo' },
+            // If search query, filter by name/handle
+            ...(search && search.trim() ? [{
+                $match: {
+                    $or: [
+                        { 'userInfo.userName': { $regex: search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+                        { 'userInfo.channelName': { $regex: search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+                        { 'userInfo.channelHandle': { $regex: search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
+                    ]
+                }
+            }] : []),
+            // Count followers (users who have this user in their subscriptions)
+            { $lookup: { from: 'users', localField: 'userInfo._id', foreignField: 'subscriptions', as: '_followers' } },
+            {
+                $addFields: {
+                    followerCount: { $size: '$_followers' },
+                    roleWeight: {
+                        $switch: {
+                            branches: [
+                                { case: { $eq: ['$role', 'OWNER'] }, then: 4 },
+                                { case: { $eq: ['$role', 'ADMIN'] }, then: 3 },
+                                { case: { $eq: ['$role', 'MODERATOR'] }, then: 2 },
+                            ],
+                            default: 1
+                        }
+                    }
+                }
+            },
+            { $sort: { roleWeight: -1, followerCount: -1 } },
+            // Project final shape
+            {
+                $project: {
+                    _id: 1,
+                    communityId: 1,
+                    role: 1,
+                    status: 1,
+                    joinedAt: 1,
+                    followerCount: 1,
+                    userId: {
+                        _id: '$userInfo._id',
+                        userName: '$userInfo.userName',
+                        channelName: '$userInfo.channelName',
+                        channelPicture: '$userInfo.channelPicture',
+                        channelHandle: '$userInfo.channelHandle'
+                    }
+                }
+            }
+        ];
+
+        // Get total before pagination
+        const countPipeline = [...pipeline, { $count: 'total' }];
+        const [countResult] = await CommunityMember.aggregate(countPipeline);
+        const total = countResult?.total || 0;
+
+        // Add pagination
+        pipeline.push({ $skip: skip }, { $limit: parseInt(limit) });
+        const members = await CommunityMember.aggregate(pipeline);
 
         return res.json({ members, total, page: parseInt(page), limit: parseInt(limit) });
     } catch (error) {
@@ -1487,7 +1542,7 @@ export const reimportChannelContent = async (req, res) => {
                 isImported: true,
                 createdAt: new Date()
             }));
-            await ContentToCommunity.insertMany(links, { ordered: false }).catch(() => {});
+            await ContentToCommunity.insertMany(links, { ordered: false }).catch(() => { });
         }
 
         // Create import event
