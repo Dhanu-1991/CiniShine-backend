@@ -4,7 +4,7 @@
  */
 
 import express from 'express';
-import { getChannelPage, getChannelContent, checkNewContent } from '../../controllers/channel-controllers/channelController.js';
+import { getChannelPage, getChannelContent, checkNewContent, getChannelFollowers } from '../../controllers/channel-controllers/channelController.js';
 import { optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
 const router = express.Router();
@@ -18,5 +18,8 @@ router.get('/:channelIdentifier', optionalTokenVerifier, getChannelPage);
 
 // Get channel content by type with sorting
 router.get('/:channelIdentifier/content', optionalTokenVerifier, getChannelContent);
+
+// Get top 20 creator followers sorted by their follower count
+router.get('/:channelIdentifier/followers', getChannelFollowers);
 
 export default router;

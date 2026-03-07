@@ -238,3 +238,72 @@ export const checkNewContent = async (req, res) => {
         res.status(500).json({ error: 'Failed to check new content', channelsWithNew: [] });
     }
 };
+
+/**
+ * Get top 20 creator followers of a channel, sorted by their own follower count.
+ * GET /api/v2/channel/:channelIdentifier/followers
+ */
+export const getChannelFollowers = async (req, res) => {
+    try {
+        const { channelIdentifier } = req.params;
+
+        // Resolve channel
+        let user = await User.findOne({ channelHandle: channelIdentifier.toLowerCase() });
+        if (!user) {
+            user = await User.findOne({
+                channelName: { $regex: new RegExp(`^${channelIdentifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+            });
+        }
+        if (!user) return res.status(404).json({ error: 'Channel not found' });
+
+        // Find users (creators only) who have this channel in their subscriptions
+        const followers = await User.aggregate([
+            {
+                $match: {
+                    subscriptions: user._id,
+                    channelName: { $exists: true, $ne: null, $ne: '' }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    let: { followerId: '$_id' },
+                    pipeline: [
+                        { $match: { $expr: { $in: ['$$followerId', '$subscriptions'] } } },
+                        { $count: 'count' }
+                    ],
+                    as: 'followerStats'
+                }
+            },
+            {
+                $addFields: {
+                    followerCount: {
+                        $ifNull: [{ $arrayElemAt: ['$followerStats.count', 0] }, 0]
+                    }
+                }
+            },
+            { $sort: { followerCount: -1 } },
+            { $limit: 20 },
+            {
+                $project: {
+                    _id: 1,
+                    channelName: 1,
+                    channelHandle: 1,
+                    channelPicture: 1,
+                    followerCount: 1
+                }
+            }
+        ]);
+
+        // Resolve CloudFront URLs for channel pictures
+        const followersWithUrls = followers.map(f => ({
+            ...f,
+            channelPicture: f.channelPicture ? getCfUrl(f.channelPicture) : null
+        }));
+
+        res.json({ followers: followersWithUrls });
+    } catch (error) {
+        console.error('❌ Error fetching channel followers:', error);
+        res.status(500).json({ error: 'Failed to fetch followers' });
+    }
+};
