@@ -323,7 +323,9 @@ export const getProfileSettings = async (req, res) => {
         const counts = { video: 0, short: 0, audio: 0, post: 0 };
         contentCounts.forEach(c => { counts[c._id] = c.count; });
 
-        const subscriberCount = await User.countDocuments({ subscriptions: user._id });
+        const subscriberCount = (user.subscriberCountOverride !== null && user.subscriberCountOverride !== undefined)
+            ? user.subscriberCountOverride
+            : await User.countDocuments({ subscriptions: user._id });
 
         // For subscriptions avoid expensive S3 head/URL checks — return stored picture key/url as-is.
         const subscriptions = (user.subscriptions || []).slice(0, 20).map((sub) => ({

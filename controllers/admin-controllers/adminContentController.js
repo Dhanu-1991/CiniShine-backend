@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import ContentArchive from '../../models/contentArchive.model.js';
+import ContentReport from '../../models/contentReport.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
 import ContentView from '../../models/contentView.model.js';
@@ -211,6 +212,19 @@ export const restoreContent = async (req, res) => {
         archive.restored_by_admin = req.admin._id;
         archive.restored_at = new Date();
         await archive.save();
+
+        // Auto-resolve any pending/takenDown reports for this content
+        await ContentReport.updateMany(
+            { contentId: content._id, status: { $in: ['pending', 'resolved'] }, takenDown: true },
+            {
+                $set: {
+                    status: 'resolved',
+                    takenDown: false,
+                    reviewedBy: req.admin._id,
+                    reviewedAt: new Date()
+                }
+            }
+        );
 
         await AdminAuditLog.create({
             admin_id: req.admin._id,
@@ -819,7 +833,7 @@ export const requestBanChannel = async (req, res) => {
 export const updateContentStats = async (req, res) => {
     try {
         const { id } = req.params;
-        const { views, totalWatchTime } = req.body;
+        const { views, totalWatchTime, likeCount } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid content ID' });
@@ -846,6 +860,14 @@ export const updateContentStats = async (req, res) => {
             }
             updates.totalWatchTime = parsed;
             content.totalWatchTime = parsed;
+        }
+        if (likeCount !== undefined) {
+            const parsed = parseInt(likeCount, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Like count must be a non-negative integer' });
+            }
+            updates.likeCount = parsed;
+            content.likeCount = parsed;
         }
 
         if (Object.keys(updates).length === 0) {

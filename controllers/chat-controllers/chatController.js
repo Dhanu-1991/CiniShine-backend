@@ -111,9 +111,10 @@ export const sendMessage = async (req, res) => {
             conversation.unreadCount.set(recipientId, currentUnread + 1);
             conversation.updatedAt = new Date();
 
-            // If previously archived and sender is messaging again, un-archive
+            // If previously archived and sender is messaging again, un-archive and treat as fresh
             if (conversation.archived && conversation.initiatorId.toString() === senderId) {
                 conversation.archived = false;
+                conversation.accepted = isSubscriber;
             }
 
             await conversation.save();
@@ -327,7 +328,14 @@ export const getConversationMessages = async (req, res) => {
         }
 
         if (!conversation) {
-            return res.json({ items: [], page, limit, total: 0, hasMore: false });
+            // Still return otherUser info so the frontend can start a new DM
+            const otherUserInfo = await User.findById(otherUserId)
+                .select('userName channelName channelHandle channelPicture')
+                .lean();
+            return res.json({
+                items: [], page, limit, total: 0, hasMore: false,
+                otherUser: otherUserInfo ? { _id: otherUserInfo._id, ...otherUserInfo } : null,
+            });
         }
 
         // Build message filter
@@ -391,9 +399,15 @@ export const getConversationMessages = async (req, res) => {
                 return m;
             });
 
+        // Fetch other user's profile info for the chat header
+        const otherUserDoc = await User.findById(otherUserId)
+            .select('userName channelName channelHandle channelPicture')
+            .lean();
+
         return res.json({
             items: filtered.reverse(), // Return in chronological order
             conversationId: conversation._id,
+            otherUser: otherUserDoc ? { _id: otherUserDoc._id, ...otherUserDoc } : { _id: otherUserId },
             page,
             limit,
             total,
