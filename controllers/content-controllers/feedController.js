@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
+import WatchHistory from '../../models/watchHistory.model.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { recommendationEngine } from '../../algorithms/recommendationAlgorithm.js';
 import { findSimilarVideos } from '../../algorithms/videoSimilarity.js';
@@ -87,7 +88,7 @@ export const getMixedFeed = async (req, res) => {
         const videosPagination = videosResult.pagination || {};
         const totalVideos = videosPagination.totalItems || processedVideos.length;
 
-        // ── Section layout (unchanged from before) ────────────────────────
+        // ── Section layout — algorithm-driven order for all pages ──────────
         const videosBatch1 = processedVideos.slice(0, 3);
         const videosBatch2 = processedVideos.slice(3, 6);
         const videosBatch3 = processedVideos.slice(6, 9);
@@ -95,32 +96,22 @@ export const getMixedFeed = async (req, res) => {
 
         const sections = [];
 
-        if (isFirstPage) {
-            if (processedShorts.length > 0) sections.push({ type: 'shorts', data: processedShorts, key: `shorts-${pageNum}` });
-            if (videosBatch1.length > 0) sections.push({ type: 'videos', data: videosBatch1, key: `videos-1-${pageNum}` });
-            if (videosBatch2.length > 0) sections.push({ type: 'videos', data: videosBatch2, key: `videos-2-${pageNum}` });
-            if (processedAudio.length > 0) sections.push({ type: 'audio', data: processedAudio, key: `audio-${pageNum}` });
-            if (videosBatch3.length > 0) sections.push({ type: 'videos', data: videosBatch3, key: `videos-3-${pageNum}` });
-            if (videosBatch4.length > 0) sections.push({ type: 'videos', data: videosBatch4, key: `videos-4-${pageNum}` });
-            if (processedPosts.length > 0) sections.push({ type: 'post-single', data: processedPosts[0], key: `post-${pageNum}` });
-        } else {
-            const available = [];
-            if (processedShorts.length > 0) available.push({ type: 'shorts', data: processedShorts, key: `shorts-${pageNum}` });
-            const allVids = [...videosBatch1, ...videosBatch2, ...videosBatch3, ...videosBatch4];
-            for (let i = 0; i < allVids.length; i += 3) {
-                const chunk = allVids.slice(i, i + 3);
-                if (chunk.length > 0) available.push({ type: 'videos', data: chunk, key: `videos-${Math.floor(i / 3) + 1}-${pageNum}` });
-            }
-            if (processedAudio.length > 0) available.push({ type: 'audio', data: processedAudio, key: `audio-${pageNum}` });
-            if (processedPosts.length > 0) available.push({ type: 'post-single', data: processedPosts[0], key: `post-${pageNum}` });
-
-            // Shuffle sections for YouTube-style session variety
-            for (let i = available.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [available[i], available[j]] = [available[j], available[i]];
-            }
-            sections.push(...available);
+        const available = [];
+        if (processedShorts.length > 0) available.push({ type: 'shorts', data: processedShorts, key: `shorts-${pageNum}` });
+        const allVids = [...videosBatch1, ...videosBatch2, ...videosBatch3, ...videosBatch4];
+        for (let i = 0; i < allVids.length; i += 3) {
+            const chunk = allVids.slice(i, i + 3);
+            if (chunk.length > 0) available.push({ type: 'videos', data: chunk, key: `videos-${Math.floor(i / 3) + 1}-${pageNum}` });
         }
+        if (processedAudio.length > 0) available.push({ type: 'audio', data: processedAudio, key: `audio-${pageNum}` });
+        if (processedPosts.length > 0) available.push({ type: 'post-single', data: processedPosts[0], key: `post-${pageNum}` });
+
+        // Shuffle sections for YouTube-style session variety
+        for (let i = available.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [available[i], available[j]] = [available[j], available[i]];
+        }
+        sections.push(...available);
 
         const hasNextPage = pageNum < maxPages && (videosPagination.hasNextPage || false);
 
@@ -191,5 +182,237 @@ export const getRecommendationsWithShorts = async (req, res) => {
     }
 };
 
+/**
+ * Get personalized category tags for the dashboard chip bar.
+ * Returns an ordered array of category objects:
+ *  - "For You" (always first)
+ *  - "From Following" (if user has subscriptions)
+ *  - "Recently Uploaded"
+ *  - Dynamic tags derived from user's watch history (top tags & categories)
+ *
+ * GET /api/v2/video/feed/categories
+ */
+export const getCategoryTags = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const categories = [];
 
+        // 1. "For You" — always present, default
+        categories.push({ id: 'for-you', label: 'For You', type: 'system' });
 
+        // 2. "From Following" — only if user has subscriptions
+        if (userId) {
+            const user = await User.findById(userId).select('subscriptions').lean();
+            if (user?.subscriptions?.length > 0) {
+                categories.push({ id: 'following', label: 'From Following', type: 'system' });
+            }
+        }
+
+        // 3. "Recently Uploaded"
+        categories.push({ id: 'recent', label: 'Recently Uploaded', type: 'system' });
+
+        // 4. Dynamic tags from watch history
+        if (userId) {
+            const history = await WatchHistory.find({ userId })
+                .sort({ lastWatchedAt: -1 })
+                .limit(200)
+                .select('contentMetadata.tags contentMetadata.category watchPercentage completedWatch liked lastWatchedAt')
+                .lean();
+
+            if (history.length > 0) {
+                const tagScores = {};
+                const categoryScores = {};
+
+                for (const item of history) {
+                    // Weight: higher watch %, completed, liked, and recency boost score
+                    const daysSince = (Date.now() - new Date(item.lastWatchedAt)) / 86400000;
+                    const recencyWeight = Math.exp(-daysSince / 14);
+                    const engagementWeight = (item.completedWatch ? 1.5 : 1) * (item.liked ? 1.3 : 1);
+                    const weight = recencyWeight * engagementWeight;
+
+                    for (const tag of (item.contentMetadata?.tags || [])) {
+                        const normalTag = tag.toLowerCase().trim();
+                        if (normalTag) tagScores[normalTag] = (tagScores[normalTag] || 0) + weight;
+                    }
+
+                    const cat = item.contentMetadata?.category;
+                    if (cat) {
+                        const normalCat = cat.trim();
+                        categoryScores[normalCat] = (categoryScores[normalCat] || 0) + weight;
+                    }
+                }
+
+                // Top categories (up to 3)
+                const topCategories = Object.entries(categoryScores)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3);
+
+                for (const [cat] of topCategories) {
+                    const id = `cat-${cat.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+                    if (!categories.some(c => c.id === id)) {
+                        categories.push({ id, label: cat, type: 'category', value: cat });
+                    }
+                }
+
+                // Top tags (up to 5, excluding ones already covered by category)
+                const catLabels = new Set(topCategories.map(([c]) => c.toLowerCase()));
+                const topTags = Object.entries(tagScores)
+                    .filter(([tag]) => !catLabels.has(tag))
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 5);
+
+                for (const [tag] of topTags) {
+                    const id = `tag-${tag.replace(/[^a-z0-9]+/g, '-')}`;
+                    if (!categories.some(c => c.id === id)) {
+                        categories.push({ id, label: tag.charAt(0).toUpperCase() + tag.slice(1), type: 'tag', value: tag });
+                    }
+                }
+            }
+        }
+
+        // 5. "Trending" — always available at the end
+        categories.push({ id: 'trending', label: 'Trending', type: 'system' });
+
+        res.json({ categories });
+    } catch (error) {
+        console.error('[Feed] getCategoryTags error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+/**
+ * Get filtered feed content for a specific category tag.
+ * Uses the same algorithm infrastructure as getMixedFeed but filters/ranks by category.
+ *
+ * GET /api/v2/video/feed/category/:categoryId
+ * Query params: page, limit, seenIds
+ */
+export const getCategoryFeed = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { categoryId } = req.params;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 12;
+        const seenIds = req.query.seenIds ? req.query.seenIds.split(',').filter(Boolean) : [];
+        const excludeIdSet = seenIds.map(id => {
+            try { return new mongoose.Types.ObjectId(id); } catch (_) { return null; }
+        }).filter(Boolean);
+
+        let query = {
+            status: 'completed',
+            visibility: 'public',
+        };
+        if (excludeIdSet.length > 0) query._id = { $nin: excludeIdSet };
+
+        let sortOverride = null;
+
+        // Apply category-specific filters
+        if (categoryId === 'for-you') {
+            // Use the full recommendation engine — no extra filter
+        } else if (categoryId === 'following') {
+            if (!userId) return res.json({ content: [], pagination: { currentPage: page, hasNextPage: false } });
+            const user = await User.findById(userId).select('subscriptions').lean();
+            const subIds = (user?.subscriptions || []).map(s => s._id || s);
+            if (subIds.length === 0) return res.json({ content: [], pagination: { currentPage: page, hasNextPage: false } });
+            query.userId = { $in: subIds };
+        } else if (categoryId === 'recent') {
+            const threeDaysAgo = new Date(Date.now() - 3 * 86400000);
+            query.createdAt = { $gte: threeDaysAgo };
+            sortOverride = { createdAt: -1 };
+        } else if (categoryId === 'trending') {
+            // Trending: high engagement + recent
+            const weekAgo = new Date(Date.now() - 7 * 86400000);
+            query.createdAt = { $gte: weekAgo };
+            sortOverride = { views: -1 };
+        } else if (categoryId.startsWith('cat-')) {
+            // Category filter
+            const catValue = req.query.value || categoryId.replace('cat-', '').replace(/-/g, ' ');
+            query.category = new RegExp(`^${catValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+        } else if (categoryId.startsWith('tag-')) {
+            // Tag filter
+            const tagValue = req.query.value || categoryId.replace('tag-', '').replace(/-/g, ' ');
+            query.tags = { $in: [new RegExp(`^${tagValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')] };
+        } else {
+            return res.status(400).json({ error: 'Invalid category' });
+        }
+
+        // For 'for-you', use the full recommendation engine
+        if (categoryId === 'for-you') {
+            const result = await watchHistoryEngine.getRecommendations(userId, 'video', {
+                page, limit, excludeIds: seenIds
+            });
+            return res.json({
+                content: result.content || [],
+                pagination: result.pagination || { currentPage: page, hasNextPage: false }
+            });
+        }
+
+        // For other categories, fetch and optionally score
+        let candidates;
+        if (sortOverride) {
+            candidates = await Content.find(query)
+                .sort(sortOverride)
+                .skip((page - 1) * limit)
+                .limit(limit + 1) // +1 to check hasNextPage
+                .populate('userId', 'userName channelName channelPicture')
+                .lean();
+        } else {
+            candidates = await Content.find(query)
+                .populate('userId', 'userName channelName channelPicture')
+                .lean();
+        }
+
+        let results;
+        const hasNextPage = sortOverride ? candidates.length > limit : false;
+        if (sortOverride) {
+            results = candidates.slice(0, limit);
+        } else {
+            // Score with recommendation engine for non-sorted categories
+            const userProfile = userId ? await watchHistoryEngine.buildUserProfile(userId) : null;
+            const watchedHistory = userId
+                ? await WatchHistory.find({ userId }).select('contentId').lean()
+                : [];
+            const watchedIds = new Set(watchedHistory.map(h => h.contentId.toString()));
+
+            const scored = candidates.map(c => ({
+                ...c,
+                recommendationScore: userProfile
+                    ? watchHistoryEngine.scoreContent(c, userProfile, watchedIds)
+                    : watchHistoryEngine.fallbackScore(c)
+            }));
+            scored.sort((a, b) => b.recommendationScore - a.recommendationScore);
+            const startIdx = (page - 1) * limit;
+            results = scored.slice(startIdx, startIdx + limit);
+        }
+
+        // Normalize output format
+        const content = results.map(c => ({
+            _id: c._id,
+            contentType: c.contentType || 'video',
+            title: c.title,
+            description: c.description,
+            duration: c.duration,
+            thumbnailUrl: getCfUrl(c.thumbnailKey),
+            views: c.views,
+            likeCount: c.likeCount || 0,
+            createdAt: c.createdAt,
+            channelName: c.channelName || c.userId?.channelName || c.userId?.userName || 'Unknown',
+            channelPicture: c.userId?.channelPicture || null,
+            userId: c.userId?._id || c.userId,
+            status: c.status,
+            tags: c.tags,
+            category: c.category,
+        }));
+
+        res.json({
+            content,
+            pagination: {
+                currentPage: page,
+                hasNextPage: sortOverride ? hasNextPage : ((page - 1) * limit + results.length < candidates.length),
+            }
+        });
+    } catch (error) {
+        console.error('[Feed] getCategoryFeed error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};

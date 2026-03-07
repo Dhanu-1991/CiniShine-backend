@@ -2,34 +2,38 @@
 /**
  * YouTube-grade Recommendation Engine
  *
- * Signal weights (tuned to match YouTube's published paper priorities):
+ * Signal weights (tuned for balanced content discovery):
  *
  *  ┌──────────────────────────────┬─────────┐
  *  │ Signal                       │ Weight  │
  *  ├──────────────────────────────┼─────────┤
- *  │ Average Watch-Time Ratio     │  0.28   │  ← strongest signal (YouTube confirmed)
- *  │ Engagement Rate (likes/views)│  0.18   │
- *  │ Follower / Creator Score     │  0.15   │  new: big channels AND new creators
- *  │ Personalised user affinity   │  0.15   │
- *  │ Content-based similarity     │  0.10   │
+ *  │ Average Watch-Time Ratio     │  0.22   │  ← strongest quality signal
+ *  │ Engagement Rate (likes/views)│  0.15   │
+ *  │ Follower / Creator Score     │  0.12   │  big channels AND new creators
+ *  │ Personalised user affinity   │  0.18   │  ← boosted: subscriptions + history
+ *  │ View popularity (log-norm)   │  0.10   │  content with max views
+ *  │ Content-based similarity     │  0.08   │
  *  │ Recency / freshness          │  0.08   │
- *  │ Velocity (view growth rate)  │  0.06   │
+ *  │ Velocity (view growth rate)  │  0.05   │
+ *  │ New creator space            │  0.02   │  reserved for emerging creators
  *  └──────────────────────────────┴─────────┘
  *
  * Extra boosts (additive, capped):
- *  - New creator boost: channels <30 days old
+ *  - New creator boost: channels <30 days old, <100 followers
  *  - Fresh content push: videos uploaded in last 48h from followed channels
  *  - Diversity penalty: slightly disfavour same-creator repetition in a session
  */
 
 const SIGNAL_WEIGHTS = {
-    avgWatchTimeRatio: 0.28,
-    engagementRate: 0.18,
-    creatorScore: 0.15,
-    userAffinity: 0.15,
-    contentSimilarity: 0.10,
+    avgWatchTimeRatio: 0.22,
+    engagementRate: 0.15,
+    creatorScore: 0.12,
+    userAffinity: 0.18,
+    viewPopularity: 0.10,
+    contentSimilarity: 0.08,
     recency: 0.08,
-    velocity: 0.06,
+    velocity: 0.05,
+    newCreatorSpace: 0.02,
 };
 
 export class RecommendationEngine {
@@ -115,19 +119,15 @@ export class RecommendationEngine {
         score += this._engagementScore(item) * w.engagementRate;
         score += this._creatorScore(item) * w.creatorScore;
         score += this._userAffinityScore(user, item) * w.userAffinity;
+        score += this._viewPopularityScore(item, maxViews) * w.viewPopularity;
         score += this._contentSimilarity(user, item) * w.contentSimilarity;
         score += this._recencyScore(item.createdAt) * w.recency;
         score += this._velocityScore(item) * w.velocity;
+        score += this._newCreatorScore(item) * w.newCreatorSpace;
 
         // ── Additive boosts ──
 
-        // New creator boost (<30 days, <100 followers)
-        const isNewCreator = item.channelCreatedAt &&
-            (Date.now() - new Date(item.channelCreatedAt)) / 86400000 < 30;
-        const hasSmallChannel = (item.subscriberCount || item.followerCount || 0) < 100;
-        if (isNewCreator && hasSmallChannel) score += 0.12;
-
-        // Fresh content from followed channel
+        // Fresh content from followed channel (48h window)
         const hoursOld = (Date.now() - new Date(item.createdAt)) / 3600000;
         const isFollowed = (user?.subscriptions || []).some(s => {
             const sid = s._id?.toString() || s?.toString();
@@ -221,6 +221,25 @@ export class RecommendationEngine {
         const recent = item.recentViews || 0;
         if (total === 0) return 0;
         return Math.min(1, (recent / total) * 10);
+    }
+
+    /** View popularity: log-normalized view count against max */
+    _viewPopularityScore(item, maxViews) {
+        const views = item.views || 0;
+        if (views === 0) return 0;
+        return Math.min(1, Math.log10(views + 1) / Math.log10(maxViews + 1));
+    }
+
+    /** New creator score: channels <30 days, <100 followers get full score */
+    _newCreatorScore(item) {
+        const subs = item.subscriberCount || item.followerCount || 0;
+        const channelCreatedAt = item.channelCreatedAt;
+        if (!channelCreatedAt) return 0.3; // unknown age = partial score
+        const channelAgeDays = (Date.now() - new Date(channelCreatedAt)) / 86400000;
+        if (channelAgeDays < 30 && subs < 100) return 1.0;
+        if (channelAgeDays < 60 && subs < 500) return 0.6;
+        if (channelAgeDays < 90) return 0.3;
+        return 0.1;
     }
 
     // ── Legacy aliases ────────────────────────────────────────────────────
