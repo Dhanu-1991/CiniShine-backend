@@ -156,13 +156,72 @@ export const getRecommendationsWithShorts = async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const shortsLimit = parseInt(req.query.shortsLimit) || 4;
         const seenIds = req.query.seenIds ? req.query.seenIds.split(',').filter(Boolean) : [];
+        const recCategory = req.query.recCategory || 'all';
+        const recValue = req.query.recValue || '';
 
         // Find current video/content
-        const current = await Content.findById(videoId).lean();
+        const current = await Content.findById(videoId)
+            .populate('userId', 'channelName channelHandle userName')
+            .lean();
         if (!current) return res.status(404).json({ error: 'Content not found' });
 
-        // Similar videos (content-based)
-        const similar = await findSimilarVideos(current, page, limit);
+        // Similar videos (content-based) for default tab, server-side filtered results for chip tabs
+        let videos = [];
+        let pagination = { currentPage: page, hasNextPage: false };
+
+        if (recCategory === 'all') {
+            const similar = await findSimilarVideos(current, page, limit);
+            videos = similar.videos || [];
+            pagination = similar.pagination || { currentPage: page, hasNextPage: false };
+        } else {
+            const filterQuery = {
+                _id: { $ne: current._id },
+                status: 'completed',
+                visibility: 'public',
+                contentType: 'video',
+            };
+
+            if (recCategory === 'channel') {
+                filterQuery.userId = current.userId?._id || current.userId;
+            } else if (recCategory === 'category' && recValue) {
+                const safe = recValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                filterQuery.category = new RegExp(`^${safe}$`, 'i');
+            } else if (recCategory === 'tag' && recValue) {
+                const safe = recValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                filterQuery.tags = { $in: [new RegExp(`^${safe}$`, 'i')] };
+            }
+
+            const docs = await Content.find(filterQuery)
+                .sort({ createdAt: -1, views: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit + 1)
+                .populate('userId', 'userName channelName channelHandle channelPicture')
+                .lean();
+
+            const hasNextPage = docs.length > limit;
+            const sliced = docs.slice(0, limit);
+
+            videos = sliced.map((video) => ({
+                _id: video._id,
+                title: video.title,
+                description: video.description,
+                duration: video.duration,
+                thumbnailUrl: getCfUrl(video.thumbnailKey),
+                views: video.views,
+                createdAt: video.createdAt,
+                channelName: video.userId?.channelName || video.channelName || video.userId?.userName || 'Unknown Channel',
+                channelPicture: video.userId?.channelPicture || null,
+                channelHandle: video.userId?.channelHandle || null,
+                tags: video.tags,
+                category: video.category,
+            }));
+
+            pagination = {
+                currentPage: page,
+                hasNextPage,
+                totalPages: hasNextPage ? page + 1 : page,
+            };
+        }
 
         // Short recommendations from watch-history engine (personalised / fallback)
         const shorts = await watchHistoryEngine.getRecommendations(userId, 'short', {
@@ -172,9 +231,11 @@ export const getRecommendationsWithShorts = async (req, res) => {
         });
 
         res.json({
-            videos: similar.videos || [],
+            videos,
             shorts: shorts.content || [],
-            pagination: similar.pagination || { currentPage: page, hasNextPage: false }
+            pagination,
+            currentVideoChannelName: current.userId?.channelName || current.channelName || current.userId?.userName || 'Unknown Channel',
+            currentVideoChannelHandle: current.userId?.channelHandle || null,
         });
     } catch (error) {
         console.error('[Feed] getRecommendationsWithShorts error:', error);
@@ -406,6 +467,7 @@ export const getCategoryFeed = async (req, res) => {
                 description: c.description,
                 duration: c.duration,
                 thumbnailUrl: getCfUrl(c.thumbnailKey),
+                imageUrl: c.imageKey ? getCfUrl(c.imageKey) : null,
                 hlsMasterUrl,
                 videoUrl,
                 audioUrl,

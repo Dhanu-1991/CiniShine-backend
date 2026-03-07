@@ -94,7 +94,7 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
             views: video.views,
             createdAt: video.createdAt,
             user: video.userId,
-            channelName: video.channelName || video.userId?.channelName || video.userId?.userName || 'Unknown Channel',
+            channelName: video.userId?.channelName || video.channelName || video.userId?.userName || 'Unknown Channel',
             channelPicture: video.userId?.channelPicture || null,
             channelHandle: video.userId?.channelHandle || null,
             tags: video.tags,
