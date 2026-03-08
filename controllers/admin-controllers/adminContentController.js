@@ -199,15 +199,15 @@ export const restoreContent = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Archive window has expired. Content may have been permanently deleted.' });
         }
 
-        // Restore the content
-        const content = await Content.findById(id);
+        // Restore the content — use atomic update to guarantee fields are set
+        const content = await Content.findByIdAndUpdate(
+            id,
+            { $set: { visibility: 'public', status: 'completed' } },
+            { new: true }
+        );
         if (!content) {
             return res.status(404).json({ success: false, message: 'Content record not found in database' });
         }
-
-        content.visibility = 'public';
-        content.status = 'completed';
-        await content.save();
 
         archive.restored_by_admin = req.admin._id;
         archive.restored_at = new Date();

@@ -145,8 +145,9 @@ export const getCommunityFeed = async (req, res) => {
             const community = communityMap[link.communityId.toString()];
             if (!community) continue;
 
-            // Skip private channel-only content
+            // Skip removed or private content
             if (content.visibility === 'private') continue;
+            if (content.status === 'removed') continue;
 
             // Deduplicate: if this content already appeared from another community, skip
             if (!communityId && seenContentIds.has(link.contentId.toString())) continue;

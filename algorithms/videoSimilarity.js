@@ -34,6 +34,7 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
         const allVideos = await Content.find({
             contentType: 'video',
             status: 'completed',
+            visibility: 'public',
             _id: { $ne: currentVideo._id }
         }).populate('userId', 'userName channelName channelHandle channelPicture roles createdAt');
 
