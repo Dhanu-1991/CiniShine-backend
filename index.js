@@ -26,6 +26,7 @@ import communityRouter from "./routes/communityRoutes/communityRouter.js";
 import { issueCloudFrontCookies } from "./config/cloudfront.js";
 import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
 import adminRouter from "./routes/adminRoutes/adminRouter.js";
+import analyticsRouter from "./routes/analyticsRoutes/analyticsRouter.js";
 
 const app = express();
 
@@ -86,6 +87,9 @@ app.use("/api/v2/communities", communityRouter); // Communities
 
 // Admin panel
 app.use("/api/admin", adminRouter);
+
+// Analytics tracking (page usage, content watchtime, sessions)
+app.use("/api/v2/analytics", analyticsRouter);
 
 // CloudFront signed cookies endpoint (protected — user must be logged in)
 app.get("/api/v2/auth/cloudfront-cookies", universalTokenVerifier, issueCloudFrontCookies);

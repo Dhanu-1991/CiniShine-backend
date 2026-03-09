@@ -18,6 +18,10 @@ import {
 } from '../../controllers/admin-controllers/adminDashboardController.js';
 import { getAnalytics } from '../../controllers/admin-controllers/adminAnalyticsController.js';
 import {
+    getPlatformAnalytics, getContentAnalytics, getUserAnalytics,
+    searchUsersForAnalytics, runAggregation
+} from '../../controllers/admin-controllers/adminAdvancedAnalyticsController.js';
+import {
     adminSendMessage, adminGetMessages, adminGetConversations
 } from '../../controllers/admin-controllers/adminChatController.js';
 import {
@@ -42,6 +46,12 @@ adminRouter.get('/dashboard', getDashboard);
 
 // Platform analytics
 adminRouter.get('/analytics', getAnalytics);
+
+// Advanced analytics
+adminRouter.get('/analytics/platform', getPlatformAnalytics);
+adminRouter.get('/analytics/content', getContentAnalytics);
+adminRouter.get('/analytics/user-search', searchUsersForAnalytics);
+adminRouter.get('/analytics/user/:userId', getUserAnalytics);
 
 // Reports & Feedbacks
 adminRouter.get('/reports', listReports);
@@ -94,5 +104,6 @@ adminRouter.post('/creator/:id/unban', requireSuperAdmin, unbanChannel);
 adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);
 adminRouter.patch('/creator/:id/stats', requireSuperAdmin, updateCreatorStats);
 adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
+adminRouter.post('/analytics/aggregate', requireSuperAdmin, runAggregation);
 
 export default adminRouter;
