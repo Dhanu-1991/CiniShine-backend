@@ -16,6 +16,7 @@ import {
     getDashboard, listReports, resolveReport, listFeedbacks, listEnquiries,
     listAuditLogs, listNotifications, markNotificationRead
 } from '../../controllers/admin-controllers/adminDashboardController.js';
+import { getAnalytics } from '../../controllers/admin-controllers/adminAnalyticsController.js';
 import {
     adminSendMessage, adminGetMessages, adminGetConversations
 } from '../../controllers/admin-controllers/adminChatController.js';
@@ -38,6 +39,9 @@ adminRouter.use(adminTokenVerifier);
 
 // Dashboard
 adminRouter.get('/dashboard', getDashboard);
+
+// Platform analytics
+adminRouter.get('/analytics', getAnalytics);
 
 // Reports & Feedbacks
 adminRouter.get('/reports', listReports);
