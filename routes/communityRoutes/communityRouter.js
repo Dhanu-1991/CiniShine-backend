@@ -24,6 +24,7 @@ import {
     updateRules,
     getRules,
     removeMember,
+    addMember,
     updateCommunitySettings,
     reimportChannelContent
 } from '../../controllers/community-controllers/communityController.js';
@@ -80,6 +81,7 @@ router.post('/:id/reject/:memberId', universalTokenVerifier, rejectJoinRequest);
 router.post('/:id/ban/:targetUserId', universalTokenVerifier, banMember);
 router.post('/:id/unban/:targetUserId', universalTokenVerifier, unbanMember);
 router.post('/:id/remove/:targetUserId', universalTokenVerifier, removeMember);
+router.post('/:id/add-member', universalTokenVerifier, addMember);
 
 // ── Role management ──
 router.post('/:id/role/:targetUserId', universalTokenVerifier, changeRole);

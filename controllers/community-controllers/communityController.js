@@ -1410,6 +1410,76 @@ export const removeMember = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/add-member — Owner/Admin directly adds a user
+// ═══════════════════════════════════════════════════
+export const addMember = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { targetUserId } = req.body;
+
+        if (!targetUserId) {
+            return res.status(400).json({ error: 'targetUserId is required' });
+        }
+
+        // Check caller is admin/owner
+        const callerMember = await CommunityMember.findOne({
+            communityId: id,
+            userId,
+            status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN'] }
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Only owners and admins can add members' });
+        }
+
+        // Check target user exists
+        const targetUser = await User.findById(targetUserId).lean();
+        if (!targetUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Check if already a member
+        const existing = await CommunityMember.findOne({ communityId: id, userId: targetUserId }).lean();
+        if (existing) {
+            if (existing.status === 'PENDING') {
+                // Auto-approve pending request
+                await CommunityMember.findByIdAndUpdate(existing._id, {
+                    status: 'ACTIVE',
+                    role: 'MEMBER',
+                    joinedAt: new Date()
+                });
+                await Community.findByIdAndUpdate(id, { $inc: { memberCount: 1 } });
+                await logAction(userId, id, 'member_added', { addedUserId: targetUserId });
+                return res.json({ message: 'Member added (pending request approved)' });
+            }
+            return res.json({ message: 'User is already a member' });
+        }
+
+        await CommunityMember.create({
+            communityId: id,
+            userId: targetUserId,
+            role: 'MEMBER',
+            status: 'ACTIVE',
+            joinSource: 'invite',
+            joinedAt: new Date()
+        });
+
+        await Community.findByIdAndUpdate(id, { $inc: { memberCount: 1 } });
+        await logAction(userId, id, 'member_added', { addedUserId: targetUserId });
+
+        return res.status(201).json({ message: 'Member added successfully' });
+    } catch (error) {
+        console.error('addMember error:', error);
+        if (error.code === 11000) {
+            return res.json({ message: 'User is already a member' });
+        }
+        return res.status(500).json({ error: 'Failed to add member' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
 // PUT /api/v2/communities/:id/settings — Update detailed community settings
 // ═══════════════════════════════════════════════════
 // OWNER can update ALL settings. ADMIN can update limited settings.
