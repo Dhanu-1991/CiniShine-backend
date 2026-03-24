@@ -13,7 +13,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+const MONGODB_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
 
 async function generateUniqueHandle(baseHandle) {
     let handle = baseHandle.replace(/[^a-z0-9_]/gi, '').toLowerCase();
