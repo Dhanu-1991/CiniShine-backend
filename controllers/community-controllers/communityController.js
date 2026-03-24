@@ -465,6 +465,14 @@ export const joinCommunity = async (req, res) => {
         const community = await Community.findById(id).lean();
         if (!community) return res.status(404).json({ error: 'Community not found' });
 
+        // Check if user has a profile (channel)
+        const user = await User.findById(userId).select('channelName channelHandle').lean();
+        if (!user || !user.channelName || !user.channelHandle) {
+            return res.status(400).json({
+                error: 'You must create a profile before joining a community. Visit the profile page to get started.'
+            });
+        }
+
         // Check if already a member
         const existing = await CommunityMember.findOne({ communityId: id, userId }).lean();
         if (existing) {
