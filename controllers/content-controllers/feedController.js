@@ -15,6 +15,81 @@ import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
  */
 const generateCfUrl = (key) => getCfUrl(key);
 
+const normalizeFeedItem = (c) => {
+    const contentType = c.contentType || 'video';
+    let videoUrl = null;
+    let hlsMasterUrl = null;
+    let audioUrl = null;
+
+    if (contentType === 'video' || contentType === 'short') {
+        hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
+        const videoKey = c.hlsMasterKey || c.processedKey || c.originalKey;
+        if (videoKey) videoUrl = getCfUrl(videoKey);
+    } else if (contentType === 'audio') {
+        const audioKey = c.processedKey || c.originalKey;
+        if (audioKey) audioUrl = getCfUrl(audioKey);
+    }
+
+    return {
+        _id: c._id,
+        contentType,
+        title: c.title,
+        description: c.description,
+        duration: c.duration,
+        thumbnailUrl: getCfUrl(c.thumbnailKey),
+        imageUrl: c.imageKey ? getCfUrl(c.imageKey) : null,
+        hlsMasterUrl,
+        videoUrl,
+        audioUrl,
+        views: c.views,
+        likeCount: c.likeCount || c.likes?.length || 0,
+        createdAt: c.createdAt,
+        channelName: c.channelName || c.userId?.channelName || c.userId?.userName || 'Unknown',
+        channelPicture: c.userId?.channelPicture || null,
+        channelHandle: c.userId?.channelHandle || null,
+        userId: c.userId?._id || c.userId,
+        status: c.status,
+        tags: c.tags,
+        category: c.category,
+        artist: c.artist,
+        album: c.album,
+        audioCategory: c.audioCategory,
+        postContent: c.postContent,
+    };
+};
+
+const buildTrendingQuery = async (categoryId, userId, excludeIdSet) => {
+    const query = {
+        status: 'completed',
+        visibility: 'public',
+        createdAt: { $gte: new Date(Date.now() - 21 * 86400000) },
+    };
+
+    if (excludeIdSet.length > 0) {
+        query._id = { $nin: excludeIdSet };
+    }
+
+    if (categoryId === 'shorts') {
+        query.contentType = 'short';
+    } else if (categoryId === 'audio') {
+        query.contentType = 'audio';
+    } else if (categoryId === 'posts') {
+        query.contentType = 'post';
+    } else if (categoryId === 'following') {
+        if (!userId) {
+            return null;
+        }
+        const user = await User.findById(userId).select('subscriptions').lean();
+        const subIds = (user?.subscriptions || []).map((s) => s._id || s);
+        if (subIds.length === 0) {
+            return null;
+        }
+        query.userId = { $in: subIds };
+    }
+
+    return query;
+};
+
 
 /**
  * Get mixed feed content (videos, shorts, audio, posts)
@@ -370,6 +445,36 @@ export const getCategoryFeed = async (req, res) => {
         // Apply category-specific filters
         if (categoryId === 'for-you') {
             // Use the full recommendation engine — no extra filter
+        } else if (categoryId === 'shorts') {
+            const result = await watchHistoryEngine.getRecommendations(userId, 'short', {
+                page,
+                limit,
+                excludeIds: seenIds,
+            });
+            return res.json({
+                content: result.content || [],
+                pagination: result.pagination || { currentPage: page, hasNextPage: false },
+            });
+        } else if (categoryId === 'audio') {
+            const result = await watchHistoryEngine.getRecommendations(userId, 'audio', {
+                page,
+                limit,
+                excludeIds: seenIds,
+            });
+            return res.json({
+                content: result.content || [],
+                pagination: result.pagination || { currentPage: page, hasNextPage: false },
+            });
+        } else if (categoryId === 'posts') {
+            const result = await watchHistoryEngine.getRecommendations(userId, 'post', {
+                page,
+                limit,
+                excludeIds: seenIds,
+            });
+            return res.json({
+                content: result.content || [],
+                pagination: result.pagination || { currentPage: page, hasNextPage: false },
+            });
         } else if (categoryId === 'following') {
             if (!userId) return res.json({ content: [], pagination: { currentPage: page, hasNextPage: false } });
             const user = await User.findById(userId).select('subscriptions').lean();
@@ -447,45 +552,7 @@ export const getCategoryFeed = async (req, res) => {
         }
 
         // Normalize output format (include all fields needed by frontend cards)
-        const content = results.map(c => {
-            const contentType = c.contentType || 'video';
-            let videoUrl = null;
-            let hlsMasterUrl = null;
-            let audioUrl = null;
-            if (contentType === 'video' || contentType === 'short') {
-                hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
-                const videoKey = c.hlsMasterKey || c.processedKey || c.originalKey;
-                if (videoKey) videoUrl = getCfUrl(videoKey);
-            } else if (contentType === 'audio') {
-                const audioKey = c.processedKey || c.originalKey;
-                if (audioKey) audioUrl = getCfUrl(audioKey);
-            }
-            return {
-                _id: c._id,
-                contentType,
-                title: c.title,
-                description: c.description,
-                duration: c.duration,
-                thumbnailUrl: getCfUrl(c.thumbnailKey),
-                imageUrl: c.imageKey ? getCfUrl(c.imageKey) : null,
-                hlsMasterUrl,
-                videoUrl,
-                audioUrl,
-                views: c.views,
-                likeCount: c.likeCount || 0,
-                createdAt: c.createdAt,
-                channelName: c.channelName || c.userId?.channelName || c.userId?.userName || 'Unknown',
-                channelPicture: c.userId?.channelPicture || null,
-                channelHandle: c.userId?.channelHandle || null,
-                userId: c.userId?._id || c.userId,
-                status: c.status,
-                tags: c.tags,
-                category: c.category,
-                artist: c.artist,
-                album: c.album,
-                postContent: c.postContent,
-            };
-        });
+        const content = results.map((c) => normalizeFeedItem(c));
 
         res.json({
             content,
@@ -497,5 +564,50 @@ export const getCategoryFeed = async (req, res) => {
     } catch (error) {
         console.error('[Feed] getCategoryFeed error:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+/**
+ * Get category-specific trending content.
+ * - for-you: mixed trending across all public content
+ * - following: trending only from followed creators
+ * - shorts/audio/posts: trending within that content type
+ */
+export const getCategoryTrending = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { categoryId } = req.params;
+        const limit = Math.min(parseInt(req.query.limit) || 5, 20);
+        const seenIds = req.query.seenIds ? req.query.seenIds.split(',').filter(Boolean) : [];
+
+        const excludeIdSet = seenIds.map((id) => {
+            try {
+                return new mongoose.Types.ObjectId(id);
+            } catch (_) {
+                return null;
+            }
+        }).filter(Boolean);
+
+        const query = await buildTrendingQuery(categoryId, userId, excludeIdSet);
+        if (!query) {
+            return res.json({ content: [] });
+        }
+
+        const candidates = await Content.find(query)
+            .limit(350)
+            .populate('userId', 'userName channelName channelHandle channelPicture')
+            .lean();
+
+        if (candidates.length === 0) {
+            return res.json({ content: [] });
+        }
+
+        const trending = recommendationEngine.getTrendingVideos(candidates, limit);
+        const content = trending.map((item) => normalizeFeedItem(item));
+
+        return res.json({ content });
+    } catch (error) {
+        console.error('[Feed] getCategoryTrending error:', error);
+        return res.status(500).json({ error: 'Internal server error' });
     }
 };

@@ -23,7 +23,7 @@ import {
     uploadVideoThumbnail,
     getSpecificContent,
 } from "../../controllers/content-controllers/videoController.js";
-import { getMixedFeed, getRecommendationsWithShorts, getCategoryTags, getCategoryFeed } from "../../controllers/content-controllers/feedController.js";
+import { getMixedFeed, getRecommendationsWithShorts, getCategoryTags, getCategoryFeed, getCategoryTrending } from "../../controllers/content-controllers/feedController.js";
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/content-controllers/interactions.js";
 import { searchVideos, getSearchSuggestions, clearSearchHistory, unifiedSearch } from "../../controllers/content-controllers/search.js";
 import { multipartInit, multipartComplete, multipartAbort } from "../../controllers/content-controllers/multipartUploadController.js";
@@ -68,6 +68,7 @@ router.get("/feed/mixed", optionalTokenVerifier, getMixedFeed);
 // Category tags and filtered feed
 router.get("/feed/categories", optionalTokenVerifier, getCategoryTags);
 router.get("/feed/category/:categoryId", optionalTokenVerifier, getCategoryFeed);
+router.get("/feed/trending/:categoryId", optionalTokenVerifier, getCategoryTrending);
 
 // Recommendations
 router.get("/:videoId/recommendations", optionalTokenVerifier, getRecommendations);
