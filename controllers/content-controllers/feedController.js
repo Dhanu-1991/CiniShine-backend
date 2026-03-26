@@ -58,39 +58,6 @@ const normalizeFeedItem = (c) => {
     };
 };
 
-const buildTrendingQuery = async (categoryId, userId, excludeIdSet) => {
-    const query = {
-        status: 'completed',
-        visibility: 'public',
-        createdAt: { $gte: new Date(Date.now() - 21 * 86400000) },
-    };
-
-    if (excludeIdSet.length > 0) {
-        query._id = { $nin: excludeIdSet };
-    }
-
-    if (categoryId === 'shorts') {
-        query.contentType = 'short';
-    } else if (categoryId === 'audio') {
-        query.contentType = 'audio';
-    } else if (categoryId === 'posts') {
-        query.contentType = { $in: ['post', 'post-single'] };
-    } else if (categoryId === 'following') {
-        if (!userId) {
-            return null;
-        }
-        const user = await User.findById(userId).select('subscriptions').lean();
-        const subIds = (user?.subscriptions || []).map((s) => s._id || s);
-        if (subIds.length === 0) {
-            return null;
-        }
-        query.userId = { $in: subIds };
-    }
-
-    return query;
-};
-
-
 /**
  * Get mixed feed content (videos, shorts, audio, posts)
  * Returns content according to dashboard layout requirements:
@@ -575,10 +542,14 @@ export const getCategoryFeed = async (req, res) => {
  */
 export const getCategoryTrending = async (req, res) => {
     try {
-        const userId = req.user?.id;
         const { categoryId } = req.params;
         const limit = Math.min(parseInt(req.query.limit) || 5, 20);
         const seenIds = req.query.seenIds ? req.query.seenIds.split(',').filter(Boolean) : [];
+
+        // Dashboard now renders trending only in "for-you".
+        if (categoryId !== 'for-you') {
+            return res.json({ content: [] });
+        }
 
         const excludeIdSet = seenIds.map((id) => {
             try {
@@ -588,9 +559,14 @@ export const getCategoryTrending = async (req, res) => {
             }
         }).filter(Boolean);
 
-        const query = await buildTrendingQuery(categoryId, userId, excludeIdSet);
-        if (!query) {
-            return res.json({ content: [] });
+        const query = {
+            status: 'completed',
+            visibility: 'public',
+            createdAt: { $gte: new Date(Date.now() - 21 * 86400000) },
+        };
+
+        if (excludeIdSet.length > 0) {
+            query._id = { $nin: excludeIdSet };
         }
 
         const trendingProjection =
