@@ -74,7 +74,7 @@ const buildTrendingQuery = async (categoryId, userId, excludeIdSet) => {
     } else if (categoryId === 'audio') {
         query.contentType = 'audio';
     } else if (categoryId === 'posts') {
-        query.contentType = 'post';
+        query.contentType = { $in: ['post', 'post-single'] };
     } else if (categoryId === 'following') {
         if (!userId) {
             return null;
@@ -593,10 +593,27 @@ export const getCategoryTrending = async (req, res) => {
             return res.json({ content: [] });
         }
 
-        const candidates = await Content.find(query)
-            .limit(350)
+        const trendingProjection =
+            'contentType title description duration thumbnailKey imageKey hlsMasterKey processedKey originalKey views likeCount likes createdAt channelName status tags category artist album audioCategory postContent userId';
+
+        let candidates = await Content.find(query)
+            .select(trendingProjection)
+            .sort({ views: -1, createdAt: -1 })
+            .limit(150)
             .populate('userId', 'userName channelName channelHandle channelPicture')
             .lean();
+
+        // Fallback: if the recent-window filter produced nothing, retry without recency cutoff.
+        if (candidates.length === 0) {
+            const relaxedQuery = { ...query };
+            delete relaxedQuery.createdAt;
+            candidates = await Content.find(relaxedQuery)
+                .select(trendingProjection)
+                .sort({ views: -1, createdAt: -1 })
+                .limit(150)
+                .populate('userId', 'userName channelName channelHandle channelPicture')
+                .lean();
+        }
 
         if (candidates.length === 0) {
             return res.json({ content: [] });
