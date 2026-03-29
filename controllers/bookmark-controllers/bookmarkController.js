@@ -11,7 +11,7 @@
 
 import Bookmark from '../../models/bookmark.model.js';
 import Content from '../../models/content.model.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
 /**
  * Toggle bookmark — if already bookmarked, remove it; otherwise add it.
@@ -110,6 +110,14 @@ export const getBookmarksByType = async (req, res) => {
             if (c.thumbnailKey) c.thumbnailUrl = getCfUrl(c.thumbnailKey);
             if (c.imageKey) c.imageUrl = getCfUrl(c.imageKey);
             if (c.imageKeys?.length) c.imageUrls = c.imageKeys.map(k => getCfUrl(k));
+            const mediaKey = c.processedKey || c.originalKey;
+            c.hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
+            c.videoUrl = (c.contentType === 'video' || c.contentType === 'short') && mediaKey
+                ? getCfUrl(mediaKey)
+                : null;
+            c.audioUrl = c.contentType === 'audio' && mediaKey
+                ? getCfUrl(mediaKey)
+                : null;
             if (c.userId?.channelPicture) c.channelPicture = getCfUrl(c.userId.channelPicture);
             c.channelName = c.userId?.channelName;
             c.channelHandle = c.userId?.channelHandle;
