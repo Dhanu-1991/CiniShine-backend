@@ -18,7 +18,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import ContentView from '../../models/contentView.model.js';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -62,6 +62,8 @@ export const getMyContent = async (req, res) => {
                 parentCommentId: { $exists: false }
             });
 
+            const mediaKey = item.processedKey || item.originalKey;
+
             return {
                 _id: item._id,
                 contentType: item.contentType,
@@ -83,6 +85,9 @@ export const getMyContent = async (req, res) => {
                 updatedAt: item.updatedAt,
                 thumbnailUrl: getCfUrl(item.thumbnailKey),
                 imageUrl: getCfUrl(item.imageKey),
+                hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
+                videoUrl: (item.contentType === 'video' || item.contentType === 'short') && mediaKey ? getCfUrl(mediaKey) : null,
+                audioUrl: item.contentType === 'audio' && mediaKey ? getCfUrl(mediaKey) : null,
             };
         }));
 

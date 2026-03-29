@@ -17,7 +17,7 @@ import mongoose from 'mongoose';
 import WatchHistory from '../../models/watchHistory.model.js';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
 /**
  * Get paginated watch history for the current user
@@ -57,6 +57,9 @@ export const getWatchHistory = async (req, res) => {
                     title: item.contentMetadata?.title || 'Deleted content',
                     thumbnailUrl: null,
                     imageUrl: null,
+                    hlsMasterUrl: null,
+                    videoUrl: null,
+                    audioUrl: null,
                     duration: item.contentMetadata?.duration || 0,
                     views: 0,
                     status: 'completed',
@@ -84,6 +87,13 @@ export const getWatchHistory = async (req, res) => {
                 description: content.description,
                 thumbnailUrl: getCfUrl(content.thumbnailKey),
                 imageUrl: getCfUrl(content.imageKey),
+                hlsMasterUrl: content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null,
+                videoUrl: (content.contentType === 'video' || content.contentType === 'short') && (content.processedKey || content.originalKey)
+                    ? getCfUrl(content.processedKey || content.originalKey)
+                    : null,
+                audioUrl: content.contentType === 'audio' && (content.processedKey || content.originalKey)
+                    ? getCfUrl(content.processedKey || content.originalKey)
+                    : null,
                 duration: content.duration,
                 views: content.views || 0,
                 likeCount: content.likeCount || 0,

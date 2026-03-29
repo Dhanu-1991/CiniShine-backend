@@ -11,7 +11,7 @@ import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
 /**
  * Get channel page data by channelName
@@ -70,18 +70,24 @@ export const getChannelPage = async (req, res) => {
             .limit(6)
             .lean();
 
-        const newestWithUrls = await Promise.all(newestReleases.map(async (item) => ({
-            _id: item._id,
-            contentType: item.contentType,
-            title: item.title,
-            description: item.description,
-            duration: item.duration,
-            views: item.views || 0,
-            likeCount: item.likeCount || 0,
-            createdAt: item.createdAt,
-            thumbnailUrl: getCfUrl(item.thumbnailKey),
-            imageUrl: getCfUrl(item.imageKey),
-        })));
+        const newestWithUrls = await Promise.all(newestReleases.map(async (item) => {
+            const mediaKey = item.processedKey || item.originalKey;
+            return ({
+                _id: item._id,
+                contentType: item.contentType,
+                title: item.title,
+                description: item.description,
+                duration: item.duration,
+                views: item.views || 0,
+                likeCount: item.likeCount || 0,
+                createdAt: item.createdAt,
+                thumbnailUrl: getCfUrl(item.thumbnailKey),
+                imageUrl: getCfUrl(item.imageKey),
+                hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
+                videoUrl: (item.contentType === 'video' || item.contentType === 'short') && mediaKey ? getCfUrl(mediaKey) : null,
+                audioUrl: item.contentType === 'audio' && mediaKey ? getCfUrl(mediaKey) : null,
+            });
+        }));
 
         // Popular content (top 6 by views, public only)
         const popularContent = await Content.find({
@@ -93,18 +99,24 @@ export const getChannelPage = async (req, res) => {
             .limit(6)
             .lean();
 
-        const popularWithUrls = await Promise.all(popularContent.map(async (item) => ({
-            _id: item._id,
-            contentType: item.contentType,
-            title: item.title,
-            description: item.description,
-            duration: item.duration,
-            views: item.views || 0,
-            likeCount: item.likeCount || 0,
-            createdAt: item.createdAt,
-            thumbnailUrl: getCfUrl(item.thumbnailKey),
-            imageUrl: getCfUrl(item.imageKey),
-        })));
+        const popularWithUrls = await Promise.all(popularContent.map(async (item) => {
+            const mediaKey = item.processedKey || item.originalKey;
+            return ({
+                _id: item._id,
+                contentType: item.contentType,
+                title: item.title,
+                description: item.description,
+                duration: item.duration,
+                views: item.views || 0,
+                likeCount: item.likeCount || 0,
+                createdAt: item.createdAt,
+                thumbnailUrl: getCfUrl(item.thumbnailKey),
+                imageUrl: getCfUrl(item.imageKey),
+                hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
+                videoUrl: (item.contentType === 'video' || item.contentType === 'short') && mediaKey ? getCfUrl(mediaKey) : null,
+                audioUrl: item.contentType === 'audio' && mediaKey ? getCfUrl(mediaKey) : null,
+            });
+        }));
 
         // Channel picture URL
         const channelPictureUrl = user.channelPicture
@@ -180,19 +192,25 @@ export const getChannelContent = async (req, res) => {
             Content.countDocuments(query)
         ]);
 
-        const contentsWithUrls = await Promise.all(contents.map(async (item) => ({
-            _id: item._id,
-            contentType: item.contentType,
-            title: item.title,
-            description: item.description,
-            postContent: item.postContent,
-            duration: item.duration,
-            views: item.views || 0,
-            likeCount: item.likeCount || 0,
-            createdAt: item.createdAt,
-            thumbnailUrl: getCfUrl(item.thumbnailKey),
-            imageUrl: getCfUrl(item.imageKey),
-        })));
+        const contentsWithUrls = await Promise.all(contents.map(async (item) => {
+            const mediaKey = item.processedKey || item.originalKey;
+            return ({
+                _id: item._id,
+                contentType: item.contentType,
+                title: item.title,
+                description: item.description,
+                postContent: item.postContent,
+                duration: item.duration,
+                views: item.views || 0,
+                likeCount: item.likeCount || 0,
+                createdAt: item.createdAt,
+                thumbnailUrl: getCfUrl(item.thumbnailKey),
+                imageUrl: getCfUrl(item.imageKey),
+                hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
+                videoUrl: (item.contentType === 'video' || item.contentType === 'short') && mediaKey ? getCfUrl(mediaKey) : null,
+                audioUrl: item.contentType === 'audio' && mediaKey ? getCfUrl(mediaKey) : null,
+            });
+        }));
 
         res.json({
             contents: contentsWithUrls,
