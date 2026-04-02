@@ -130,30 +130,77 @@ export const getMixedFeed = async (req, res) => {
         const videosPagination = videosResult.pagination || {};
         const totalVideos = videosPagination.totalItems || processedVideos.length;
 
-        // ── Section layout — algorithm-driven order for all pages ──────────
-        const videosBatch1 = processedVideos.slice(0, 3);
-        const videosBatch2 = processedVideos.slice(3, 6);
-        const videosBatch3 = processedVideos.slice(6, 9);
-        const videosBatch4 = processedVideos.slice(9, 12);
-
+        // ── Section layout — deterministic balanced order ─────────────────
         const sections = [];
-
-        const available = [];
-        if (processedShorts.length > 0) available.push({ type: 'shorts', data: processedShorts, key: `shorts-${pageNum}` });
-        const allVids = [...videosBatch1, ...videosBatch2, ...videosBatch3, ...videosBatch4];
-        for (let i = 0; i < allVids.length; i += 3) {
-            const chunk = allVids.slice(i, i + 3);
-            if (chunk.length > 0) available.push({ type: 'videos', data: chunk, key: `videos-${Math.floor(i / 3) + 1}-${pageNum}` });
+        const videoBlocks = [];
+        for (let i = 0; i < processedVideos.length; i += 6) {
+            const chunk = processedVideos.slice(i, i + 6);
+            if (chunk.length > 0) {
+                videoBlocks.push({
+                    type: 'videos',
+                    data: chunk,
+                    key: `videos-${Math.floor(i / 6) + 1}-${pageNum}`
+                });
+            }
         }
-        if (processedAudio.length > 0) available.push({ type: 'audio', data: processedAudio, key: `audio-${pageNum}` });
-        if (processedPosts.length > 0) available.push({ type: 'post-single', data: processedPosts[0], key: `post-${pageNum}` });
 
-        // Shuffle sections for YouTube-style session variety
-        for (let i = available.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [available[i], available[j]] = [available[j], available[i]];
+        const supplementCycle = [
+            { key: 'shorts', type: 'shorts', limit: 5 },
+            { key: 'audio', type: 'audio', limit: 5 },
+            { key: 'posts', type: 'post-single', limit: 1 },
+        ];
+
+        const supplementState = {
+            shorts: [...processedShorts],
+            audio: [...processedAudio],
+            posts: [...processedPosts],
+        };
+
+        let supplementIndex = 0;
+        let blockIndex = 0;
+
+        const hasSupplementContent = () =>
+            supplementState.shorts.length > 0 || supplementState.audio.length > 0 || supplementState.posts.length > 0;
+
+        while (blockIndex < videoBlocks.length || hasSupplementContent()) {
+            if (blockIndex < videoBlocks.length) {
+                sections.push(videoBlocks[blockIndex]);
+                blockIndex += 1;
+            }
+
+            if (!hasSupplementContent()) {
+                continue;
+            }
+
+            let selectedSupplement = null;
+            for (let step = 0; step < supplementCycle.length; step++) {
+                const candidate = supplementCycle[(supplementIndex + step) % supplementCycle.length];
+                const queue = supplementState[candidate.key];
+
+                if (queue.length > 0) {
+                    selectedSupplement = candidate;
+                    supplementIndex = (supplementIndex + step + 1) % supplementCycle.length;
+                    break;
+                }
+            }
+
+            if (!selectedSupplement) {
+                continue;
+            }
+
+            const queue = supplementState[selectedSupplement.key];
+            const items = queue.splice(0, selectedSupplement.limit);
+
+            if (items.length === 0) {
+                continue;
+            }
+
+            sections.push({
+                type: selectedSupplement.type,
+                data: selectedSupplement.type === 'post-single' ? items[0] : items,
+                key: `${selectedSupplement.key}-${pageNum}-${sections.length}`
+            });
         }
-        sections.push(...available);
 
         const hasNextPage = pageNum < maxPages && (videosPagination.hasNextPage || false);
 
