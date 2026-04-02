@@ -187,7 +187,7 @@ export const getMixedFeed = async (req, res) => {
 };
 
 /**
- * Returns a combined response with `videos` (similar videos) and `shorts` (recommended shorts).
+ * Returns a combined response with `videos` (similar videos), `shorts`, and `audio` recommendations.
  * Used by the watch page sidebar and API route `/api/v2/video/:videoId/recommendations-with-shorts`.
  */
 export const getRecommendationsWithShorts = async (req, res) => {
@@ -196,7 +196,15 @@ export const getRecommendationsWithShorts = async (req, res) => {
         const { videoId } = req.params;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
-        const shortsLimit = parseInt(req.query.shortsLimit) || 4;
+        const parsedShortsLimit = parseInt(req.query.shortsLimit, 10);
+        const parsedAudioLimit = parseInt(req.query.audioLimit, 10);
+        const MAX_SUPPLEMENTAL_LIMIT = 12;
+        const shortsLimit = Number.isNaN(parsedShortsLimit)
+            ? 4
+            : Math.min(MAX_SUPPLEMENTAL_LIMIT, Math.max(0, parsedShortsLimit));
+        const audioLimit = Number.isNaN(parsedAudioLimit)
+            ? 4
+            : Math.min(MAX_SUPPLEMENTAL_LIMIT, Math.max(0, parsedAudioLimit));
         const seenIds = req.query.seenIds ? req.query.seenIds.split(',').filter(Boolean) : [];
         const recCategory = req.query.recCategory || 'all';
         const recValue = req.query.recValue || '';
@@ -207,13 +215,146 @@ export const getRecommendationsWithShorts = async (req, res) => {
             .lean();
         if (!current) return res.status(404).json({ error: 'Content not found' });
 
+        // Build user profile once so all content types can receive explicit history weighting.
+        const userProfile = userId ? await watchHistoryEngine.buildUserProfile(userId) : null;
+
+        const normalise = (value) => String(value || '').trim().toLowerCase();
+        const currentId = current._id?.toString();
+        const baseExcludedIds = new Set(seenIds.map((id) => id.toString()));
+        if (currentId) baseExcludedIds.add(currentId);
+
+        const normalizedPreferredTags = {};
+        const normalizedPreferredCategories = {};
+        if (userProfile) {
+            for (const [key, score] of Object.entries(userProfile.preferredTags || {})) {
+                const normalizedKey = normalise(key);
+                if (!normalizedKey) continue;
+                normalizedPreferredTags[normalizedKey] = Math.max(normalizedPreferredTags[normalizedKey] || 0, score || 0);
+            }
+            for (const [key, score] of Object.entries(userProfile.preferredCategories || {})) {
+                const normalizedKey = normalise(key);
+                if (!normalizedKey) continue;
+                normalizedPreferredCategories[normalizedKey] = Math.max(normalizedPreferredCategories[normalizedKey] || 0, score || 0);
+            }
+        }
+
+        const getHistoryProfileBoost = (item) => {
+            if (!userProfile) return 0;
+
+            const tags = (item.tags || []).map((t) => normalise(t)).filter(Boolean);
+            const category = normalise(item.category);
+            const creatorId = (item.userId?._id || item.userId || item.creatorId)?.toString();
+            const contentType = normalise(item.contentType);
+
+            let tagBoost = 0;
+            for (const tag of tags) {
+                const exact = normalizedPreferredTags[tag];
+                if (exact) tagBoost += exact;
+            }
+
+            const categoryBoost = category && normalizedPreferredCategories[category]
+                ? normalizedPreferredCategories[category]
+                : 0;
+
+            const creatorBoost = creatorId && userProfile.preferredCreators?.[creatorId]
+                ? userProfile.preferredCreators[creatorId]
+                : 0;
+
+            const typeBoost = contentType && userProfile.preferredContentTypes?.[contentType]
+                ? userProfile.preferredContentTypes[contentType]
+                : 0;
+
+            // Normalize each component and keep total boost bounded.
+            return (
+                Math.min(tagBoost, 1) * 0.40 +
+                Math.min(categoryBoost, 1) * 0.20 +
+                Math.min(creatorBoost, 1) * 0.30 +
+                Math.min(typeBoost, 1) * 0.10
+            );
+        };
+
         // Similar videos (content-based) for default tab, server-side filtered results for chip tabs
         let videos = [];
         let pagination = { currentPage: page, hasNextPage: false };
 
         if (recCategory === 'all') {
             const similar = await findSimilarVideos(current, page, limit);
-            videos = similar.videos || [];
+            const similarVideos = similar.videos || [];
+
+            // Blend similarity feed with watch-history feed so watch behavior influences watch sidebar videos.
+            // Use a larger candidate pool then rerank deterministically.
+            let historyVideos = [];
+            if (userId) {
+                const historyResult = await watchHistoryEngine.getRecommendations(userId, 'video', {
+                    page,
+                    limit: Math.max(limit * 2, 20),
+                    excludeIds: Array.from(baseExcludedIds)
+                });
+                historyVideos = (historyResult.content || []).map((item) => ({
+                    ...item,
+                    _historyScore: item.recommendationScore || 0
+                }));
+            }
+
+            const byId = new Map();
+            for (const item of similarVideos) {
+                byId.set(item._id.toString(), {
+                    ...item,
+                    contentType: 'video',
+                    _similarityScore: item.similarityScore || 0,
+                    _historyScore: 0,
+                });
+            }
+            for (const item of historyVideos) {
+                const key = item._id.toString();
+                const existing = byId.get(key);
+                if (!existing) {
+                    byId.set(key, {
+                        ...item,
+                        contentType: 'video',
+                        _similarityScore: 0,
+                        _historyScore: item._historyScore || 0,
+                    });
+                } else {
+                    existing._historyScore = Math.max(existing._historyScore || 0, item._historyScore || 0);
+                }
+            }
+
+            const merged = [...byId.values()];
+            const maxSimilarity = Math.max(0.0001, ...merged.map((v) => v._similarityScore || 0));
+            const maxHistory = Math.max(0.0001, ...merged.map((v) => v._historyScore || 0));
+
+            videos = merged
+                .map((item) => {
+                    const normalizedSimilarity = (item._similarityScore || 0) / maxSimilarity;
+                    const normalizedHistory = (item._historyScore || 0) / maxHistory;
+                    const profileBoost = getHistoryProfileBoost(item);
+
+                    // Final blend: similarity remains primary for context, history adds personalization.
+                    const blendedScore = normalizedSimilarity * 0.55 + normalizedHistory * 0.35 + profileBoost * 0.10;
+
+                    return {
+                        ...item,
+                        blendedScore,
+                    };
+                })
+                .sort((a, b) => b.blendedScore - a.blendedScore)
+                .slice(0, limit)
+                .map((item) => ({
+                    _id: item._id,
+                    title: item.title,
+                    description: item.description,
+                    duration: item.duration,
+                    thumbnailUrl: item.thumbnailUrl,
+                    views: item.views,
+                    createdAt: item.createdAt,
+                    channelName: item.channelName,
+                    channelPicture: item.channelPicture || null,
+                    channelHandle: item.channelHandle || null,
+                    tags: item.tags,
+                    category: item.category,
+                }));
+
             pagination = similar.pagination || { currentPage: page, hasNextPage: false };
         } else {
             const filterQuery = {
@@ -265,17 +406,106 @@ export const getRecommendationsWithShorts = async (req, res) => {
             };
         }
 
-        // Short recommendations from watch-history engine (personalised / fallback)
-        const shorts = await watchHistoryEngine.getRecommendations(userId, 'short', {
-            page: 1,
-            limit: shortsLimit,
-            excludeIds: seenIds
-        });
+        const getRelatedSupplementalContent = async (contentType, requestedLimit) => {
+            const safeLimit = Math.max(0, parseInt(requestedLimit, 10) || 0);
+            if (safeLimit === 0) return [];
+
+            const excluded = new Set(baseExcludedIds);
+
+            const currentChannelId = (current.userId?._id || current.userId)?.toString();
+            const currentCategory = String(current.category || '').trim().toLowerCase();
+            const currentAudioCategory = String(current.audioCategory || '').trim().toLowerCase();
+            const currentTags = new Set((current.tags || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean));
+
+            const relatedCandidates = await Content.find({
+                _id: { $nin: Array.from(excluded) },
+                status: 'completed',
+                visibility: 'public',
+                contentType
+            })
+                .sort({ createdAt: -1, views: -1 })
+                .limit(160)
+                .populate('userId', 'userName channelName channelHandle channelPicture')
+                .lean();
+
+            const scoredRelated = relatedCandidates
+                .map((item) => {
+                    const itemChannelId = (item.userId?._id || item.userId)?.toString();
+                    const itemCategory = String(item.category || '').trim().toLowerCase();
+                    const itemAudioCategory = String(item.audioCategory || '').trim().toLowerCase();
+                    const itemTags = (item.tags || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean);
+
+                    const overlapCount = itemTags.reduce((acc, tag) => acc + (currentTags.has(tag) ? 1 : 0), 0);
+                    const hasCategoryMatch = Boolean(
+                        (currentCategory && itemCategory && currentCategory === itemCategory) ||
+                        (currentAudioCategory && itemAudioCategory && currentAudioCategory === itemAudioCategory)
+                    );
+                    const hasCreatorMatch = Boolean(currentChannelId && itemChannelId && currentChannelId === itemChannelId);
+                    const views = item.views || 0;
+                    const hoursOld = (Date.now() - new Date(item.createdAt)) / 3600000;
+
+                    let score = 0;
+                    if (hasCreatorMatch) score += 3.5;
+                    if (hasCategoryMatch) score += 2.5;
+                    if (overlapCount > 0) score += Math.min(overlapCount, 4) * 1.4;
+                    score += Math.min(views / 10000, 1);
+                    score += Math.max(0, 1 - hoursOld / (24 * 14));
+                    score += getHistoryProfileBoost(item) * 2.8;
+
+                    return {
+                        item,
+                        score,
+                        hasStrongRelation: hasCreatorMatch || hasCategoryMatch || overlapCount > 0
+                    };
+                })
+                .filter((entry) => entry.hasStrongRelation)
+                .sort((a, b) => b.score - a.score);
+
+            const relatedItems = [];
+            const usedIds = new Set();
+            for (const entry of scoredRelated) {
+                if (relatedItems.length >= safeLimit) break;
+                const id = entry.item._id?.toString();
+                if (!id || usedIds.has(id)) continue;
+                relatedItems.push(normalizeFeedItem(entry.item));
+                usedIds.add(id);
+                excluded.add(id);
+            }
+
+            if (relatedItems.length < safeLimit) {
+                const fallback = await watchHistoryEngine.getRecommendations(userId, contentType, {
+                    page: 1,
+                    limit: safeLimit * 2,
+                    excludeIds: Array.from(excluded)
+                });
+
+                for (const item of fallback.content || []) {
+                    if (relatedItems.length >= safeLimit) break;
+                    const id = item._id?.toString();
+                    if (!id || usedIds.has(id)) continue;
+                    relatedItems.push(item);
+                    usedIds.add(id);
+                }
+            }
+
+            return relatedItems;
+        };
+
+        const [shorts, audio] = await Promise.all([
+            getRelatedSupplementalContent('short', shortsLimit),
+            getRelatedSupplementalContent('audio', audioLimit)
+        ]);
 
         res.json({
             videos,
-            shorts: shorts.content || [],
+            shorts,
+            audio,
             pagination,
+            limits: {
+                videos: limit,
+                shorts: shortsLimit,
+                audio: audioLimit,
+            },
             currentVideoChannelName: current.userId?.channelName || current.channelName || current.userId?.userName || 'Unknown Channel',
             currentVideoChannelHandle: current.userId?.channelHandle || null,
         });
