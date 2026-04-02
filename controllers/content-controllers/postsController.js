@@ -20,6 +20,15 @@ const s3Client = new S3Client({
     },
 });
 
+const TITLE_MAX_WORDS = 15;
+const DESCRIPTION_MAX_WORDS = 300;
+
+const countWords = (text = '') =>
+    text
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length;
+
 /**
  * Initialize post image upload (optional)
  */
@@ -53,10 +62,19 @@ export const createPost = async (req, res) => {
     try {
         const { title, description, postContent, tags, visibility, commentsEnabled, imageUrl, imageUrls } = req.body;
         const userId = req.user?.id;
+        const finalDescription = (postContent || description || '').trim();
 
         if (!userId) return res.status(401).json({ error: 'User not authenticated' });
         if (!title || !title.trim()) return res.status(400).json({ error: 'Title is required' });
-        if (!description && !postContent) return res.status(400).json({ error: 'Description or content is required' });
+        if (!finalDescription) return res.status(400).json({ error: 'Description is required' });
+
+        if (countWords(title) > TITLE_MAX_WORDS) {
+            return res.status(400).json({ error: `Title can be at most ${TITLE_MAX_WORDS} words` });
+        }
+
+        if (countWords(finalDescription) > DESCRIPTION_MAX_WORDS) {
+            return res.status(400).json({ error: `Description can be at most ${DESCRIPTION_MAX_WORDS} words` });
+        }
 
         const fileId = new mongoose.Types.ObjectId();
         const imageKeys = imageUrls && imageUrls.length > 0
@@ -68,8 +86,8 @@ export const createPost = async (req, res) => {
             contentType: 'post',
             userId,
             title: title.trim(),
-            description: description || '',
-            postContent: postContent || description || '',
+            description: finalDescription,
+            postContent: finalDescription,
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
             visibility: visibility || 'public',
             commentsEnabled: commentsEnabled !== false,

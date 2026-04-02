@@ -12,6 +12,7 @@ import {
     deleteComment,
     updateProfileSettings,
     getProfileSettings,
+    getRecommendedProfiles,
     getContentAnalytics,
 } from '../../controllers/profile-controllers/profileController.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
@@ -21,6 +22,7 @@ const router = express.Router();
 // Profile settings
 router.get('/settings', universalTokenVerifier, getProfileSettings);
 router.put('/settings', universalTokenVerifier, updateProfileSettings);
+router.get('/recommended-profiles', universalTokenVerifier, getRecommendedProfiles);
 
 // Creator's own content management
 router.get('/content', universalTokenVerifier, getMyContent);

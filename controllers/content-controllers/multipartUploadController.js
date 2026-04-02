@@ -29,6 +29,34 @@ const BUCKET = process.env.S3_BUCKET;
 
 // Chunk size: 10MB (minimum for S3 multipart is 5MB, except last part)
 const MIN_PART_SIZE = 10 * 1024 * 1024; // 10MB
+const TITLE_MAX_WORDS = 15;
+const DESCRIPTION_MAX_WORDS = 300;
+
+const countWords = (text = "") =>
+    text
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length;
+
+const validateTitleDescription = (title, description) => {
+    if (!title || !title.trim()) {
+        return "Title is required";
+    }
+
+    if (!description || !description.trim()) {
+        return "Description is required";
+    }
+
+    if (countWords(title) > TITLE_MAX_WORDS) {
+        return `Title can be at most ${TITLE_MAX_WORDS} words`;
+    }
+
+    if (countWords(description) > DESCRIPTION_MAX_WORDS) {
+        return `Description can be at most ${DESCRIPTION_MAX_WORDS} words`;
+    }
+
+    return null;
+};
 
 /**
  * Step 1: Initialize multipart upload
@@ -61,6 +89,11 @@ export const multipartInit = async (req, res) => {
             return res.status(400).json({ error: "fileName, fileType, and fileSize are required" });
         }
 
+        const metadataError = validateTitleDescription(title, description);
+        if (metadataError) {
+            return res.status(400).json({ error: metadataError });
+        }
+
         // Validate file size (max 5GB)
         const maxSize = 5 * 1024 * 1024 * 1024; // 5GB
         if (fileSize > maxSize) {
@@ -81,8 +114,8 @@ export const multipartInit = async (req, res) => {
         await Content.create({
             _id: fileId,
             contentType,
-            title: title || fileName,
-            description: description || "",
+            title: title.trim(),
+            description: description.trim(),
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(",").map((t) => t.trim())) : [],
             category: category || "",
             visibility: visibility || "public",
@@ -152,7 +185,7 @@ export const multipartInit = async (req, res) => {
  */
 export const multipartComplete = async (req, res) => {
     try {
-        const { fileId, uploadId, key, parts, fileSize, contentType } = req.body;
+        const { fileId, uploadId, key, parts, fileSize, contentType, title, description } = req.body;
         const userId = req.user?.id;
 
         if (!fileId || !uploadId || !key || !parts) {
@@ -161,6 +194,15 @@ export const multipartComplete = async (req, res) => {
 
         if (!mongoose.Types.ObjectId.isValid(fileId)) {
             return res.status(400).json({ error: "Invalid file ID" });
+        }
+
+        const existingContent = await Content.findById(fileId).select("title description userId");
+        if (!existingContent) {
+            return res.status(404).json({ error: "Content not found" });
+        }
+
+        if (!userId || existingContent.userId?.toString() !== userId) {
+            return res.status(403).json({ error: "Not authorized" });
         }
 
         // Complete multipart upload on S3
@@ -188,6 +230,19 @@ export const multipartComplete = async (req, res) => {
             "sizes.original": fileSize,
             processingStart: new Date(),
         };
+
+        if (title !== undefined || description !== undefined) {
+            const nextTitle = title !== undefined ? title : existingContent.title;
+            const nextDescription = description !== undefined ? description : existingContent.description;
+            const metadataError = validateTitleDescription(nextTitle, nextDescription);
+            if (metadataError) {
+                return res.status(400).json({ error: metadataError });
+            }
+        }
+
+        if (title !== undefined) updateData.title = title.trim();
+        if (description !== undefined) updateData.description = description.trim();
+
         if (!isVideo) {
             updateData.publishedAt = new Date();
         }

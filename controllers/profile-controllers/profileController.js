@@ -366,6 +366,145 @@ export const getProfileSettings = async (req, res) => {
 };
 
 /**
+ * Get recommended profiles using 2nd-degree follow graph.
+ * Strategy:
+ * 1) Take top profiles the user already follows (by follower count)
+ * 2) Find who those seed profiles follow
+ * 3) Rank candidates by mutual-seed follows, then follower count
+ *
+ * Query:
+ * - limit: fixed to 2 (hard-capped to prevent UI overload)
+ * - seedLimit: 3..10 (optional tuning for seed breadth)
+ */
+export const getRecommendedProfiles = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(400).json({ error: 'Invalid user ID' });
+        }
+
+        const parsedLimit = Number.parseInt(req.query.limit, 10);
+        const parsedSeedLimit = Number.parseInt(req.query.seedLimit, 10);
+        const limit = Number.isFinite(parsedLimit)
+            ? Math.min(Math.max(parsedLimit, 2), 2)
+            : 2;
+        const seedLimit = Number.isFinite(parsedSeedLimit)
+            ? Math.min(Math.max(parsedSeedLimit, 3), 10)
+            : 6;
+
+        const currentUserObjectId = new mongoose.Types.ObjectId(userId);
+        const currentUser = await User.findById(currentUserObjectId)
+            .select('subscriptions')
+            .lean();
+
+        if (!currentUser) return res.status(404).json({ error: 'User not found' });
+
+        const followingObjectIds = (currentUser.subscriptions || [])
+            .filter((id) => mongoose.Types.ObjectId.isValid(id))
+            .map((id) => new mongoose.Types.ObjectId(id));
+
+        if (followingObjectIds.length === 0) {
+            return res.json({ profiles: [] });
+        }
+
+        const seedProfiles = await User.aggregate([
+            { $match: { _id: { $in: followingObjectIds } } },
+            { $lookup: { from: 'users', localField: '_id', foreignField: 'subscriptions', as: '_followers' } },
+            {
+                $addFields: {
+                    followerCount: {
+                        $ifNull: ['$subscriberCountOverride', { $size: '$_followers' }]
+                    }
+                }
+            },
+            { $project: { _id: 1, followerCount: 1 } },
+            { $sort: { followerCount: -1 } },
+            { $limit: seedLimit }
+        ]);
+
+        const seedIds = seedProfiles.map((s) => s._id);
+        if (seedIds.length === 0) {
+            return res.json({ profiles: [] });
+        }
+
+        const excludeIds = [...followingObjectIds, currentUserObjectId];
+
+        const secondDegree = await User.aggregate([
+            { $match: { _id: { $in: seedIds } } },
+            { $project: { subscriptions: 1 } },
+            { $unwind: '$subscriptions' },
+            { $match: { subscriptions: { $nin: excludeIds } } },
+            { $group: { _id: '$subscriptions', mutualSeedCount: { $sum: 1 } } },
+            { $sort: { mutualSeedCount: -1 } },
+            { $limit: 60 }
+        ]);
+
+        if (secondDegree.length === 0) {
+            return res.json({ profiles: [] });
+        }
+
+        const candidateIds = secondDegree.map((c) => c._id);
+        const mutualSeedCountMap = new Map(secondDegree.map((c) => [String(c._id), c.mutualSeedCount]));
+
+        const candidates = await User.aggregate([
+            { $match: { _id: { $in: candidateIds } } },
+            { $lookup: { from: 'users', localField: '_id', foreignField: 'subscriptions', as: '_followers' } },
+            {
+                $addFields: {
+                    followerCount: {
+                        $ifNull: ['$subscriberCountOverride', { $size: '$_followers' }]
+                    }
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    channelHandle: 1,
+                    channelName: 1,
+                    userName: 1,
+                    channelPicture: 1,
+                    profilePicture: 1,
+                    roles: 1,
+                    followerCount: 1
+                }
+            }
+        ]);
+
+        const ranked = candidates
+            .map((candidate) => ({
+                id: candidate._id,
+                handle: candidate.channelHandle || null,
+                name: candidate.channelName || candidate.userName || 'Unknown',
+                avatar: candidate.channelPicture || candidate.profilePicture || null,
+                roles: candidate.roles || [],
+                subscriberCount: candidate.followerCount ?? 0,
+                mutualSeedCount: mutualSeedCountMap.get(String(candidate._id)) || 0,
+                followed: false,
+            }))
+            .filter((candidate) => !!candidate.handle)
+            .sort((a, b) => {
+                if (b.mutualSeedCount !== a.mutualSeedCount) return b.mutualSeedCount - a.mutualSeedCount;
+                return b.subscriberCount - a.subscriberCount;
+            })
+            .slice(0, limit);
+
+        res.json({
+            profiles: ranked,
+            meta: {
+                strategy: 'second_degree_following',
+                limit,
+                seedCount: seedIds.length,
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error fetching recommended profiles:', error);
+        res.status(500).json({ error: 'Failed to fetch recommended profiles' });
+    }
+};
+
+/**
  * Get analytics data for a specific content item
  * Returns: views, engagement, watch history stats, daily view estimates
  */
