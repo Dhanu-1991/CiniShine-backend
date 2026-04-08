@@ -1,26 +1,40 @@
 // UniversalTokenVerifier.js
 import jwt from "jsonwebtoken";
 
+/**
+ * Extract token from request — checks cookie first, then Authorization header.
+ * This supports both cookie-based auth (new) and header-based auth (backward compat).
+ */
+const extractToken = (req) => {
+  // 1. Check httpOnly cookie first (primary)
+  if (req.cookies?.access_token) {
+    return req.cookies.access_token;
+  }
+
+  // 2. Fall back to Authorization header (backward compat / mobile / admin)
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    return authHeader.split(" ")[1];
+  }
+
+  return null;
+};
+
 export const universalTokenVerifier = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
+    const token = extractToken(req);
     if (!token) {
-      console.log("❌ No token provided");
       return res.status(401).json({ message: "No token provided" });
     }
-    console.log("🔑 Token found:", token.substring(0, 20) + "...");
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = { id: decoded.userId };
-    console.log("✅ Token verified successfully for user:", decoded.userId);
     next();
   } catch (error) {
     if (error.name === "TokenExpiredError") {
-      console.log("⏰ Token has expired");
       return res.status(401).json({ message: "Token expired" });
     }
 
-    console.log("❌ Token verification failed:", error.message);
     return res.status(401).json({ message: "Invalid token" });
   }
 };
@@ -28,7 +42,7 @@ export const universalTokenVerifier = async (req, res, next) => {
 // Optional token verifier - doesn't fail if no token, just sets req.user if valid
 export const optionalTokenVerifier = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
+    const token = extractToken(req);
     if (!token) {
       // No token is fine, just continue without user
       return next();
@@ -36,11 +50,9 @@ export const optionalTokenVerifier = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = { id: decoded.userId };
-    console.log("✅ Optional token verified for user:", decoded.userId);
     next();
   } catch (error) {
     // Token invalid/expired, but we still continue without user
-    console.log("⚠️ Optional token verification failed:", error.message);
     next();
   }
 };

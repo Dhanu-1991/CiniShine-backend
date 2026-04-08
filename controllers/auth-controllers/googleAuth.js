@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import jwt from "jsonwebtoken";
 import User from "../../models/user.model.js";
+import { setAuthCookies } from "./services/cookieHelper.js";
 
 let googleClient = null;
 let googleClientInitError = null;
@@ -72,6 +72,9 @@ const googleAuth = async (req, res) => {
         error?.code === "ERR_MODULE_NOT_FOUND" ||
         String(error?.message || "").includes("google-auth-library")
       ) {
+        // Reset so next attempt will retry the import
+        googleClientInitError = null;
+        googleClient = null;
         return res.status(503).json({
           success: false,
           message: "Google auth is temporarily unavailable",
@@ -110,10 +113,23 @@ const googleAuth = async (req, res) => {
         });
       }
 
+      // Link Google info if not already set
       if (!user.googleId) user.googleId = googleId;
       if (!user.fullName && fullName) user.fullName = fullName;
       if (!user.userName && fullName) user.userName = fullName;
-      if (!user.profilePicture && profilePicture) user.profilePicture = profilePicture;
+
+      // Always sync Google profile picture if the stored one is from Google
+      // (external URL) OR if there is no picture yet.
+      // Do NOT overwrite a picture the user manually uploaded to S3/CF.
+      const currentPic = user.profilePicture || '';
+      const currentPicIsExternal =
+        currentPic.startsWith('http') && !currentPic.includes('.amazonaws.com') && !currentPic.includes('cloudfront.net');
+      if (profilePicture && (!currentPic || currentPicIsExternal)) {
+        user.profilePicture = profilePicture;
+      }
+
+      // Mark as Google-linked if not already
+      if (user.authProvider !== 'google') user.authProvider = 'google';
       user.emailVerified = true;
       user.lastLoginAt = new Date();
       await user.save();
@@ -134,16 +150,12 @@ const googleAuth = async (req, res) => {
       });
     }
 
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRATION }
-    );
+    // Set httpOnly auth cookies
+    setAuthCookies(res, user);
 
     return res.status(200).json({
       success: true,
       message: "Google authentication successful",
-      token,
       user: sanitizeUser(user),
       data: {
         authProvider: "google",

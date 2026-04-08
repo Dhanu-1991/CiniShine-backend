@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import User from "../../models/user.model.js";
 import dotenv from 'dotenv';
+import { setAuthCookies } from "./services/cookieHelper.js";
 dotenv.config();
 
 const signIn = async (req, res, next) => {
@@ -24,16 +24,12 @@ const signIn = async (req, res, next) => {
     user.lastLoginAt = new Date();
     await user.save();
 
-    // 4. Generate token
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRATION,
-    });
-    console.log("signin successful");
+    // 4. Set httpOnly auth cookies
+    setAuthCookies(res, user);
 
     return res.status(200).json({
       success: true,
       message: "Signin successful",
-      token,
     });
 
   } catch (error) {

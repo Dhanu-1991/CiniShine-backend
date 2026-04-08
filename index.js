@@ -28,6 +28,18 @@ import { universalTokenVerifier } from "./controllers/auth-controllers/universal
 import adminRouter from "./routes/adminRoutes/adminRouter.js";
 import analyticsRouter from "./routes/analyticsRoutes/analyticsRouter.js";
 
+// ── Global crash handlers — prevent silent 521 ─────────────────────────
+process.on("uncaughtException", (err) => {
+  console.error("💥 UNCAUGHT EXCEPTION:", err.message, err.stack);
+  // Give time for logs to flush, then exit so Render can restart
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("💥 UNHANDLED REJECTION:", reason);
+});
+// ────────────────────────────────────────────────────────────────────────
+
 const app = express();
 
 app.set('trust proxy', 1);
@@ -93,6 +105,11 @@ app.use("/api/v2/analytics", analyticsRouter);
 
 // CloudFront signed cookies endpoint (protected — user must be logged in)
 app.get("/api/v2/auth/cloudfront-cookies", universalTokenVerifier, issueCloudFrontCookies);
+
+// Health check endpoint for Render
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 app.use(errorHandlingMiddleware);
 

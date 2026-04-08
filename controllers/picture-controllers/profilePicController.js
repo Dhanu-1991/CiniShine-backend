@@ -40,10 +40,21 @@ const uploadToS3 = async (fileBuffer, fileName, mimeType) => {
     }
 };
 
-// Delete file from S3 (handles both S3 keys and full URLs)
+// Delete file from S3 (handles both S3 keys and full S3/CF URLs)
+// External URLs (e.g. Google profile pictures) are skipped safely.
 const deleteFromS3 = async (keyOrUrl) => {
     try {
         if (!keyOrUrl) return;
+
+        // Skip deletion for external URLs that aren't S3 or CloudFront
+        // (e.g., Google profile picture URLs stored from OAuth sign-in)
+        if (
+            keyOrUrl.startsWith('http') &&
+            !keyOrUrl.includes('.amazonaws.com') &&
+            !keyOrUrl.includes('cloudfront.net')
+        ) {
+            return; // Not our S3 asset — nothing to delete
+        }
 
         let key = keyOrUrl;
         // If it's a full URL, extract the key

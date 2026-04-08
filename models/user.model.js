@@ -148,6 +148,11 @@ const userSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    // Token version — increment to invalidate all refresh tokens (logout-all, password change)
+    tokenVersion: {
+        type: Number,
+        default: 0,
+    },
 });
 
 const User = mongoose.model("User", userSchema);

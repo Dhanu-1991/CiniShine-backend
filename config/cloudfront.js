@@ -46,16 +46,28 @@ const COOKIE_EXPIRY_SECONDS = 24 * 60 * 60;
 export function cfUrl(key) {
     if (!key) return null;
 
-    // If it's already a full S3 or CF URL, extract just the key
+    // Already on our CloudFront distribution — return as-is
+    if (key.startsWith(`https://${CF_DOMAIN()}`)) return key;
+
+    // External URL that is NOT an S3 URL (e.g. Google, Gravatar, etc.)
+    // → return unchanged so these render correctly without going through CF
+    if (key.startsWith('http') && !key.includes('.amazonaws.com')) {
+        return key;
+    }
+
+    // Full S3 URL — extract just the object key and remap to CF
     if (key.startsWith('http')) {
         try {
             const url = new URL(key);
-            key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+            const path = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+            if (!path) return null;
+            return `https://${CF_DOMAIN()}/${path}`;
         } catch {
             return null;
         }
     }
 
+    // Plain S3 key (e.g. "profilePictures/userId/file.jpg") — prepend CF domain
     return `https://${CF_DOMAIN()}/${key}`;
 }
 
