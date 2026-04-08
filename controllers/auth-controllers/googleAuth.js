@@ -1,10 +1,24 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
-import { OAuth2Client } from "google-auth-library";
 import User from "../../models/user.model.js";
 
-const googleClient = new OAuth2Client();
+let googleClient = null;
+let googleClientInitError = null;
+
+const getGoogleClient = async () => {
+  if (googleClient) return googleClient;
+  if (googleClientInitError) throw googleClientInitError;
+
+  try {
+    const { OAuth2Client } = await import("google-auth-library");
+    googleClient = new OAuth2Client();
+    return googleClient;
+  } catch (error) {
+    googleClientInitError = error;
+    throw error;
+  }
+};
 
 const sanitizeUser = (userDoc) => {
   const { password, __v, ...safeUser } = userDoc.toObject();
@@ -23,7 +37,8 @@ const getFallbackUserName = (email, nameFromGoogle) => {
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const verifyGoogleToken = async (credential) => {
-  const ticket = await googleClient.verifyIdToken({
+  const client = await getGoogleClient();
+  const ticket = await client.verifyIdToken({
     idToken: credential,
     audience: process.env.GOOGLE_CLIENT_ID,
   });
@@ -53,6 +68,16 @@ const googleAuth = async (req, res) => {
     try {
       payload = await verifyGoogleToken(credential);
     } catch (error) {
+      if (
+        error?.code === "ERR_MODULE_NOT_FOUND" ||
+        String(error?.message || "").includes("google-auth-library")
+      ) {
+        return res.status(503).json({
+          success: false,
+          message: "Google auth is temporarily unavailable",
+        });
+      }
+
       return res.status(401).json({
         success: false,
         message: "Invalid Google credential",
