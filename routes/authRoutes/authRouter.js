@@ -5,6 +5,7 @@ import checkUser from '../../controllers/auth-controllers/checkUser/auth.checkus
 import { sendOtp } from '../../controllers/auth-controllers/sendotp-signup.js'
 import { verifyOtp } from '../../controllers/auth-controllers/verifyotp.js';
 import { signIn } from '../../controllers/auth-controllers/signin.js';
+import { googleAuth } from '../../controllers/auth-controllers/googleAuth.js';
 import changePassword from '../../controllers/auth-controllers/changepassword.js';
 import { verifyToken } from '../../controllers/auth-controllers/checkUser/verifytoken.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
@@ -17,6 +18,7 @@ authRouter.post("/checkUser", checkUser);
 authRouter.post("/verifyOtp", verifyOtp);
 authRouter.post("/signup", Signup);
 authRouter.post("/signin", signIn);
+authRouter.post("/google-auth", googleAuth);
 authRouter.post("/sendOtp/forgotPass", sendOtp);
 authRouter.post("/signin/changePassword", changePassword);
 // authRouter.get("/verify-token", verifyToken);

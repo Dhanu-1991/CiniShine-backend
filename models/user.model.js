@@ -18,6 +18,21 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: [true, "Please provide a password"],
     },
+    googleId: {
+        type: String,
+        required: false,
+        unique: true,
+        sparse: true,
+    },
+    authProvider: {
+        type: String,
+        enum: ["local", "google"],
+        default: "local",
+    },
+    emailVerified: {
+        type: Boolean,
+        default: false,
+    },
     profilePicture: {
         type: String,
         required: false,
