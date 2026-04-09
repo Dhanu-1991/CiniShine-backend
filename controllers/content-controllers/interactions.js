@@ -7,12 +7,11 @@
  * 1. Frontend (WatchPage.jsx) accumulates watch time in ms via play/pause events.
  * 2. Watch time is sent to POST /api/v2/video/:id/watch-time every 10s and on page leave.
  * 3. Backend converts ms → seconds, then applies constraints:
- *    - MIN_WATCH_TIME: 5s — must watch at least 5s
+ *    - MIN_WATCH_TIME: dynamic — 1s for videos <10s, 5s otherwise
  *    - MAX_WATCH_TIME: 1.5× video duration (or 1hr if no duration)
- *    - MIN_VIDEO_DURATION: 10s — very short videos are excluded
  * 4. Rate-limited: 30s cooldown between updates per user+video (in-memory cache).
  * 5. View counting thresholds (based on video duration):
- *    - <10s video  → 2s watch required
+ *    - <10s video  → 2s watch required (with 5s cooldown between views)
  *    - 10-60s video → 5s watch required
  *    - >60s video  → 15s watch required
  * 6. De-duplication via user.viewHistory[]:
@@ -264,26 +263,25 @@ export const updateWatchTime = async (req, res) => {
         console.log('🔄 Converted watchTime to seconds:', watchTimeSeconds);
 
         // Constraints to reduce outliers and bot effects
-        const MIN_WATCH_TIME = 5; // 5 seconds minimum
-        const MAX_WATCH_TIME = video.duration ? video.duration * 1.5 : 3600; // Max 1.5x video duration or 1 hour
-        const MIN_VIDEO_DURATION = 10; // Don't count very short videos
+        // Dynamic MIN_WATCH_TIME: shorter threshold for short videos
+        const duration = video.duration || 0;
+        const MIN_WATCH_TIME = duration > 0 && duration < 10 ? 1 : 5; // 1s for <10s videos, 5s otherwise
+        const MAX_WATCH_TIME = duration > 0 ? duration * 1.5 : 3600; // Max 1.5x video duration or 1 hour
 
-        console.log('📊 Constraints:', { MIN_WATCH_TIME, MAX_WATCH_TIME, MIN_VIDEO_DURATION, videoDuration: video.duration });
+        console.log('📊 Constraints:', { MIN_WATCH_TIME, MAX_WATCH_TIME, videoDuration: duration });
 
-        // Skip if video is too short or watch time is invalid
-        if (video.duration < MIN_VIDEO_DURATION ||
-            watchTimeSeconds < MIN_WATCH_TIME ||
+        // Skip only if watch time is below minimum or above maximum
+        if (watchTimeSeconds < MIN_WATCH_TIME ||
             watchTimeSeconds > MAX_WATCH_TIME) {
-            console.log('⚠️ Watch time not counted due to constraints - video too short or watch time outlier');
+            console.log('⚠️ Watch time not counted due to constraints - watch time outlier');
             console.log('📊 Skipped update details:', {
-                videoDuration: video.duration,
+                videoDuration: duration,
                 watchTimeSeconds,
-                minDuration: MIN_VIDEO_DURATION,
                 minWatch: MIN_WATCH_TIME,
                 maxWatch: MAX_WATCH_TIME
             });
             return res.json({
-                message: "Watch time not counted (invalid duration or outlier)",
+                message: "Watch time not counted (outlier)",
                 averageWatchTime: video.averageWatchTime || 0
             });
         }
@@ -330,7 +328,6 @@ export const updateWatchTime = async (req, res) => {
         await video.save();
 
         // View counting logic
-        const duration = video.duration || 0;
         let threshold;
         if (duration < 10) {
             threshold = 2; // For very short videos, require 2 seconds watch time
@@ -353,7 +350,17 @@ export const updateWatchTime = async (req, res) => {
                 if (lastViewEntry) {
                     const timeSinceLastView = now - new Date(lastViewEntry.lastViewedAt).getTime();
                     console.log('📊 Last view found, time since:', timeSinceLastView / 1000, 'seconds');
-                    if (duration >= 60 && duration <= 600) { // 1-10 minutes
+                    if (duration < 10) { // Very short videos (<10s)
+                        if (timeSinceLastView < 5 * 1000) { // 5 second cooldown
+                            canCountView = false;
+                            console.log('⚠️ View not counted - too soon after last view (5s limit for short video)');
+                        }
+                    } else if (duration >= 10 && duration < 60) { // 10s-1min
+                        if (timeSinceLastView < 30 * 1000) { // 30 second cooldown
+                            canCountView = false;
+                            console.log('⚠️ View not counted - too soon after last view (30s limit)');
+                        }
+                    } else if (duration >= 60 && duration <= 600) { // 1-10 minutes
                         if (timeSinceLastView < 60 * 1000) { // Less than 1 minute
                             canCountView = false;
                             console.log('⚠️ View not counted - too soon after last view (1min limit)');

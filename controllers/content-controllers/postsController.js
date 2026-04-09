@@ -20,7 +20,7 @@ const s3Client = new S3Client({
     },
 });
 
-const TITLE_MAX_WORDS = 15;
+const TITLE_MAX_WORDS = 50;
 const DESCRIPTION_MAX_WORDS = 300;
 
 const countWords = (text = '') =>

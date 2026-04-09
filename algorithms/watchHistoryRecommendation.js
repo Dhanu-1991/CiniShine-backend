@@ -295,14 +295,31 @@ export class WatchHistoryRecommendationEngine {
      */
     async getRecommendations(userId, contentType, options = {}) {
         const { page = 1, limit = 10, excludeIds = [] } = options;
+        const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+        const limitNum = Math.max(parseInt(limit, 10) || 0, 0);
+
+        // Allow callers (mixed-feed fast paths) to skip expensive scoring work.
+        if (limitNum === 0) {
+            return {
+                content: [],
+                pagination: {
+                    currentPage: pageNum,
+                    totalPages: 0,
+                    totalItems: 0,
+                    hasNextPage: false,
+                },
+            };
+        }
 
         // Build user profile
-        const userProfile = await this.buildUserProfile(userId);
+        const userProfile = userId ? await this.buildUserProfile(userId) : null;
 
         // Get watched content IDs (for deprioritization, not exclusion)
-        const watchedHistory = await WatchHistory.find({ userId, contentType })
-            .select('contentId')
-            .lean();
+        const watchedHistory = userId
+            ? await WatchHistory.find({ userId, contentType })
+                .select('contentId')
+                .lean()
+            : [];
         const watchedIds = new Set(
             watchedHistory.map(h => h.contentId.toString())
         );
@@ -396,70 +413,83 @@ export class WatchHistoryRecommendationEngine {
         scoredContent = this.scoreBandShuffle(scoredContent);
 
         // Paginate
-        const startIdx = (page - 1) * limit;
-        const paginatedContent = scoredContent.slice(startIdx, startIdx + limit);
+        const startIdx = (pageNum - 1) * limitNum;
+        const paginatedContent = scoredContent.slice(startIdx, startIdx + limitNum);
+
+        // Batch comment counts for only paginated results (avoid N+1 queries).
+        const paginatedIds = paginatedContent.map((content) => content._id);
+        const paginatedCommentCountMap = {};
+
+        if (paginatedIds.length > 0) {
+            try {
+                const commentAgg = await Comment.aggregate([
+                    { $match: { videoId: { $in: paginatedIds }, onModel: 'Content', parentCommentId: null } },
+                    { $group: { _id: '$videoId', count: { $sum: 1 } } },
+                ]);
+
+                for (const { _id, count } of commentAgg) {
+                    paginatedCommentCountMap[_id.toString()] = count;
+                }
+            } catch (_) {
+                // Non-fatal: cards can still render with zero comments.
+            }
+        }
 
         // Generate URLs and get comment counts
-        const contentWithUrls = await Promise.all(
-            paginatedContent.map(async (content) => {
-                // Get comment count for this content
-                const commentCount = await Comment.countDocuments({
-                    videoId: content._id,
-                    onModel: 'Content',
-                    parentCommentId: null
-                });
+        const contentWithUrls = paginatedContent.map((content) => {
+            const commentCount = paginatedCommentCountMap[content._id.toString()] || 0;
+            const thumbnailKey = content.thumbnailKey || content.imageKey || null;
 
-                // Generate video/audio URL for all media types (CloudFront)
-                let videoUrl = null;
-                let hlsMasterUrl = null;
-                let audioUrl = null;
-                if (contentType === 'video' || contentType === 'short') {
-                    hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
-                    const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
-                    videoUrl = getCfUrl(videoKey);
-                } else if (contentType === 'audio') {
-                    const audioKey = content.processedKey || content.originalKey;
-                    audioUrl = getCfUrl(audioKey);
-                }
+            // Generate video/audio URL for all media types (CloudFront)
+            let videoUrl = null;
+            let hlsMasterUrl = null;
+            let audioUrl = null;
+            if (contentType === 'video' || contentType === 'short') {
+                hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
+                const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
+                videoUrl = videoKey ? getCfUrl(videoKey) : null;
+            } else if (contentType === 'audio') {
+                const audioKey = content.processedKey || content.originalKey;
+                audioUrl = audioKey ? getCfUrl(audioKey) : null;
+            }
 
-                return {
-                    _id: content._id,
-                    contentType: contentType,
-                    title: content.title,
-                    description: content.description,
-                    duration: content.duration,
-                    thumbnailUrl: getCfUrl(content.thumbnailKey),
-                    imageUrl: content.imageKey ? getCfUrl(content.imageKey) : null,
-                    hlsMasterUrl,
-                    videoUrl,
-                    audioUrl,
-                    views: content.views,
-                    likeCount: content.likeCount || content.likes?.length || 0,
-                    commentCount,
-                    createdAt: content.createdAt,
-                    channelName: content.channelName || content.userId?.channelName || content.userId?.userName || 'Unknown',
-                    channelPicture: content.userId?.channelPicture || null,
-                    channelHandle: content.userId?.channelHandle || null,
-                    userId: content.userId?._id || content.userId,
-                    status: content.status,
-                    tags: content.tags,
-                    category: content.category,
-                    artist: content.artist,
-                    album: content.album,
-                    audioCategory: content.audioCategory,
-                    postContent: content.postContent,
-                    recommendationScore: content.recommendationScore
-                };
-            })
-        );
+            return {
+                _id: content._id,
+                contentType: contentType,
+                title: content.title,
+                description: content.description,
+                duration: content.duration,
+                thumbnailUrl: thumbnailKey ? getCfUrl(thumbnailKey) : null,
+                imageUrl: content.imageKey ? getCfUrl(content.imageKey) : (thumbnailKey ? getCfUrl(thumbnailKey) : null),
+                hlsMasterUrl,
+                videoUrl,
+                audioUrl,
+                views: content.views,
+                likeCount: content.likeCount || content.likes?.length || 0,
+                commentCount,
+                createdAt: content.createdAt,
+                channelName: content.channelName || content.userId?.channelName || content.userId?.userName || 'Unknown',
+                channelPicture: content.userId?.channelPicture || null,
+                channelHandle: content.userId?.channelHandle || null,
+                userId: content.userId?._id || content.userId,
+                status: content.status,
+                tags: content.tags,
+                category: content.category,
+                artist: content.artist,
+                album: content.album,
+                audioCategory: content.audioCategory,
+                postContent: content.postContent,
+                recommendationScore: content.recommendationScore
+            };
+        });
 
         return {
             content: contentWithUrls,
             pagination: {
-                currentPage: page,
-                totalPages: Math.ceil(scoredContent.length / limit),
+                currentPage: pageNum,
+                totalPages: Math.ceil(scoredContent.length / limitNum),
                 totalItems: scoredContent.length,
-                hasNextPage: startIdx + limit < scoredContent.length
+                hasNextPage: startIdx + limitNum < scoredContent.length
             }
         };
     }

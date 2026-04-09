@@ -97,14 +97,39 @@ export class RecommendationEngine {
         return this.getRecommendations(user, allContent, [], options);
     }
 
-    /** Trending: high velocity in last 7 days */
+    /**
+     * Trending: progressive time-window fallbacks to ensure results.
+     * Tries 7d → 30d → 90d → all-time, stops when >= limit results found.
+     * Uses velocity + engagement for recent content, popularity + engagement for older.
+     */
     getTrendingVideos(videos, limit = 10) {
-        const weekAgo = new Date(Date.now() - 7 * 86400000);
-        return videos
-            .filter(v => new Date(v.createdAt) >= weekAgo)
-            .map(v => ({ ...v, _trend: this._velocityScore(v) + this._engagementScore(v) }))
-            .sort((a, b) => b._trend - a._trend)
-            .slice(0, limit);
+        if (!videos || videos.length === 0) return [];
+
+        const windows = [7, 30, 90, Infinity]; // days
+        for (const days of windows) {
+            const cutoff = days === Infinity
+                ? new Date(0)
+                : new Date(Date.now() - days * 86400000);
+            const candidates = videos
+                .filter(v => new Date(v.createdAt) >= cutoff)
+                .map(v => {
+                    // For wider time windows, weight popularity more since velocity is less meaningful
+                    const velocityW = days <= 7 ? 0.5 : days <= 30 ? 0.3 : 0.1;
+                    const engagementW = 0.4;
+                    const popularityW = 1 - velocityW - engagementW;
+                    const maxViews = Math.max(1, ...videos.map(c => c.views || 0));
+                    const trend = (this._velocityScore(v) * velocityW)
+                        + (this._engagementScore(v) * engagementW)
+                        + (this._viewPopularityScore(v, maxViews) * popularityW);
+                    return { ...v, _trend: trend };
+                })
+                .sort((a, b) => b._trend - a._trend)
+                .slice(0, limit);
+            if (candidates.length >= limit || days === Infinity) {
+                return candidates;
+            }
+        }
+        return [];
     }
 
     // ─────────────────────────────────────────────────────────────────────

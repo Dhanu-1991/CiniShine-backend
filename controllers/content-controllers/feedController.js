@@ -1,4 +1,4 @@
-﻿// controllers/content-controllers/feedController.js
+// controllers/content-controllers/feedController.js
 
 import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
@@ -20,6 +20,7 @@ const normalizeFeedItem = (c) => {
     let videoUrl = null;
     let hlsMasterUrl = null;
     let audioUrl = null;
+    const thumbnailKey = c.thumbnailKey || c.imageKey || null;
 
     if (contentType === 'video' || contentType === 'short') {
         hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
@@ -36,8 +37,8 @@ const normalizeFeedItem = (c) => {
         title: c.title,
         description: c.description,
         duration: c.duration,
-        thumbnailUrl: getCfUrl(c.thumbnailKey),
-        imageUrl: c.imageKey ? getCfUrl(c.imageKey) : null,
+        thumbnailUrl: thumbnailKey ? getCfUrl(thumbnailKey) : null,
+        imageUrl: c.imageKey ? getCfUrl(c.imageKey) : (thumbnailKey ? getCfUrl(thumbnailKey) : null),
         hlsMasterUrl,
         videoUrl,
         audioUrl,
@@ -77,7 +78,8 @@ export const getMixedFeed = async (req, res) => {
             seenIds = ''
         } = req.query;
 
-        const pageNum = parseInt(page);
+        const parsedPage = parseInt(page, 10);
+        const pageNum = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
         const isFirstPage = pageNum === 1;
         const maxPages = 10;
 
@@ -94,10 +96,16 @@ export const getMixedFeed = async (req, res) => {
             });
         }
 
-        const shortsLimitNum = parseInt(shortsLimit);
-        const audioLimitNum = parseInt(audioLimit);
-        const videosLimitNum = parseInt(videosLimit);
-        const postsLimitNum = parseInt(postsLimit);
+        const toSafeLimit = (value, fallback) => {
+            const parsed = parseInt(value, 10);
+            if (!Number.isFinite(parsed)) return fallback;
+            return Math.max(parsed, 0);
+        };
+
+        const shortsLimitNum = toSafeLimit(shortsLimit, 5);
+        const audioLimitNum = toSafeLimit(audioLimit, 5);
+        const videosLimitNum = toSafeLimit(videosLimit, 12);
+        const postsLimitNum = toSafeLimit(postsLimit, 1);
 
         // IDs the client already has — excludes them so backend won't return duplicates
         const excludeIds = seenIds ? seenIds.split(',').filter(Boolean) : [];
@@ -106,19 +114,45 @@ export const getMixedFeed = async (req, res) => {
         // watchHistoryEngine scores by full watch-history profile for auth users.
         // For guests it applies recency + popularity + engagement + jitter fallback.
         // This completely replaces the old views-only database sort.
+        const emptyResultForPage = (currentPage) => ({
+            content: [],
+            pagination: {
+                currentPage,
+                totalPages: 0,
+                totalItems: 0,
+                hasNextPage: false,
+            },
+        });
+
         const [shortsResult, videosResult, audioResult, postsResult] = await Promise.all([
-            watchHistoryEngine.getRecommendations(userId, 'short', {
-                page: 1, limit: shortsLimitNum, excludeIds
-            }),
-            watchHistoryEngine.getRecommendations(userId, 'video', {
-                page: pageNum, limit: videosLimitNum, excludeIds
-            }),
-            watchHistoryEngine.getRecommendations(userId, 'audio', {
-                page: 1, limit: audioLimitNum, excludeIds
-            }),
-            watchHistoryEngine.getRecommendations(userId, 'post', {
-                page: 1, limit: postsLimitNum, excludeIds
-            }),
+            shortsLimitNum > 0
+                ? watchHistoryEngine.getRecommendations(userId, 'short', {
+                    page: 1,
+                    limit: shortsLimitNum,
+                    excludeIds,
+                })
+                : Promise.resolve(emptyResultForPage(1)),
+            videosLimitNum > 0
+                ? watchHistoryEngine.getRecommendations(userId, 'video', {
+                    page: pageNum,
+                    limit: videosLimitNum,
+                    excludeIds,
+                })
+                : Promise.resolve(emptyResultForPage(pageNum)),
+            audioLimitNum > 0
+                ? watchHistoryEngine.getRecommendations(userId, 'audio', {
+                    page: 1,
+                    limit: audioLimitNum,
+                    excludeIds,
+                })
+                : Promise.resolve(emptyResultForPage(1)),
+            postsLimitNum > 0
+                ? watchHistoryEngine.getRecommendations(userId, 'post', {
+                    page: 1,
+                    limit: postsLimitNum,
+                    excludeIds,
+                })
+                : Promise.resolve(emptyResultForPage(1)),
         ]);
 
         // Engine already generates CloudFront URLs and normalises all fields
@@ -839,7 +873,6 @@ export const getCategoryTrending = async (req, res) => {
         const query = {
             status: 'completed',
             visibility: 'public',
-            createdAt: { $gte: new Date(Date.now() - 21 * 86400000) },
         };
 
         if (excludeIdSet.length > 0) {
@@ -855,18 +888,6 @@ export const getCategoryTrending = async (req, res) => {
             .limit(150)
             .populate('userId', 'userName channelName channelHandle channelPicture')
             .lean();
-
-        // Fallback: if the recent-window filter produced nothing, retry without recency cutoff.
-        if (candidates.length === 0) {
-            const relaxedQuery = { ...query };
-            delete relaxedQuery.createdAt;
-            candidates = await Content.find(relaxedQuery)
-                .select(trendingProjection)
-                .sort({ views: -1, createdAt: -1 })
-                .limit(150)
-                .populate('userId', 'userName channelName channelHandle channelPicture')
-                .lean();
-        }
 
         if (candidates.length === 0) {
             return res.json({ content: [] });

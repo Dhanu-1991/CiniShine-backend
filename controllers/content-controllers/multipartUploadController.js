@@ -29,7 +29,7 @@ const BUCKET = process.env.S3_BUCKET;
 
 // Chunk size: 10MB (minimum for S3 multipart is 5MB, except last part)
 const MIN_PART_SIZE = 10 * 1024 * 1024; // 10MB
-const TITLE_MAX_WORDS = 15;
+const TITLE_MAX_WORDS = 50;
 const DESCRIPTION_MAX_WORDS = 300;
 
 const countWords = (text = "") =>
