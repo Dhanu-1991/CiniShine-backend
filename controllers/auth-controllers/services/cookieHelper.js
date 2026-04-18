@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
  * Cookie-based auth helper utilities.
  *
  * Access token  → short-lived (15 min), httpOnly cookie
- * Refresh token → long-lived (7 days), httpOnly cookie
+ * Refresh token → long-lived (15 days), httpOnly cookie
  *
  * Cross-subdomain support: watchinit.com ↔ api.watchinit.com
  */
@@ -20,9 +20,10 @@ const getCookieDomain = () => {
 };
 
 const ACCESS_TOKEN_EXPIRY = "15m";
-const REFRESH_TOKEN_EXPIRY = "7d";
+const REFRESH_TOKEN_DAYS = 15;
+const REFRESH_TOKEN_EXPIRY = `${REFRESH_TOKEN_DAYS}d`;
 const ACCESS_COOKIE_MAX_AGE = 15 * 60 * 1000;        // 15 minutes
-const REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+const REFRESH_COOKIE_MAX_AGE = REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000; // 15 days
 
 /**
  * Base cookie options — environment-aware.
