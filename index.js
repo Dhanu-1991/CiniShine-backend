@@ -51,10 +51,15 @@ const corsOptions = {
     "http://127.0.0.1:5173",
     "http://localhost:5175",
     "http://127.0.0.1:5175",
+    "http://localhost",
+    "https://localhost",
+    "capacitor://localhost",
+    "app://localhost",
     "https://frontend-six-black-29.vercel.app",
     "https://watchinit.com",
     "https://admin.watchinit.com",
     "https://cineshine-private.vercel.app"
+
   ],
   credentials: true,
 };
