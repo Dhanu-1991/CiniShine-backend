@@ -31,7 +31,44 @@ const CF_PRIVATE_KEY = () => {
     // Handle escaped newlines in .env file
     return key.replace(/\\n/g, '\n');
 };
-const CF_COOKIE_DOMAIN = () => process.env.CLOUDFRONT_COOKIE_DOMAIN || CF_DOMAIN();
+
+const getSigningConfigIssues = () => {
+    const issues = [];
+
+    if (!CF_DOMAIN()) issues.push('CLOUDFRONT_DOMAIN');
+    if (!CF_KEY_PAIR_ID()) issues.push('CLOUDFRONT_KEY_PAIR_ID');
+
+    const privateKey = CF_PRIVATE_KEY();
+    if (!privateKey) {
+        issues.push('CLOUDFRONT_PRIVATE_KEY');
+    } else if (!privateKey.includes('BEGIN') || !privateKey.includes('PRIVATE KEY')) {
+        issues.push('CLOUDFRONT_PRIVATE_KEY_FORMAT');
+    }
+
+    return issues;
+};
+
+const assertSigningConfig = () => {
+    const issues = getSigningConfigIssues();
+    if (issues.length > 0) {
+        const error = new Error('CloudFront signing configuration is incomplete');
+        error.code = 'CF_SIGNING_CONFIG_MISSING';
+        error.issues = issues;
+        throw error;
+    }
+};
+
+const resolveCookieDomain = (req) => {
+    // Prefer explicit env override for production control.
+    if (process.env.CLOUDFRONT_COOKIE_DOMAIN) {
+        return process.env.CLOUDFRONT_COOKIE_DOMAIN;
+    }
+
+    // Fallback to the actual host that served this response so browsers accept Set-Cookie.
+    // This is useful when the endpoint is routed through a custom CF alias (for example media.example.com).
+    const host = req?.hostname;
+    return host || CF_DOMAIN();
+};
 
 // Cookie lifetime: 24 hours (renewed on each page load)
 const COOKIE_EXPIRY_SECONDS = 24 * 60 * 60;
@@ -101,6 +138,8 @@ export function getCfHlsMasterUrl(hlsMasterKey) {
  *   CloudFront-Key-Pair-Id
  */
 export function generateSignedCookies() {
+    assertSigningConfig();
+
     const expiry = new Date(Date.now() + COOKIE_EXPIRY_SECONDS * 1000);
 
     // Custom policy granting access to all resources under this distribution
@@ -140,16 +179,20 @@ export function generateSignedCookies() {
 export const issueCloudFrontCookies = (req, res) => {
     try {
         const { cookies, expiry } = generateSignedCookies();
+        const cookieDomain = resolveCookieDomain(req);
 
         // Common cookie options
         const cookieOpts = {
-            domain: CF_COOKIE_DOMAIN(),
             path: '/',
             httpOnly: true,
             secure: true,
             sameSite: 'None', // Required for cross-origin cookie
             expires: expiry
         };
+
+        if (cookieDomain) {
+            cookieOpts.domain = cookieDomain;
+        }
 
         // Set each CloudFront cookie
         res.cookie('CloudFront-Policy', cookies['CloudFront-Policy'], cookieOpts);
@@ -160,9 +203,21 @@ export const issueCloudFrontCookies = (req, res) => {
             success: true,
             message: 'CloudFront cookies set',
             expiresAt: expiry.toISOString(),
-            cfDomain: CF_DOMAIN()
+            cfDomain: CF_DOMAIN(),
+            cookieDomain,
         });
     } catch (error) {
+        if (error.code === 'CF_SIGNING_CONFIG_MISSING') {
+            console.warn('⚠️ CloudFront cookie signing disabled — missing config:', error.issues);
+            return res.status(200).json({
+                success: false,
+                disabled: true,
+                message: 'CloudFront cookie signing is not configured on the server',
+                cfDomain: CF_DOMAIN() || null,
+                missing: error.issues,
+            });
+        }
+
         console.error('❌ Error generating CloudFront cookies:', error);
         res.status(500).json({ error: 'Failed to generate CloudFront access cookies' });
     }
