@@ -48,7 +48,7 @@ import {
 const router = express.Router();
 
 // ── Feed & discovery (comes before :id routes to avoid conflicts) ──
-router.get('/feed', universalTokenVerifier, getCommunityFeed);
+router.get('/feed', optionalTokenVerifier, getCommunityFeed);
 router.get('/search', optionalTokenVerifier, searchCommunities);
 router.get('/joined', universalTokenVerifier, getJoinedCommunities);
 router.get('/unread-count', universalTokenVerifier, getCommunityUnreadCount);
