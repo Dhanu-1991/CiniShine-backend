@@ -9,6 +9,7 @@ import User from '../../models/user.model.js';
 import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
  * GET /admin/dashboard
@@ -460,7 +461,18 @@ export const listUsers = async (req, res) => {
             channelStatus
         } = req.query;
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+        const limitNumber = Math.max(parseInt(limit, 10) || 20, 1);
+        const skip = (pageNumber - 1) * limitNumber;
+
+        const sortFieldMap = {
+            createdAt: 'createdAt',
+            fans: 'fanCount',
+            watchtime: 'totalWatchTime',
+            removedContent: 'removedContentCount'
+        };
+        const normalizedSortBy = sortFieldMap[sortBy] ? sortBy : 'createdAt';
+        const sortDirection = sortOrder === 'asc' ? 1 : -1;
 
         // Build filter
         let filter = {};
@@ -480,30 +492,71 @@ export const listUsers = async (req, res) => {
             filter.channelBanned = { $ne: true };
         }
 
-        // Fetch users
-        const [users, total] = await Promise.all([
-            User.find(filter)
-                .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt subscriptions')
-                .sort({ createdAt: sortOrder === 'asc' ? 1 : -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-            User.countDocuments(filter)
+        // Fetch all filtered users first so sorting happens globally (not just inside a single page).
+        const users = await User.find(filter)
+            .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt')
+            .lean();
+
+        if (users.length === 0) {
+            return res.status(200).json({
+                success: true,
+                users: [],
+                pagination: {
+                    total: 0,
+                    page: pageNumber,
+                    limit: limitNumber,
+                    pages: 0
+                }
+            });
+        }
+
+        const userIds = users.map((user) => user._id);
+
+        const [fanAgg, contentAgg] = await Promise.all([
+            User.aggregate([
+                { $match: { subscriptions: { $in: userIds } } },
+                { $unwind: '$subscriptions' },
+                { $match: { subscriptions: { $in: userIds } } },
+                { $group: { _id: '$subscriptions', fanCount: { $sum: 1 } } }
+            ]),
+            Content.aggregate([
+                { $match: { userId: { $in: userIds } } },
+                {
+                    $group: {
+                        _id: '$userId',
+                        totalContent: { $sum: 1 },
+                        removedContentCount: {
+                            $sum: {
+                                $cond: [{ $in: ['$status', ['removed', 'hidden']] }, 1, 0]
+                            }
+                        },
+                        totalWatchTime: { $sum: { $ifNull: ['$totalWatchTime', 0] } }
+                    }
+                }
+            ])
         ]);
 
-        // Enrich each user with engagement data in parallel
-        const enrichedUsers = await Promise.all(users.map(async (user) => {
-            const [fanCount, totalContent, removedContentCount, watchHistoryAgg] = await Promise.all([
-                User.countDocuments({ subscriptions: user._id }),
-                Content.countDocuments({ userId: user._id }),
-                Content.countDocuments({ userId: user._id, status: { $in: ['removed', 'hidden'] } }),
-                WatchHistory.aggregate([
-                    { $match: { userId: user._id } },
-                    { $group: { _id: null, totalWatchTime: { $sum: '$watchTime' }, totalWatchCount: { $sum: '$watchCount' } } }
-                ])
-            ]);
+        const fanMap = new Map(
+            fanAgg.map((entry) => [entry._id.toString(), entry.fanCount || 0])
+        );
+        const contentMap = new Map(
+            contentAgg.map((entry) => [
+                entry._id.toString(),
+                {
+                    totalContent: entry.totalContent || 0,
+                    removedContentCount: entry.removedContentCount || 0,
+                    totalWatchTime: entry.totalWatchTime || 0
+                }
+            ])
+        );
 
-            const watchStats = watchHistoryAgg[0] || { totalWatchTime: 0, totalWatchCount: 0 };
+        const enrichedUsers = users.map((user) => {
+            const key = user._id.toString();
+            const contentStats = contentMap.get(key) || {
+                totalContent: 0,
+                removedContentCount: 0,
+                totalWatchTime: 0
+            };
 
             return {
                 _id: user._id,
@@ -511,37 +564,57 @@ export const listUsers = async (req, res) => {
                 contact: user.contact,
                 channelName: user.channelName,
                 channelHandle: user.channelHandle,
-                profilePicture: user.profilePicture || user.channelPicture,
+                profilePicture: getCfUrl(user.profilePicture || user.channelPicture),
                 fullName: user.fullName,
                 createdAt: user.createdAt,
                 lastLoginAt: user.lastLoginAt,
                 channelBanned: user.channelBanned || false,
                 channelBannedAt: user.channelBannedAt,
-                fanCount,
-                totalContent,
-                removedContentCount,
-                totalWatchTime: watchStats.totalWatchTime,
-                totalWatchCount: watchStats.totalWatchCount,
+                fanCount: fanMap.get(key) || 0,
+                totalContent: contentStats.totalContent,
+                removedContentCount: contentStats.removedContentCount,
+                totalWatchTime: contentStats.totalWatchTime,
+                totalWatchCount: 0,
             };
-        }));
+        });
 
-        // Sort by computed fields if needed
-        if (sortBy === 'fans') {
-            enrichedUsers.sort((a, b) => sortOrder === 'asc' ? a.fanCount - b.fanCount : b.fanCount - a.fanCount);
-        } else if (sortBy === 'watchtime') {
-            enrichedUsers.sort((a, b) => sortOrder === 'asc' ? a.totalWatchTime - b.totalWatchTime : b.totalWatchTime - a.totalWatchTime);
-        } else if (sortBy === 'removedContent') {
-            enrichedUsers.sort((a, b) => sortOrder === 'asc' ? a.removedContentCount - b.removedContentCount : b.removedContentCount - a.removedContentCount);
-        }
+        const primarySortField = sortFieldMap[normalizedSortBy];
+        const getSortValue = (user) => {
+            if (primarySortField === 'createdAt') {
+                return user.createdAt ? new Date(user.createdAt).getTime() : 0;
+            }
+            return Number(user[primarySortField] || 0);
+        };
+
+        enrichedUsers.sort((a, b) => {
+            const aValue = getSortValue(a);
+            const bValue = getSortValue(b);
+
+            if (aValue !== bValue) {
+                return sortDirection === 1 ? aValue - bValue : bValue - aValue;
+            }
+
+            // Stable fallback sort when the primary value is equal.
+            const aCreated = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const bCreated = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            if (aCreated !== bCreated) {
+                return bCreated - aCreated;
+            }
+
+            return a._id.toString().localeCompare(b._id.toString());
+        });
+
+        const total = enrichedUsers.length;
+        const paginatedUsers = enrichedUsers.slice(skip, skip + limitNumber);
 
         return res.status(200).json({
             success: true,
-            users: enrichedUsers,
+            users: paginatedUsers,
             pagination: {
                 total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                pages: Math.ceil(total / parseInt(limit))
+                page: pageNumber,
+                limit: limitNumber,
+                pages: Math.ceil(total / limitNumber)
             }
         });
     } catch (error) {

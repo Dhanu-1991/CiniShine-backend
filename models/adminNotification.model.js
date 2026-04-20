@@ -9,7 +9,9 @@ const AdminNotificationSchema = new mongoose.Schema({
         enum: [
             'account_locked', 'new_signup_pending', 'forgot_password_request',
             'content_removed', 'content_restored', 'system_alert',
-            'report_new', 'admin_removed'
+            'report_new', 'admin_removed',
+            'channel_banned', 'channel_unbanned', 'ban_request',
+            'admin_unlocked', 'forgot_password_activation'
         ],
         required: true
     },

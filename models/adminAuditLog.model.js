@@ -20,7 +20,7 @@ const AdminAuditLogSchema = new mongoose.Schema({
             'report_review', 'report_resolve', 'report_dismiss', 'report_takedown',
             'admin_remove', 'admin_block', 'admin_unblock', 'admin_unlock',
             'channel_ban', 'channel_unban', 'admin_message_sent',
-            'ban_request', 'stats_update',
+            'ban_request', 'stats_update', 'email_sent',
             'otp_sent', 'otp_verified', 'otp_failed',
             'other'
         ]

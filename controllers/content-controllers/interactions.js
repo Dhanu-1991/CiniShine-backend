@@ -18,9 +18,10 @@
  *    - <10s video  → 2s watch required
  *    - 10-60s video → 5s watch required
  *    - >60s video  → 15s watch required
- * 6. Hard de-duplication (max one counted view per user+video):
- *    - Existing user.viewHistory entry blocks recount
- *    - ContentView unique upsert is the race-safe final gate
+ * 6. Cooldown-based de-duplication per user+video:
+ *    - user.viewHistory.lastViewedAt is used as the per-video gate
+ *    - next counted view requires ~5× video duration cooldown (min 30s)
+ *    - ContentView upsert is analytics-only and does NOT block view counting
  * 7. When a view IS counted: video.views++, then averageWatchTime = totalWatchTime / views
  * 8. totalWatchTime ALWAYS accumulates (even when view isn't counted)
  *
@@ -42,7 +43,6 @@ import ContentView from "../../models/contentView.model.js";
 
 // In-memory cache for rate limiting (resets on server restart)
 const watchRateLimit = new Map();
-const viewHistoryRateLimit = new Map();
 
 /**
  * Duration bracket configuration — every permutation covered.
@@ -62,12 +62,12 @@ const viewHistoryRateLimit = new Map();
  * | Unknown (0)    | 5s            | 10000ms  | 5s        | 3600s           |
  */
 const DURATION_BRACKETS = [
-    { maxDuration: 5,    viewThreshold: 1,  cooldownMs: 2000,  minWatch: 1, maxWatchFallback: 7.5 },
-    { maxDuration: 10,   viewThreshold: 2,  cooldownMs: 3000,  minWatch: 1, maxWatchFallback: 15 },
-    { maxDuration: 30,   viewThreshold: 5,  cooldownMs: 5000,  minWatch: 5, maxWatchFallback: 45 },
-    { maxDuration: 60,   viewThreshold: 5,  cooldownMs: 5000,  minWatch: 5, maxWatchFallback: 90 },
-    { maxDuration: 300,  viewThreshold: 10, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 450 },
-    { maxDuration: 600,  viewThreshold: 15, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 900 },
+    { maxDuration: 5, viewThreshold: 1, cooldownMs: 2000, minWatch: 1, maxWatchFallback: 7.5 },
+    { maxDuration: 10, viewThreshold: 2, cooldownMs: 3000, minWatch: 1, maxWatchFallback: 15 },
+    { maxDuration: 30, viewThreshold: 5, cooldownMs: 5000, minWatch: 5, maxWatchFallback: 45 },
+    { maxDuration: 60, viewThreshold: 5, cooldownMs: 5000, minWatch: 5, maxWatchFallback: 90 },
+    { maxDuration: 300, viewThreshold: 10, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 450 },
+    { maxDuration: 600, viewThreshold: 15, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 900 },
     { maxDuration: 1800, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: 2700 },
     { maxDuration: 3600, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: 5400 },
     { maxDuration: Infinity, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: null },
@@ -104,6 +104,14 @@ const getBracket = (durationSeconds = 0) => {
 const getMinWatchUpdateGapMs = (durationSeconds = 0) => getBracket(durationSeconds).cooldownMs;
 
 const getViewThresholdSeconds = (durationSeconds = 0) => getBracket(durationSeconds).viewThreshold;
+
+const getViewRecountCooldownMs = (durationSeconds = 0) => {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+        return 5 * 60 * 1000;
+    }
+
+    return Math.max(durationSeconds * 5 * 1000, 30 * 1000);
+};
 
 const buildViewBuckets = (now = new Date()) => {
     const year = now.getFullYear();
@@ -447,98 +455,86 @@ export const updateWatchTime = async (req, res) => {
         console.log('📊 View counting check:', { watchTimeSeconds, threshold, duration });
 
         if (watchTimeSeconds >= threshold) {
-            console.log('✅ Threshold met, checking user and last view...');
+            console.log('✅ Threshold met, checking user and cooldown...');
             const user = await User.findById(userId);
             if (user) {
-                console.log('✅ User found, checking last view entry...');
+                console.log('✅ User found, checking per-video cooldown...');
                 if (!Array.isArray(user.viewHistory)) {
                     user.viewHistory = [];
                 }
 
                 const lastViewEntry = user.viewHistory.find(v => v.videoId.toString() === videoId);
-                let canCountView = true;
                 const requestMeta = {
                     lastViewedAt: new Date(now),
                     ipAddress: req.ip || req.connection.remoteAddress,
                     userAgent: req.get('User-Agent')
                 };
+                const viewCooldownMs = getViewRecountCooldownMs(duration);
+                const lastViewedAtMs = lastViewEntry?.lastViewedAt
+                    ? new Date(lastViewEntry.lastViewedAt).getTime()
+                    : 0;
+                const hasValidLastViewedAt = Number.isFinite(lastViewedAtMs) && lastViewedAtMs > 0;
+                const timeSinceLastViewMs = hasValidLastViewedAt ? now - lastViewedAtMs : Infinity;
+                const canCountView = !lastViewEntry || timeSinceLastViewMs >= viewCooldownMs;
+
+                if (canCountView) {
+                    console.log('✅ Counting view...');
+
+                    const safeViews = Number.isFinite(Number(video.views))
+                        ? Number(video.views)
+                        : 0;
+                    video.views = safeViews + 1;
+                    video.averageWatchTime = video.views > 0
+                        ? video.totalWatchTime / video.views
+                        : 0;
+
+                    await video.save();
+
+                    console.log('✅ View counted successfully');
+                    console.log('📊 View stats:', {
+                        newViews: video.views,
+                        newAverageWatchTime: video.averageWatchTime,
+                        videoId,
+                        userId,
+                        viewCooldownMs,
+                        timeSinceLastViewMs: hasValidLastViewedAt ? timeSinceLastViewMs : null,
+                    });
+                } else {
+                    const remainingCooldownMs = Math.max(0, viewCooldownMs - timeSinceLastViewMs);
+                    console.log('⚠️ View not counted - cooldown active for same user+video', {
+                        videoId,
+                        userId,
+                        viewCooldownMs,
+                        timeSinceLastViewMs,
+                        remainingCooldownMs,
+                    });
+                }
+
+                // Keep immutable unique-viewer analytics decoupled from counted views.
+                try {
+                    await ensureUniqueContentView({
+                        contentId: videoId,
+                        userId,
+                        now: new Date(now),
+                    });
+                } catch (contentViewError) {
+                    console.error('⚠️ ContentView upsert failed (non-blocking):', contentViewError.message);
+                }
 
                 if (lastViewEntry) {
-                    // Hard boundary: once a user has a viewHistory record for the same video,
-                    // never increment view again.
-                    canCountView = false;
-                    console.log('⚠️ View not counted - existing user viewHistory entry (one-view-per-user policy)');
-
-                    // Keep metadata fresh without affecting view count.
                     lastViewEntry.lastViewedAt = requestMeta.lastViewedAt;
                     lastViewEntry.ipAddress = requestMeta.ipAddress;
                     lastViewEntry.userAgent = requestMeta.userAgent;
-                    await user.save();
-                }
-
-                if (canCountView) {
-                    // Race-safe final guard: only first upsert can count as a view.
-                    let uniqueViewCreated = false;
-                    try {
-                        uniqueViewCreated = await ensureUniqueContentView({
-                            contentId: videoId,
-                            userId,
-                            now: new Date(now),
-                        });
-                    } catch (contentViewError) {
-                        console.error('⚠️ ContentView upsert failed:', contentViewError.message);
-                        uniqueViewCreated = false;
-                    }
-
-                    if (uniqueViewCreated) {
-                        console.log('✅ Counting view...');
-
-                        const safeViews = Number.isFinite(Number(video.views))
-                            ? Number(video.views)
-                            : 0;
-                        video.views = safeViews + 1;
-                        video.averageWatchTime = video.views > 0
-                            ? video.totalWatchTime / video.views
-                            : 0;
-
-                        user.viewHistory.push({
-                            videoId: videoId,
-                            lastViewedAt: requestMeta.lastViewedAt,
-                            ipAddress: requestMeta.ipAddress,
-                            userAgent: requestMeta.userAgent
-                        });
-
-                        await user.save();
-                        await video.save();
-
-                        console.log('✅ View counted successfully');
-                        console.log('📊 View stats:', {
-                            newViews: video.views,
-                            newAverageWatchTime: video.averageWatchTime,
-                            videoId,
-                            userId
-                        });
-                    } else {
-                        // Backfill viewHistory when unique view already exists (legacy data / cleared history)
-                        // so future requests short-circuit without another ContentView upsert attempt.
-                        const hasViewHistoryEntry = user.viewHistory.some(
-                            (entry) => entry?.videoId?.toString() === videoId,
-                        );
-                        if (!hasViewHistoryEntry) {
-                            user.viewHistory.push({
-                                videoId: videoId,
-                                lastViewedAt: requestMeta.lastViewedAt,
-                                ipAddress: requestMeta.ipAddress,
-                                userAgent: requestMeta.userAgent,
-                            });
-                            await user.save();
-                        }
-
-                        console.log('⚠️ View not counted - unique ContentView already exists for this user+video');
-                    }
                 } else {
-                    console.log('⚠️ View not counted due to one-view boundary conditions');
+                    user.viewHistory.push({
+                        videoId: videoId,
+                        lastViewedAt: requestMeta.lastViewedAt,
+                        ipAddress: requestMeta.ipAddress,
+                        userAgent: requestMeta.userAgent,
+                    });
                 }
+
+                await user.save();
             } else {
                 console.log('❌ User not found for view counting');
             }
