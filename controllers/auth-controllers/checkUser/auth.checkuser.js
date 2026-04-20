@@ -4,7 +4,9 @@ const checkUser = async (req, res) => {
     try {
         const { contact } = req.body;
         
-        const existingUser = await User.findOne({ contact });
+        // Case-insensitive contact lookup
+        const escapedContact = contact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const existingUser = await User.findOne({ contact: { $regex: new RegExp(`^${escapedContact}$`, 'i') } });
         if (existingUser) {
             return res.status(409).json({ exists: true, message: "User already exists" });
         }

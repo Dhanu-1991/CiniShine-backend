@@ -389,7 +389,8 @@ export const unifiedSearch = async (req, res) => {
             const daysSince = (Date.now() - new Date(item.createdAt)) / 86400000;
             score += Math.max(0, 15 - daysSince * 0.5);
             score += Math.min((item.views || 0) / 1000, 12);
-            // Creator follower count boost — popular creators' content ranks higher
+            // Creator follower count boost — uses populated subscriptions as a rough proxy for scoring only.
+            // Actual fan count is computed separately for display (not from this field).
             const creatorFollowers = item.userId?.subscriptions?.length || 0;
             score += Math.min(creatorFollowers / 100, 10);
             return score;
@@ -408,7 +409,8 @@ export const unifiedSearch = async (req, res) => {
                 score += calculateTextScore(searchWords, userName, 90, 40, 25);
                 score += calculateTextScore(searchWords, bio, 30, 10, 5);
             }
-            // sub count boost
+            // sub count boost — uses subscriptions.length as scoring proxy
+            // (actual fan count computed separately in scoredChannels)
             const subs = (user.subscriptions?.length || 0);
             score += Math.min(subs / 100, 15);
             return score;
@@ -521,9 +523,15 @@ export const unifiedSearch = async (req, res) => {
         // Sort each bucket by score
         Object.keys(buckets).forEach(k => buckets[k].sort((a, b) => b.searchScore - a.searchScore));
 
-        // Score channels
+        // Compute actual follower counts for all channels in parallel
+        // subscriberCount = number of users who have this channel in their subscriptions array
+        const channelFollowerCounts = await Promise.all(
+            channelDocs.map(user => User.countDocuments({ subscriptions: user._id }))
+        );
+
+        // Score channels with actual follower counts
         const scoredChannels = channelDocs
-            .map(user => {
+            .map((user, idx) => {
                 const score = scoreChannel(user);
                 return score > 0 ? {
                     _id: user._id,
@@ -533,7 +541,7 @@ export const unifiedSearch = async (req, res) => {
                     channelHandle: user.channelHandle,
                     channelPicture: user.channelPicture,
                     channelDescription: user.channelDescription || user.bio,
-                    subscriberCount: user.subscriptions?.length || 0,
+                    subscriberCount: channelFollowerCounts[idx] || 0,
                     createdAt: user.createdAt,
                     searchScore: score,
                 } : null;

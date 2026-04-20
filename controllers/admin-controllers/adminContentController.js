@@ -11,6 +11,8 @@ import CommunityMember from '../../models/communityMember.model.js';
 import Comment from '../../models/comment.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
+import { getCfUrl } from '../../config/cloudfront.js';
+import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 const ARCHIVE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -160,6 +162,18 @@ export const removeContent = async (req, res) => {
             severity: 'info',
             metadata: { content_id: content._id, admin_id: req.admin._id }
         });
+
+        // Auto-email creator about content removal (non-blocking)
+        const creator = await User.findById(content.userId).select('userName contact').lean();
+        if (creator?.contact && creator.contact.includes('@')) {
+            sendAdminEmail('contentRemoved', creator.contact, {
+                creatorName: creator.userName || 'Creator',
+                contentTitle: content.title || 'Untitled',
+                contentType: content.contentType || 'content',
+                reason: reason || '',
+                adminName: req.admin.name || 'Admin'
+            }).catch(err => console.error('[AdminEmail] Failed to send content removal email:', err.message));
+        }
 
         return res.status(200).json({
             success: true,
@@ -488,8 +502,8 @@ export const getCreatorAnalytics = async (req, res) => {
                 channelName: creator.channelName,
                 channelHandle: creator.channelHandle,
                 contact: creator.contact,
-                profilePicture: creator.profilePicture,
-                channelPicture: creator.channelPicture
+                profilePicture: getCfUrl(creator.profilePicture || creator.channelPicture),
+                channelPicture: getCfUrl(creator.channelPicture || creator.profilePicture)
             },
             analytics: {
                 ...(stats || { totalContent: 0, totalViews: 0, totalLikes: 0, totalDislikes: 0, totalShares: 0, totalWatchTime: 0, avgWatchTime: 0 }),
@@ -547,7 +561,11 @@ export const searchCreators = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            creators: users,
+            creators: users.map(u => {
+                const obj = u.toObject ? u.toObject() : u;
+                obj.profilePicture = getCfUrl(obj.profilePicture || obj.channelPicture);
+                return obj;
+            }),
             pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) }
         });
     } catch (error) {
@@ -582,9 +600,14 @@ export const getCreatorProfile = async (req, res) => {
                 .lean()
         ]);
 
+        // Transform profile picture through CloudFront
+        const creatorObj = creator.toObject ? creator.toObject() : { ...creator._doc || creator };
+        creatorObj.profilePicture = getCfUrl(creatorObj.profilePicture || creatorObj.channelPicture);
+        creatorObj.channelPicture = getCfUrl(creatorObj.channelPicture || creatorObj.profilePicture);
+
         return res.status(200).json({
             success: true,
-            creator,
+            creator: creatorObj,
             subscriberCount,
             contentCount,
             communities: communities.map(cm => cm.communityId).filter(Boolean)
@@ -699,6 +722,15 @@ export const banChannel = async (req, res) => {
             metadata: { user_id: id, admin_id: req.admin._id }
         });
 
+        // Auto-email creator about ban (non-blocking)
+        if (user.contact && user.contact.includes('@')) {
+            sendAdminEmail('channelBanned', user.contact, {
+                creatorName: user.channelName || user.userName || 'Creator',
+                reason: reason || '',
+                adminName: req.admin.name || 'Admin'
+            }).catch(err => console.error('[AdminEmail] Failed to send ban email:', err.message));
+        }
+
         return res.status(200).json({
             success: true,
             message: 'Channel banned successfully. All content hidden.'
@@ -746,6 +778,14 @@ export const unbanChannel = async (req, res) => {
             user_agent: req.headers['user-agent'] || '',
             note: 'Channel unbanned'
         });
+
+        // Auto-email creator about unban (non-blocking)
+        if (user.contact && user.contact.includes('@')) {
+            sendAdminEmail('channelUnbanned', user.contact, {
+                creatorName: user.channelName || user.userName || 'Creator',
+                adminName: req.admin.name || 'Admin'
+            }).catch(err => console.error('[AdminEmail] Failed to send unban email:', err.message));
+        }
 
         return res.status(200).json({
             success: true,

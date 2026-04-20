@@ -441,3 +441,173 @@ export const markNotificationRead = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
+
+/**
+ * GET /admin/users
+ * List all users with sorting, filtering, and engagement data.
+ * Query params:
+ *   page, limit, sortBy (createdAt | fans | watchtime | removedContent), sortOrder (asc | desc)
+ *   search (username/email/handle search), channelStatus (active | banned)
+ */
+export const listUsers = async (req, res) => {
+    try {
+        const {
+            page = 1,
+            limit = 20,
+            sortBy = 'createdAt',
+            sortOrder = 'desc',
+            search,
+            channelStatus
+        } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        // Build filter
+        let filter = {};
+        if (search) {
+            const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            filter.$or = [
+                { userName: regex },
+                { contact: regex },
+                { channelHandle: regex },
+                { channelName: regex },
+                { fullName: regex }
+            ];
+        }
+        if (channelStatus === 'banned') {
+            filter.channelBanned = true;
+        } else if (channelStatus === 'active') {
+            filter.channelBanned = { $ne: true };
+        }
+
+        // Fetch users
+        const [users, total] = await Promise.all([
+            User.find(filter)
+                .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt subscriptions')
+                .sort({ createdAt: sortOrder === 'asc' ? 1 : -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
+            User.countDocuments(filter)
+        ]);
+
+        // Enrich each user with engagement data in parallel
+        const enrichedUsers = await Promise.all(users.map(async (user) => {
+            const [fanCount, totalContent, removedContentCount, watchHistoryAgg] = await Promise.all([
+                User.countDocuments({ subscriptions: user._id }),
+                Content.countDocuments({ userId: user._id }),
+                Content.countDocuments({ userId: user._id, status: { $in: ['removed', 'hidden'] } }),
+                WatchHistory.aggregate([
+                    { $match: { userId: user._id } },
+                    { $group: { _id: null, totalWatchTime: { $sum: '$watchTime' }, totalWatchCount: { $sum: '$watchCount' } } }
+                ])
+            ]);
+
+            const watchStats = watchHistoryAgg[0] || { totalWatchTime: 0, totalWatchCount: 0 };
+
+            return {
+                _id: user._id,
+                userName: user.userName,
+                contact: user.contact,
+                channelName: user.channelName,
+                channelHandle: user.channelHandle,
+                profilePicture: user.profilePicture || user.channelPicture,
+                fullName: user.fullName,
+                createdAt: user.createdAt,
+                lastLoginAt: user.lastLoginAt,
+                channelBanned: user.channelBanned || false,
+                channelBannedAt: user.channelBannedAt,
+                fanCount,
+                totalContent,
+                removedContentCount,
+                totalWatchTime: watchStats.totalWatchTime,
+                totalWatchCount: watchStats.totalWatchCount,
+            };
+        }));
+
+        // Sort by computed fields if needed
+        if (sortBy === 'fans') {
+            enrichedUsers.sort((a, b) => sortOrder === 'asc' ? a.fanCount - b.fanCount : b.fanCount - a.fanCount);
+        } else if (sortBy === 'watchtime') {
+            enrichedUsers.sort((a, b) => sortOrder === 'asc' ? a.totalWatchTime - b.totalWatchTime : b.totalWatchTime - a.totalWatchTime);
+        } else if (sortBy === 'removedContent') {
+            enrichedUsers.sort((a, b) => sortOrder === 'asc' ? a.removedContentCount - b.removedContentCount : b.removedContentCount - a.removedContentCount);
+        }
+
+        return res.status(200).json({
+            success: true,
+            users: enrichedUsers,
+            pagination: {
+                total,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                pages: Math.ceil(total / parseInt(limit))
+            }
+        });
+    } catch (error) {
+        console.error('List users error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/send-email
+ * Send a free-form or templated email to a creator.
+ * Body: { creatorId, template, subject, body, reason }
+ */
+export const adminSendEmailHandler = async (req, res) => {
+    try {
+        const { creatorId, template, subject, body, reason } = req.body;
+
+        if (!creatorId) {
+            return res.status(400).json({ success: false, message: 'creatorId is required' });
+        }
+
+        const user = await User.findById(creatorId).select('userName contact channelName').lean();
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (!user.contact || !user.contact.includes('@')) {
+            return res.status(400).json({ success: false, message: 'User does not have an email address' });
+        }
+
+        const { sendAdminEmail, sendCustomEmail } = await import('../../services/adminEmailService.js');
+        const creatorName = user.channelName || user.userName || 'Creator';
+        const adminName = req.admin.name || 'Admin';
+
+        let sent = false;
+        if (template && template !== 'custom') {
+            sent = await sendAdminEmail(template, user.contact, {
+                creatorName, reason: reason || body || '',
+                warningMessage: body || reason || '',
+                adminName, contentTitle: '', contentType: '',
+                subject, body: body || '',
+            });
+        } else {
+            if (!subject || !body) {
+                return res.status(400).json({ success: false, message: 'Subject and body are required for custom emails' });
+            }
+            sent = await sendCustomEmail(user.contact, subject, body, creatorName, adminName);
+        }
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'email_sent',
+            target_type: 'user',
+            target_id: creatorId,
+            ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '',
+            user_agent: req.headers['user-agent'] || '',
+            note: `Email "${template || 'custom'}" sent to ${user.contact}${subject ? ` — Subject: ${subject}` : ''}`
+        });
+
+        return res.status(200).json({
+            success: true, sent,
+            message: sent ? 'Email sent successfully' : 'Email sending failed (check email configuration)'
+        });
+    } catch (error) {
+        console.error('Send email error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+

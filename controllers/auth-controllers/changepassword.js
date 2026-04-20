@@ -13,7 +13,9 @@ const changePassword = async (req, res, next) => {
         if (!contact || !newPassword) {
             return res.status(400).json({ message: 'Contact and new password are required' });
         }
-        const user = await User.findOne({ contact });
+        // Case-insensitive contact lookup
+        const escapedContact = contact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const user = await User.findOne({ contact: { $regex: new RegExp(`^${escapedContact}$`, 'i') } });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }

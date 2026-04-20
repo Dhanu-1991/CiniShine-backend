@@ -8,8 +8,9 @@ const signIn = async (req, res, next) => {
   try {
     const { contact, password } = req.body;
 
-    // 1. Check if user exists
-    const user = await User.findOne({ contact });
+    // Case-insensitive contact lookup — escape regex special chars for safety
+    const escapedContact = contact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const user = await User.findOne({ contact: { $regex: new RegExp(`^${escapedContact}$`, 'i') } });
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });
     }

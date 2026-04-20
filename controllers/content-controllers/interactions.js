@@ -44,18 +44,66 @@ import ContentView from "../../models/contentView.model.js";
 const watchRateLimit = new Map();
 const viewHistoryRateLimit = new Map();
 
-const getMinWatchUpdateGapMs = (durationSeconds = 0) => {
-    if (durationSeconds > 600) return 15000;
-    if (durationSeconds >= 60) return 10000;
-    if (durationSeconds >= 10) return 5000;
-    return 3000;
+/**
+ * Duration bracket configuration — every permutation covered.
+ * Each bracket defines: { maxDuration, viewThreshold, cooldownMs, minWatch, maxWatchFactor }
+ * 
+ * | Duration       | View Threshold | Cooldown | Min Watch | Max Watch       |
+ * |----------------|---------------|----------|-----------|-----------------|
+ * | 0–5s           | 1s            | 2000ms   | 1s        | 1.5× or 7.5s    |
+ * | 5–10s          | 2s            | 3000ms   | 1s        | 1.5× or 15s     |
+ * | 10–30s         | 5s            | 5000ms   | 5s        | 1.5× or 45s     |
+ * | 30–60s         | 5s            | 5000ms   | 5s        | 1.5× or 90s     |
+ * | 1–5min         | 10s           | 10000ms  | 5s        | 1.5× or 450s    |
+ * | 5–10min        | 15s           | 10000ms  | 5s        | 1.5× or 900s    |
+ * | 10–30min       | 30s           | 15000ms  | 5s        | 1.5× or 2700s   |
+ * | 30–60min       | 30s           | 15000ms  | 5s        | 1.5× or 5400s   |
+ * | 60min+         | 30s           | 15000ms  | 5s        | 1.5× dur        |
+ * | Unknown (0)    | 5s            | 10000ms  | 5s        | 3600s           |
+ */
+const DURATION_BRACKETS = [
+    { maxDuration: 5,    viewThreshold: 1,  cooldownMs: 2000,  minWatch: 1, maxWatchFallback: 7.5 },
+    { maxDuration: 10,   viewThreshold: 2,  cooldownMs: 3000,  minWatch: 1, maxWatchFallback: 15 },
+    { maxDuration: 30,   viewThreshold: 5,  cooldownMs: 5000,  minWatch: 5, maxWatchFallback: 45 },
+    { maxDuration: 60,   viewThreshold: 5,  cooldownMs: 5000,  minWatch: 5, maxWatchFallback: 90 },
+    { maxDuration: 300,  viewThreshold: 10, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 450 },
+    { maxDuration: 600,  viewThreshold: 15, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 900 },
+    { maxDuration: 1800, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: 2700 },
+    { maxDuration: 3600, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: 5400 },
+    { maxDuration: Infinity, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: null },
+];
+
+// Default bracket for unknown/zero duration
+const UNKNOWN_DURATION_BRACKET = { viewThreshold: 5, cooldownMs: 10000, minWatch: 5, maxWatch: 3600 };
+
+/**
+ * Get the full bracket config for a given video duration.
+ * @param {number} durationSeconds — video duration in seconds (0 = unknown)
+ * @returns {{ viewThreshold: number, cooldownMs: number, minWatch: number, maxWatch: number }}
+ */
+const getBracket = (durationSeconds = 0) => {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+        return UNKNOWN_DURATION_BRACKET;
+    }
+    for (const b of DURATION_BRACKETS) {
+        if (durationSeconds <= b.maxDuration) {
+            return {
+                viewThreshold: b.viewThreshold,
+                cooldownMs: b.cooldownMs,
+                minWatch: b.minWatch,
+                maxWatch: b.maxWatchFallback !== null
+                    ? Math.max(b.maxWatchFallback, durationSeconds * 1.5)
+                    : durationSeconds * 1.5,
+            };
+        }
+    }
+    // Shouldn't reach here, but safe fallback
+    return UNKNOWN_DURATION_BRACKET;
 };
 
-const getViewThresholdSeconds = (durationSeconds = 0) => {
-    if (durationSeconds < 10) return 2;
-    if (durationSeconds <= 60) return 5;
-    return 15;
-};
+const getMinWatchUpdateGapMs = (durationSeconds = 0) => getBracket(durationSeconds).cooldownMs;
+
+const getViewThresholdSeconds = (durationSeconds = 0) => getBracket(durationSeconds).viewThreshold;
 
 const buildViewBuckets = (now = new Date()) => {
     const year = now.getFullYear();
@@ -327,10 +375,12 @@ export const updateWatchTime = async (req, res) => {
         const duration = Number.isFinite(parsedDuration) && parsedDuration > 0
             ? parsedDuration
             : 0;
-        const MIN_WATCH_TIME = duration > 0 && duration < 10 ? 1 : 5; // 1s for <10s videos, 5s otherwise
-        const MAX_WATCH_TIME = duration > 0 ? duration * 1.5 : 3600; // Max 1.5x video duration or 1 hour
+        // Use bracket system for all constraints — every duration range covered
+        const bracket = getBracket(duration);
+        const MIN_WATCH_TIME = bracket.minWatch;
+        const MAX_WATCH_TIME = bracket.maxWatch;
 
-        console.log('📊 Constraints:', { MIN_WATCH_TIME, MAX_WATCH_TIME, videoDuration: duration });
+        console.log('📊 Constraints (bracket):', { MIN_WATCH_TIME, MAX_WATCH_TIME, videoDuration: duration, viewThreshold: bracket.viewThreshold, cooldownMs: bracket.cooldownMs });
 
         // Skip only if watch time is below minimum or above maximum
         if (watchTimeSeconds < MIN_WATCH_TIME ||
