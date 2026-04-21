@@ -443,6 +443,18 @@ export const markNotificationRead = async (req, res) => {
     }
 };
 
+const resolveJoinedAt = (user) => {
+    if (user?.createdAt) {
+        return user.createdAt;
+    }
+
+    if (user?._id && typeof user._id.getTimestamp === 'function') {
+        return user._id.getTimestamp();
+    }
+
+    return null;
+};
+
 /**
  * GET /admin/users
  * List all users with sorting, filtering, and engagement data.
@@ -557,6 +569,7 @@ export const listUsers = async (req, res) => {
                 removedContentCount: 0,
                 totalWatchTime: 0
             };
+            const joinedAt = resolveJoinedAt(user);
 
             return {
                 _id: user._id,
@@ -566,7 +579,7 @@ export const listUsers = async (req, res) => {
                 channelHandle: user.channelHandle,
                 profilePicture: getCfUrl(user.profilePicture || user.channelPicture),
                 fullName: user.fullName,
-                createdAt: user.createdAt,
+                createdAt: joinedAt,
                 lastLoginAt: user.lastLoginAt,
                 channelBanned: user.channelBanned || false,
                 channelBannedAt: user.channelBannedAt,
