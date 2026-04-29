@@ -47,7 +47,33 @@ const CommunityMemberSchema = new mongoose.Schema({
         trim: true,
         maxlength: 500
     },
-    banExpiresAt: Date  // For temporary bans (null = permanent)
+    banExpiresAt: Date,  // For temporary bans (null = permanent)
+
+    // Muting (temporary posting restriction)
+    mutedUntil: {
+        type: Date,
+        default: null
+    },
+    mutedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+    },
+    mutedReason: {
+        type: String,
+        trim: true,
+        maxlength: 500,
+        default: null
+    },
+
+    // Warnings log (rule-based)
+    warnings: [{
+        reason: { type: String, maxlength: 500 },
+        ruleIndex: { type: Number, default: null },
+        ruleTitle: { type: String, default: null },
+        issuedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        issuedAt: { type: Date, default: Date.now }
+    }]
 }, {
     timestamps: true
 });

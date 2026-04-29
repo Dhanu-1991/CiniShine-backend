@@ -1,154 +1,77 @@
 /**
  * interactions.js — VIDEO engagement & watch time tracking
- * 
- * ═══════════════════════════════════════════════════════════
- * HOW VIEWS ARE COUNTED (for VIDEOS only — shorts/audio/posts use sharedContentController.js):
- * ═══════════════════════════════════════════════════════════
- * 1. Frontend (WatchPage.jsx) accumulates watch time in ms via play/pause events.
- * 2. Watch time is sent to POST /api/v2/video/:id/watch-time with duration-based cadence and on page leave.
- * 3. Backend converts ms → seconds, then applies constraints:
- *    - MIN_WATCH_TIME: dynamic — 1s for videos <10s, 5s otherwise
- *    - MAX_WATCH_TIME: 1.5× video duration (or 1hr if no duration)
- * 4. Rate-limited by duration between updates per user+video (in-memory cache):
- *    - <10s: 3s
- *    - 10-60s: 5s
- *    - 60-600s (1-10m): 10s
- *    - >600s (>10m): 15s
- * 5. View counting thresholds (based on video duration):
- *    - <10s video  → 2s watch required
- *    - 10-60s video → 5s watch required
- *    - >60s video  → 15s watch required
- * 6. Cooldown-based de-duplication per user+video:
- *    - user.viewHistory.lastViewedAt is used as the per-video gate
- *    - next counted view requires ~5× video duration cooldown (min 30s)
- *    - ContentView upsert is analytics-only and does NOT block view counting
- * 7. When a view IS counted: video.views++, then averageWatchTime = totalWatchTime / views
- * 8. totalWatchTime ALWAYS accumulates (even when view isn't counted)
  *
- * ═══════════════════════════════════════════════════════════
- * HOW AVERAGE WATCH TIME IS CALCULATED:
- * ═══════════════════════════════════════════════════════════
- * averageWatchTime = totalWatchTime / views
- * - totalWatchTime accumulates every valid watch session (above 5s, below 1.5x duration)
- * - averageWatchTime is only recalculated when a NEW VIEW is counted
- * - Used by recommendationAlgorithm.js: watchTimeScore = min(avgWatchTime / duration, 1)
- *   → measures retention rate (weight: 0.10 for videos)
- * ═══════════════════════════════════════════════════════════
+ * View counting: min(30s, 30% of duration) threshold.
+ * Supports both authenticated (userId) and anonymous (IP+fingerprint) viewers.
+ * View counts are batched via viewCountQueue and flushed every 10s.
+ * Cooldown dedup uses ContentView.lastCountedAt instead of user.viewHistory.
  */
+import crypto from 'crypto';
 import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
 import WatchHistory from "../../models/watchHistory.model.js";
 import ContentView from "../../models/contentView.model.js";
+import { incrementView } from "../../utils/viewCountQueue.js";
 
-// In-memory cache for rate limiting (resets on server restart)
+// In-memory rate limiting (resets on server restart — acceptable for throttling)
 const watchRateLimit = new Map();
 
 /**
- * Duration bracket configuration — every permutation covered.
- * Each bracket defines: { maxDuration, viewThreshold, cooldownMs, minWatch, maxWatchFactor }
- * 
- * | Duration       | View Threshold | Cooldown | Min Watch | Max Watch       |
- * |----------------|---------------|----------|-----------|-----------------|
- * | 0–5s           | 1s            | 2000ms   | 1s        | 1.5× or 7.5s    |
- * | 5–10s          | 2s            | 3000ms   | 1s        | 1.5× or 15s     |
- * | 10–30s         | 5s            | 5000ms   | 5s        | 1.5× or 45s     |
- * | 30–60s         | 5s            | 5000ms   | 5s        | 1.5× or 90s     |
- * | 1–5min         | 10s           | 10000ms  | 5s        | 1.5× or 450s    |
- * | 5–10min        | 15s           | 10000ms  | 5s        | 1.5× or 900s    |
- * | 10–30min       | 30s           | 15000ms  | 5s        | 1.5× or 2700s   |
- * | 30–60min       | 30s           | 15000ms  | 5s        | 1.5× or 5400s   |
- * | 60min+         | 30s           | 15000ms  | 5s        | 1.5× dur        |
- * | Unknown (0)    | 5s            | 10000ms  | 5s        | 3600s           |
+ * Compute a visitor fingerprint for anonymous users.
  */
-const DURATION_BRACKETS = [
-    { maxDuration: 5, viewThreshold: 1, cooldownMs: 2000, minWatch: 1, maxWatchFallback: 7.5 },
-    { maxDuration: 10, viewThreshold: 2, cooldownMs: 3000, minWatch: 1, maxWatchFallback: 15 },
-    { maxDuration: 30, viewThreshold: 5, cooldownMs: 5000, minWatch: 5, maxWatchFallback: 45 },
-    { maxDuration: 60, viewThreshold: 5, cooldownMs: 5000, minWatch: 5, maxWatchFallback: 90 },
-    { maxDuration: 300, viewThreshold: 10, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 450 },
-    { maxDuration: 600, viewThreshold: 15, cooldownMs: 10000, minWatch: 5, maxWatchFallback: 900 },
-    { maxDuration: 1800, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: 2700 },
-    { maxDuration: 3600, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: 5400 },
-    { maxDuration: Infinity, viewThreshold: 30, cooldownMs: 15000, minWatch: 5, maxWatchFallback: null },
-];
-
-// Default bracket for unknown/zero duration
-const UNKNOWN_DURATION_BRACKET = { viewThreshold: 5, cooldownMs: 10000, minWatch: 5, maxWatch: 3600 };
-
-/**
- * Get the full bracket config for a given video duration.
- * @param {number} durationSeconds — video duration in seconds (0 = unknown)
- * @returns {{ viewThreshold: number, cooldownMs: number, minWatch: number, maxWatch: number }}
- */
-const getBracket = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-        return UNKNOWN_DURATION_BRACKET;
-    }
-    for (const b of DURATION_BRACKETS) {
-        if (durationSeconds <= b.maxDuration) {
-            return {
-                viewThreshold: b.viewThreshold,
-                cooldownMs: b.cooldownMs,
-                minWatch: b.minWatch,
-                maxWatch: b.maxWatchFallback !== null
-                    ? Math.max(b.maxWatchFallback, durationSeconds * 1.5)
-                    : durationSeconds * 1.5,
-            };
-        }
-    }
-    // Shouldn't reach here, but safe fallback
-    return UNKNOWN_DURATION_BRACKET;
+const computeFingerprint = (req) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
+    const ua = req.get('User-Agent') || '';
+    const lang = req.get('Accept-Language') || '';
+    return crypto.createHash('sha256').update(`${ip}|${ua}|${lang}`).digest('hex');
 };
 
-const getMinWatchUpdateGapMs = (durationSeconds = 0) => getBracket(durationSeconds).cooldownMs;
+/**
+ * View threshold: min(30s, 30% of duration), minimum 1s.
+ */
+const getViewThreshold = (durationSeconds = 0) => {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 5;
+    return Math.max(1, Math.min(30, durationSeconds * 0.3));
+};
 
-const getViewThresholdSeconds = (durationSeconds = 0) => getBracket(durationSeconds).viewThreshold;
+/**
+ * Rate limit gap between watch-time updates (ms).
+ */
+const getMinUpdateGapMs = (durationSeconds = 0) => {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 10000;
+    if (durationSeconds <= 10) return 3000;
+    if (durationSeconds <= 60) return 5000;
+    if (durationSeconds <= 600) return 10000;
+    return 15000;
+};
 
+/**
+ * View recount cooldown: max(duration × 5, 30s) in ms.
+ */
 const getViewRecountCooldownMs = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-        return 5 * 60 * 1000;
-    }
-
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 5 * 60 * 1000;
     return Math.max(durationSeconds * 5 * 1000, 30 * 1000);
+};
+
+/**
+ * Max acceptable watch time per update: 1.5× duration or 1hr fallback.
+ */
+const getMaxWatchTime = (durationSeconds = 0) => {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 3600;
+    return durationSeconds * 1.5;
 };
 
 const buildViewBuckets = (now = new Date()) => {
     const year = now.getFullYear();
     const week = Math.ceil(((now - new Date(year, 0, 1)) / 86400000 + 1) / 7);
     const month = String(now.getMonth() + 1).padStart(2, '0');
-
     return {
         weekBucket: `${year}-W${String(week).padStart(2, '0')}`,
         monthBucket: `${year}-${month}`,
     };
 };
 
-const ensureUniqueContentView = async ({ contentId, userId, now = new Date() }) => {
-    const { weekBucket, monthBucket } = buildViewBuckets(now);
-
-    try {
-        const result = await ContentView.updateOne(
-            { contentId, userId },
-            {
-                $setOnInsert: {
-                    firstViewedAt: now,
-                    weekBucket,
-                    monthBucket,
-                },
-            },
-            { upsert: true },
-        );
-
-        return Boolean(result?.upsertedCount) || Boolean(result?.upsertedId);
-    } catch (error) {
-        // Duplicate key means another concurrent request already inserted the unique record.
-        if (error?.code === 11000) {
-            return false;
-        }
-        throw error;
-    }
-};
 
 export const likeVideo = async (req, res) => {
     try {
@@ -346,286 +269,190 @@ export const updateWatchTime = async (req, res) => {
     try {
         const videoId = req.params.id;
         const { watchTime } = req.body;
-        const userId = req.user?.id;
+        const userId = req.user?.id || null;
 
-        console.log('🔍 updateWatchTime called:', { videoId, watchTime, userId });
+        // Support both authenticated and anonymous viewers
+        const fingerprint = !userId ? computeFingerprint(req) : null;
+        const viewerKey = userId || fingerprint;
 
-        if (!userId) {
-            console.log('❌ No user ID found');
-            return res.status(401).json({ message: "Authentication required" });
+        if (!viewerKey) {
+            return res.status(400).json({ message: "Unable to identify viewer" });
         }
 
         const watchTimeMs = Number(watchTime);
         if (!Number.isFinite(watchTimeMs) || watchTimeMs <= 0) {
-            console.log('❌ Invalid watchTime:', watchTime);
             return res.status(400).json({ message: "Invalid watch time" });
         }
 
         const video = await Content.findById(videoId);
         if (!video) {
-            console.log('❌ Video not found:', videoId);
             return res.status(404).json({ message: "Video not found" });
         }
 
-        console.log('✅ Found video:', video.title, 'duration:', video.duration);
-
-        // Convert to seconds
         const watchTimeSeconds = watchTimeMs / 1000;
         if (!Number.isFinite(watchTimeSeconds) || watchTimeSeconds <= 0) {
-            console.log('❌ Invalid watchTime seconds:', watchTimeSeconds);
             return res.status(400).json({ message: "Invalid watch time" });
         }
-        console.log('🔄 Converted watchTime to seconds:', watchTimeSeconds);
 
-        // Constraints to reduce outliers and bot effects
-        // Dynamic MIN_WATCH_TIME: shorter threshold for short videos
         const parsedDuration = Number(video.duration);
-        const duration = Number.isFinite(parsedDuration) && parsedDuration > 0
-            ? parsedDuration
-            : 0;
-        // Use bracket system for all constraints — every duration range covered
-        const bracket = getBracket(duration);
-        const MIN_WATCH_TIME = bracket.minWatch;
-        const MAX_WATCH_TIME = bracket.maxWatch;
+        const duration = Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : 0;
+        const MIN_WATCH = Math.max(1, duration > 0 ? Math.min(5, duration * 0.1) : 1);
+        const MAX_WATCH = getMaxWatchTime(duration);
 
-        console.log('📊 Constraints (bracket):', { MIN_WATCH_TIME, MAX_WATCH_TIME, videoDuration: duration, viewThreshold: bracket.viewThreshold, cooldownMs: bracket.cooldownMs });
-
-        // Skip only if watch time is below minimum or above maximum
-        if (watchTimeSeconds < MIN_WATCH_TIME ||
-            watchTimeSeconds > MAX_WATCH_TIME) {
-            console.log('⚠️ Watch time not counted due to constraints - watch time outlier');
-            console.log('📊 Skipped update details:', {
-                videoDuration: duration,
-                watchTimeSeconds,
-                minWatch: MIN_WATCH_TIME,
-                maxWatch: MAX_WATCH_TIME
-            });
+        if (watchTimeSeconds < MIN_WATCH || watchTimeSeconds > MAX_WATCH) {
             return res.json({
                 message: "Watch time not counted (outlier)",
                 averageWatchTime: video.averageWatchTime || 0
             });
         }
 
-        // Check for bot-like behavior: rapid successive watches
-        const recentWatchKey = `${userId}_${videoId}`;
+        // Rate limiting (in-memory, keyed by viewer+video)
+        const rateLimitKey = `${viewerKey}_${videoId}`;
         const now = Date.now();
-        const cacheEntry = watchRateLimit.get(recentWatchKey) || { lastWatch: 0 };
+        const cacheEntry = watchRateLimit.get(rateLimitKey) || { lastWatch: 0 };
+        const minGap = getMinUpdateGapMs(duration);
 
-        const minUpdateGapMs = getMinWatchUpdateGapMs(duration);
-        if (now - cacheEntry.lastWatch < minUpdateGapMs) {
-            console.log('⚠️ Watch time not counted due to rate limiting - too frequent updates');
-            console.log('📊 Rate limit details:', {
-                timeSinceLastWatch: now - cacheEntry.lastWatch,
-                limit: minUpdateGapMs,
-                userId,
-                videoId
-            });
+        if (now - cacheEntry.lastWatch < minGap) {
             return res.json({
                 message: "Watch time not counted (too frequent)",
                 averageWatchTime: video.averageWatchTime || 0
             });
         }
+        watchRateLimit.set(rateLimitKey, { lastWatch: now });
 
-        // Update rate limit cache
-        watchRateLimit.set(recentWatchKey, { lastWatch: now });
+        // Accumulate total watch time atomically
+        await Content.updateOne(
+            { _id: videoId },
+            { $inc: { totalWatchTime: watchTimeSeconds } }
+        );
 
-        // Update total watch time
-        console.log('📊 Before update:', {
-            currentTotalWatchTime: video.totalWatchTime || 0,
-            currentViews: video.views || 0,
-            currentAverageWatchTime: video.averageWatchTime || 0,
-            incomingWatchTimeSeconds: watchTimeSeconds
-        });
-
-        const currentTotalWatchTime = Number(video.totalWatchTime);
-        video.totalWatchTime = (Number.isFinite(currentTotalWatchTime) ? currentTotalWatchTime : 0) + watchTimeSeconds;
-
-        console.log('💾 Saving video with updated stats:', {
-            newTotalWatchTime: video.totalWatchTime,
-            newViews: video.views,
-            newAverageWatchTime: video.averageWatchTime,
-            calculation: `${video.totalWatchTime} / ${video.views || 0} = ${video.averageWatchTime}`
-        });
-
-        await video.save();
-
-        // View counting logic
-        const threshold = getViewThresholdSeconds(duration);
-
-        console.log('📊 View counting check:', { watchTimeSeconds, threshold, duration });
+        // ── View counting logic ──
+        const threshold = getViewThreshold(duration);
 
         if (watchTimeSeconds >= threshold) {
-            console.log('✅ Threshold met, checking user and cooldown...');
-            const user = await User.findById(userId);
-            if (user) {
-                console.log('✅ User found, checking per-video cooldown...');
-                if (!Array.isArray(user.viewHistory)) {
-                    user.viewHistory = [];
-                }
+            // Build the query to find this viewer's ContentView record
+            const viewQuery = userId
+                ? { contentId: videoId, userId }
+                : { contentId: videoId, visitorFingerprint: fingerprint };
 
-                const lastViewEntry = user.viewHistory.find(v => v.videoId.toString() === videoId);
-                const requestMeta = {
-                    lastViewedAt: new Date(now),
-                    ipAddress: req.ip || req.connection.remoteAddress,
-                    userAgent: req.get('User-Agent')
-                };
-                const viewCooldownMs = getViewRecountCooldownMs(duration);
-                const lastViewedAtMs = lastViewEntry?.lastViewedAt
-                    ? new Date(lastViewEntry.lastViewedAt).getTime()
-                    : 0;
-                const hasValidLastViewedAt = Number.isFinite(lastViewedAtMs) && lastViewedAtMs > 0;
-                const timeSinceLastViewMs = hasValidLastViewedAt ? now - lastViewedAtMs : Infinity;
-                const canCountView = !lastViewEntry || timeSinceLastViewMs >= viewCooldownMs;
+            const existingView = await ContentView.findOne(viewQuery).lean();
+            const viewCooldownMs = getViewRecountCooldownMs(duration);
+            const lastCountedMs = existingView?.lastCountedAt
+                ? new Date(existingView.lastCountedAt).getTime() : 0;
+            const timeSinceLast = Number.isFinite(lastCountedMs) && lastCountedMs > 0
+                ? now - lastCountedMs : Infinity;
+            const canCountView = !existingView || timeSinceLast >= viewCooldownMs;
 
-                if (canCountView) {
-                    console.log('✅ Counting view...');
+            const { weekBucket, monthBucket } = buildViewBuckets(new Date(now));
 
-                    const safeViews = Number.isFinite(Number(video.views))
-                        ? Number(video.views)
-                        : 0;
-                    video.views = safeViews + 1;
-                    video.averageWatchTime = video.views > 0
-                        ? video.totalWatchTime / video.views
-                        : 0;
+            if (canCountView) {
+                // Batch the view increment (flushed every 10s)
+                incrementView(videoId);
 
-                    await video.save();
+                // Upsert ContentView with lastCountedAt
+                const upsertData = userId
+                    ? { contentId: videoId, userId }
+                    : { contentId: videoId, visitorFingerprint: fingerprint };
 
-                    console.log('✅ View counted successfully');
-                    console.log('📊 View stats:', {
-                        newViews: video.views,
-                        newAverageWatchTime: video.averageWatchTime,
-                        videoId,
-                        userId,
-                        viewCooldownMs,
-                        timeSinceLastViewMs: hasValidLastViewedAt ? timeSinceLastViewMs : null,
-                    });
-                } else {
-                    const remainingCooldownMs = Math.max(0, viewCooldownMs - timeSinceLastViewMs);
-                    console.log('⚠️ View not counted - cooldown active for same user+video', {
-                        videoId,
-                        userId,
-                        viewCooldownMs,
-                        timeSinceLastViewMs,
-                        remainingCooldownMs,
-                    });
-                }
-
-                // Keep immutable unique-viewer analytics decoupled from counted views.
-                try {
-                    await ensureUniqueContentView({
-                        contentId: videoId,
-                        userId,
-                        now: new Date(now),
-                    });
-                } catch (contentViewError) {
-                    console.error('⚠️ ContentView upsert failed (non-blocking):', contentViewError.message);
-                }
-
-                if (lastViewEntry) {
-                    lastViewEntry.lastViewedAt = requestMeta.lastViewedAt;
-                    lastViewEntry.ipAddress = requestMeta.ipAddress;
-                    lastViewEntry.userAgent = requestMeta.userAgent;
-                } else {
-                    user.viewHistory.push({
-                        videoId: videoId,
-                        lastViewedAt: requestMeta.lastViewedAt,
-                        ipAddress: requestMeta.ipAddress,
-                        userAgent: requestMeta.userAgent,
-                    });
-                }
-
-                await user.save();
-            } else {
-                console.log('❌ User not found for view counting');
-            }
-        } else {
-            console.log('⚠️ View not counted - threshold not met');
-        }
-
-        console.log('✅ Watch time updated successfully');
-        console.log('📊 Final stats:', {
-            totalWatchTime: video.totalWatchTime,
-            views: video.views,
-            averageWatchTime: video.averageWatchTime,
-            videoId,
-            userId
-        });
-
-        // ═══ Upsert WatchHistory for recommendation engine + history page ═══
-        try {
-            const user = await User.findById(userId, 'historyPaused') || {};
-            if (!user.historyPaused) {
-                const watchPercentage = video.duration > 0
-                    ? Math.min(100, (watchTimeSeconds / video.duration) * 100) : 0;
-                const completedWatch = watchPercentage >= 80;
-                const existingHistory = await WatchHistory.findOne({ userId, contentId: videoId });
-                const isNewEntry = !existingHistory;
-
-                await WatchHistory.findOneAndUpdate(
-                    { userId, contentId: videoId },
+                await ContentView.updateOne(
+                    upsertData,
                     {
-                        $set: {
-                            contentType: 'video',
-                            lastWatchedAt: new Date(),
-                            watchPercentage: Math.max(watchPercentage, existingHistory?.watchPercentage || 0),
-                            completedWatch: completedWatch || existingHistory?.completedWatch || false,
-                            'contentMetadata.title': video.title,
-                            'contentMetadata.tags': video.tags || [],
-                            'contentMetadata.category': video.category,
-                            'contentMetadata.creatorId': video.userId,
-                            'contentMetadata.duration': video.duration
-                        },
-                        $inc: {
-                            watchTime: watchTimeSeconds,
-                            watchCount: 1
-                        },
+                        $set: { lastCountedAt: new Date(now) },
+                        $inc: { viewCount: 1 },
                         $setOnInsert: {
-                            firstWatchedAt: new Date()
+                            firstViewedAt: new Date(now),
+                            weekBucket, monthBucket,
+                            ipAddress: !userId ? (req.ip || req.headers['x-forwarded-for'] || '') : undefined,
                         },
-                        $push: {
-                            sessions: {
-                                $each: [{
-                                    startedAt: new Date(Date.now() - watchTimeMs),
-                                    endedAt: new Date(),
-                                    watchTime: watchTimeSeconds,
-                                    completedWatch
-                                }],
-                                $slice: -20
-                            }
-                        }
                     },
-                    { upsert: true, new: true }
+                    { upsert: true }
                 );
 
-                // Cap history at 100 entries per user
-                if (isNewEntry) {
-                    const historyCount = await WatchHistory.countDocuments({ userId });
-                    if (historyCount > 100) {
-                        const oldest = await WatchHistory.find({ userId })
-                            .sort({ lastWatchedAt: 1 })
-                            .limit(historyCount - 100)
-                            .select('_id');
-                        await WatchHistory.deleteMany({ _id: { $in: oldest.map(h => h._id) } });
-                    }
+                // Recalculate averageWatchTime
+                const updatedVideo = await Content.findById(videoId).select('views totalWatchTime').lean();
+                if (updatedVideo && updatedVideo.views > 0) {
+                    await Content.updateOne(
+                        { _id: videoId },
+                        { $set: { averageWatchTime: updatedVideo.totalWatchTime / updatedVideo.views } }
+                    );
                 }
-
-                console.log(`📝 [WatchHistory] Video upserted - userId: ${userId}, videoId: ${videoId}, watchPercentage: ${watchPercentage.toFixed(1)}%`);
             } else {
-                console.log(`⏸️ [WatchHistory] Skipped - history paused for user ${userId}`);
+                // Analytics-only upsert (no view count, no lastCountedAt update)
+                if (userId) {
+                    await ContentView.updateOne(
+                        { contentId: videoId, userId },
+                        { $setOnInsert: { firstViewedAt: new Date(now), weekBucket, monthBucket } },
+                        { upsert: true }
+                    ).catch(() => {});
+                }
             }
-        } catch (historyErr) {
-            console.error('⚠️ WatchHistory upsert failed (non-blocking):', historyErr.message);
         }
 
+        // ── WatchHistory upsert (authenticated users only) ──
+        if (userId) {
+            try {
+                const historyUser = await User.findById(userId, 'historyPaused').lean();
+                if (!historyUser?.historyPaused) {
+                    const watchPct = duration > 0 ? Math.min(100, (watchTimeSeconds / duration) * 100) : 0;
+                    const completed = watchPct >= 80;
+                    const existing = await WatchHistory.findOne({ userId, contentId: videoId });
+                    const isNew = !existing;
+
+                    await WatchHistory.findOneAndUpdate(
+                        { userId, contentId: videoId },
+                        {
+                            $set: {
+                                contentType: 'video',
+                                lastWatchedAt: new Date(),
+                                watchPercentage: Math.max(watchPct, existing?.watchPercentage || 0),
+                                completedWatch: completed || existing?.completedWatch || false,
+                                'contentMetadata.title': video.title,
+                                'contentMetadata.tags': video.tags || [],
+                                'contentMetadata.category': video.category,
+                                'contentMetadata.creatorId': video.userId,
+                                'contentMetadata.duration': video.duration
+                            },
+                            $inc: { watchTime: watchTimeSeconds, watchCount: 1 },
+                            $setOnInsert: { firstWatchedAt: new Date() },
+                            $push: {
+                                sessions: {
+                                    $each: [{
+                                        startedAt: new Date(Date.now() - watchTimeMs),
+                                        endedAt: new Date(),
+                                        watchTime: watchTimeSeconds,
+                                        completedWatch: completed
+                                    }],
+                                    $slice: -20
+                                }
+                            }
+                        },
+                        { upsert: true, new: true }
+                    );
+
+                    if (isNew) {
+                        const count = await WatchHistory.countDocuments({ userId });
+                        if (count > 100) {
+                            const oldest = await WatchHistory.find({ userId })
+                                .sort({ lastWatchedAt: 1 }).limit(count - 100).select('_id');
+                            await WatchHistory.deleteMany({ _id: { $in: oldest.map(h => h._id) } });
+                        }
+                    }
+                }
+            } catch (historyErr) {
+                // Non-blocking
+            }
+        }
+
+        const freshVideo = await Content.findById(videoId).select('averageWatchTime views totalWatchTime').lean();
         res.json({
             message: "Watch time updated",
-            averageWatchTime: video.averageWatchTime,
-            views: video.views,
-            totalWatchTime: video.totalWatchTime
+            averageWatchTime: freshVideo?.averageWatchTime || 0,
+            views: freshVideo?.views || 0,
+            totalWatchTime: freshVideo?.totalWatchTime || 0
         });
 
     } catch (error) {
-        console.error("💥 Error updating watch time:", error);
+        console.error("Error updating watch time:", error);
         res.status(500).json({ message: "Internal server error", error: error.message });
     }
 };

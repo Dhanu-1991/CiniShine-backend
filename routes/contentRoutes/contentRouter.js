@@ -81,7 +81,7 @@ router.get('/posts/feed', optionalTokenVerifier, getSubscriptionPosts);
 // ============================================
 router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
 router.get('/:id/engagement/status', universalTokenVerifier, getContentEngagementStatus);
-router.post('/:id/watch-time', universalTokenVerifier, updateContentWatchTime);
+router.post('/:id/watch-time', optionalTokenVerifier, updateContentWatchTime);
 
 // ============================================
 // REPORT ROUTE (report any content - same model as community feed)

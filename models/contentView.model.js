@@ -1,13 +1,15 @@
 import mongoose from 'mongoose';
 
 /**
- * ContentView — immutable per-user first-view record.
+ * ContentView — per-viewer view tracking record.
+ *
+ * Supports BOTH authenticated users (via userId) and anonymous visitors
+ * (via visitorFingerprint = sha256(ip + userAgent + acceptLanguage)).
  *
  * Unlike WatchHistory (which users can delete), this model is NEVER deleted.
  * It provides a reliable, history-deletion-proof unique viewer count for analytics.
  *
- * One document per (contentId, userId) pair — a unique sparse index prevents duplicates.
- * Created via upsert with $setOnInsert so it is written exactly once per user per video.
+ * lastCountedAt is used for cooldown deduplication instead of user.viewHistory.
  */
 const ContentViewSchema = new mongoose.Schema({
     contentId: {
@@ -16,14 +18,35 @@ const ContentViewSchema = new mongoose.Schema({
         required: true,
         index: true,
     },
+    // Authenticated user (null for anonymous)
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
+        default: null,
+    },
+    // Anonymous visitor fingerprint: sha256(ip + userAgent + acceptLanguage)
+    visitorFingerprint: {
+        type: String,
+        default: null,
+        index: true,
+    },
+    ipAddress: {
+        type: String,
+        default: null,
     },
     firstViewedAt: {
         type: Date,
         default: Date.now,
+    },
+    // When the last view was actually counted (for cooldown dedup)
+    lastCountedAt: {
+        type: Date,
+        default: null,
+    },
+    // Total views counted for this viewer on this content
+    viewCount: {
+        type: Number,
+        default: 0,
     },
     // Optional: track the week/month bucket for fast aggregated queries
     weekBucket: {
@@ -35,13 +58,22 @@ const ContentViewSchema = new mongoose.Schema({
         index: true,
     },
 }, {
-    // No updatedAt needed — this record never changes after creation
+    // No updatedAt needed — only firstViewedAt and lastCountedAt matter
     timestamps: { createdAt: 'firstViewedAt', updatedAt: false },
     versionKey: false,
 });
 
-// Composite unique index — prevents duplicate entries, makes countDocuments fast
-ContentViewSchema.index({ contentId: 1, userId: 1 }, { unique: true });
+// Authenticated viewer: unique per (content, user)
+ContentViewSchema.index(
+    { contentId: 1, userId: 1 },
+    { unique: true, partialFilterExpression: { userId: { $ne: null } } }
+);
+
+// Anonymous viewer: unique per (content, fingerprint)
+ContentViewSchema.index(
+    { contentId: 1, visitorFingerprint: 1 },
+    { unique: true, partialFilterExpression: { visitorFingerprint: { $ne: null } } }
+);
 
 const ContentView = mongoose.model('ContentView', ContentViewSchema);
 export default ContentView;

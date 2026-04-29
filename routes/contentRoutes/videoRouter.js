@@ -95,8 +95,8 @@ router.use("/:videoId/comments", commentRouter);
 // Subscribe
 router.post("/user/:userId/subscribe", universalTokenVerifier, subscribeToUser);
 
-// Watch time
-router.post("/:id/watch-time", universalTokenVerifier, updateWatchTime);
+// Watch time (supports both authenticated and anonymous viewers)
+router.post("/:id/watch-time", optionalTokenVerifier, updateWatchTime);
 
 // Thumbnail upload
 router.post("/:id/thumbnail", universalTokenVerifier, upload.single('thumbnail'), uploadVideoThumbnail);

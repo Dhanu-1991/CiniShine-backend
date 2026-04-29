@@ -27,6 +27,7 @@ import { issueCloudFrontCookies } from "./config/cloudfront.js";
 import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
 import adminRouter from "./routes/adminRoutes/adminRouter.js";
 import analyticsRouter from "./routes/analyticsRoutes/analyticsRouter.js";
+import { startViewCountFlusher, stopViewCountFlusher } from "./utils/viewCountQueue.js";
 
 // ── Global crash handlers — prevent silent 521 ─────────────────────────
 process.on("uncaughtException", (err) => {
@@ -122,6 +123,7 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
     console.log("✅ MongoDB connected successfully");
+    startViewCountFlusher();
     app.listen(process.env.PORT, () =>
       console.log(`✅ Server running on port ${process.env.PORT}`)
     );
@@ -130,3 +132,10 @@ mongoose
     console.error("❌ DB connection failed:", err);
     process.exit(1);
   });
+
+// Graceful shutdown: flush pending view counts
+process.on('SIGTERM', async () => {
+  console.log('🔄 SIGTERM received, flushing view counts...');
+  await stopViewCountFlusher();
+  process.exit(0);
+});

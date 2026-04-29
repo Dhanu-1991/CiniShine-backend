@@ -57,6 +57,12 @@ async function checkPostingAuth(userId, community) {
         return { allowed: false, reason: 'Membership not active' };
     }
 
+    // Check if member is muted
+    if (member.mutedUntil && new Date(member.mutedUntil) > new Date()) {
+        const remaining = Math.ceil((new Date(member.mutedUntil) - new Date()) / 60000);
+        return { allowed: false, reason: `You are muted for ${remaining} more minute(s)${member.mutedReason ? `: ${member.mutedReason}` : ''}` };
+    }
+
     switch (community.postingPolicy) {
         case 'ANY_MEMBER':
             return { allowed: true, member };
@@ -1219,6 +1225,28 @@ export const changeRole = async (req, res) => {
             return res.status(403).json({ error: 'Cannot promote to a role equal to or above your own' });
         }
 
+        // ── ROLE CAP ENFORCEMENT: Max 5 Admins, Max 5 Moderators ──
+        if (newRole === 'ADMIN') {
+            const adminCount = await CommunityMember.countDocuments({
+                communityId: id,
+                role: 'ADMIN',
+                status: 'ACTIVE'
+            });
+            if (adminCount >= 5) {
+                return res.status(400).json({ error: 'Maximum of 5 admins reached. Demote an existing admin first.' });
+            }
+        }
+        if (newRole === 'MODERATOR') {
+            const modCount = await CommunityMember.countDocuments({
+                communityId: id,
+                role: 'MODERATOR',
+                status: 'ACTIVE'
+            });
+            if (modCount >= 5) {
+                return res.status(400).json({ error: 'Maximum of 5 moderators reached. Demote an existing moderator first.' });
+            }
+        }
+
         const oldRole = targetMember.role;
         targetMember.role = newRole;
         await targetMember.save();
@@ -1246,10 +1274,15 @@ export const transferOwnership = async (req, res) => {
     try {
         const userId = req.user?.id;
         const { id } = req.params;
-        const { newOwnerId } = req.body;
+        const { newOwnerId, confirmTransfer } = req.body;
 
         if (!newOwnerId) {
             return res.status(400).json({ error: 'newOwnerId is required' });
+        }
+
+        // Require explicit confirmation
+        if (!confirmTransfer) {
+            return res.status(400).json({ error: 'confirmTransfer must be true to proceed. This action is irreversible.' });
         }
 
         // Verify caller is OWNER
@@ -1264,26 +1297,26 @@ export const transferOwnership = async (req, res) => {
             return res.status(403).json({ error: 'Only the owner can transfer ownership' });
         }
 
-        // Target must be an ACTIVE ADMIN
+        // Target must be any ACTIVE member (not just admin)
         const targetMember = await CommunityMember.findOne({
             communityId: id,
             userId: newOwnerId,
-            role: 'ADMIN',
-            status: 'ACTIVE'
+            status: 'ACTIVE',
+            role: { $in: ['ADMIN', 'MODERATOR', 'MEMBER'] }
         });
 
         if (!targetMember) {
-            return res.status(400).json({ error: 'New owner must be an active ADMIN of this community' });
+            return res.status(400).json({ error: 'New owner must be an active member of this community' });
         }
 
         // Promote target to OWNER
         targetMember.role = 'OWNER';
         await targetMember.save();
 
-        // Demote current owner to ADMIN
+        // Demote current owner to MEMBER (per spec)
         await CommunityMember.findOneAndUpdate(
             { communityId: id, userId, role: 'OWNER' },
-            { role: 'ADMIN' }
+            { role: 'MEMBER' }
         );
 
         // Update community ownerId
@@ -1291,7 +1324,7 @@ export const transferOwnership = async (req, res) => {
 
         await logAction(userId, id, 'ownership_transferred', { oldOwnerId: userId, newOwnerId });
 
-        return res.json({ message: 'Ownership transferred successfully' });
+        return res.json({ message: 'Ownership transferred successfully. You are now a regular member.' });
     } catch (error) {
         console.error('transferOwnership error:', error);
         return res.status(500).json({ error: 'Failed to transfer ownership' });
@@ -1653,5 +1686,232 @@ export const reimportChannelContent = async (req, res) => {
     } catch (error) {
         console.error('reimportChannelContent error:', error);
         return res.status(500).json({ error: 'Failed to re-import content' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// DELETE /api/v2/communities/:id — Soft delete a community
+// ═══════════════════════════════════════════════════
+export const deleteCommunity = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { confirmDelete } = req.body;
+
+        if (!confirmDelete) {
+            return res.status(400).json({ error: 'confirmDelete must be true. This will deactivate the community for 30 days before permanent deletion.' });
+        }
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id, userId, role: 'OWNER', status: 'ACTIVE'
+        }).lean();
+
+        if (!callerMember) {
+            return res.status(403).json({ error: 'Only the owner can delete this community' });
+        }
+
+        const community = await Community.findById(id);
+        if (!community) return res.status(404).json({ error: 'Community not found' });
+        if (community.deleted) return res.status(400).json({ error: 'Community is already deleted' });
+
+        community.deleted = true;
+        community.deletedAt = new Date();
+        community.deletedBy = userId;
+        await community.save();
+
+        await CommunityMember.updateMany({ communityId: id, status: 'ACTIVE' }, { status: 'BANNED' });
+        await logAction(userId, id, 'community_deleted', { communityName: community.name });
+
+        return res.json({ message: 'Community deleted. It will be permanently removed after 30 days.', deletedAt: community.deletedAt });
+    } catch (error) {
+        console.error('deleteCommunity error:', error);
+        return res.status(500).json({ error: 'Failed to delete community' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/moderate-content — Remove content with rule citation
+// ═══════════════════════════════════════════════════
+export const moderateContent = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { contentId, ruleIndex, reason } = req.body;
+
+        if (!contentId) return res.status(400).json({ error: 'contentId is required' });
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id, userId, status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN', 'MODERATOR'] }
+        }).lean();
+
+        if (!callerMember) return res.status(403).json({ error: 'Only moderators, admins, and the owner can moderate content' });
+
+        const link = await ContentToCommunity.findOne({ communityId: id, contentId });
+        if (!link) return res.status(404).json({ error: 'Content not found in this community' });
+
+        let ruleTitle = null;
+        if (ruleIndex !== null && ruleIndex !== undefined) {
+            const community = await Community.findById(id).select('rules').lean();
+            if (community?.rules?.[ruleIndex]) ruleTitle = community.rules[ruleIndex].title;
+        }
+
+        await ContentToCommunity.deleteOne({ communityId: id, contentId });
+        await Community.findByIdAndUpdate(id, { $inc: { contentCount: -1 } });
+
+        const CommunityModerationAction = (await import('../../models/communityModerationAction.model.js')).default;
+        await CommunityModerationAction.create({
+            communityId: id, actionBy: userId, targetContentId: contentId,
+            actionType: 'content_removed', ruleIndex: ruleIndex ?? null, ruleTitle, reason: reason || ''
+        });
+
+        await logAction(userId, id, 'content_moderated', { contentId, ruleIndex, ruleTitle, reason });
+        return res.json({ message: 'Content removed from community', ruleTitle });
+    } catch (error) {
+        console.error('moderateContent error:', error);
+        return res.status(500).json({ error: 'Failed to moderate content' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/warn/:targetUserId — Issue a warning
+// ═══════════════════════════════════════════════════
+export const warnMember = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id, targetUserId } = req.params;
+        const { ruleIndex, reason } = req.body;
+
+        if (!reason && (ruleIndex === null || ruleIndex === undefined)) {
+            return res.status(400).json({ error: 'Either reason or ruleIndex is required' });
+        }
+
+        const roleHierarchy = { OWNER: 4, ADMIN: 3, MODERATOR: 2, MEMBER: 1, PENDING: 0, BANNED: -1 };
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id, userId, status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN', 'MODERATOR'] }
+        }).lean();
+
+        if (!callerMember) return res.status(403).json({ error: 'Only moderators, admins, and the owner can issue warnings' });
+
+        const targetMember = await CommunityMember.findOne({ communityId: id, userId: targetUserId, status: 'ACTIVE' });
+        if (!targetMember) return res.status(404).json({ error: 'Target member not found' });
+
+        if (roleHierarchy[targetMember.role] >= roleHierarchy[callerMember.role]) {
+            return res.status(403).json({ error: 'Cannot warn a member with equal or higher role' });
+        }
+
+        let ruleTitle = null;
+        if (ruleIndex !== null && ruleIndex !== undefined) {
+            const community = await Community.findById(id).select('rules').lean();
+            if (community?.rules?.[ruleIndex]) ruleTitle = community.rules[ruleIndex].title;
+        }
+
+        targetMember.warnings.push({
+            reason: reason || `Violation of rule: ${ruleTitle || 'Community guidelines'}`,
+            ruleIndex: ruleIndex ?? null, ruleTitle, issuedBy: userId, issuedAt: new Date()
+        });
+        await targetMember.save();
+
+        const CommunityModerationAction = (await import('../../models/communityModerationAction.model.js')).default;
+        await CommunityModerationAction.create({
+            communityId: id, actionBy: userId, targetUserId,
+            actionType: 'member_warned', ruleIndex: ruleIndex ?? null, ruleTitle, reason: reason || ''
+        });
+
+        await logAction(userId, id, 'member_warned', { targetUserId, ruleIndex, ruleTitle, reason });
+        return res.json({ message: 'Warning issued', warningCount: targetMember.warnings.length, ruleTitle });
+    } catch (error) {
+        console.error('warnMember error:', error);
+        return res.status(500).json({ error: 'Failed to issue warning' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// POST /api/v2/communities/:id/mute/:targetUserId — Temporarily mute a member
+// ═══════════════════════════════════════════════════
+export const muteMember = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id, targetUserId } = req.params;
+        const { duration, reason } = req.body;
+
+        const muteDuration = parseInt(duration) || 60;
+        if (muteDuration < 1 || muteDuration > 43200) {
+            return res.status(400).json({ error: 'Mute duration must be between 1 minute and 30 days (43200 minutes)' });
+        }
+
+        const roleHierarchy = { OWNER: 4, ADMIN: 3, MODERATOR: 2, MEMBER: 1, PENDING: 0, BANNED: -1 };
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id, userId, status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN', 'MODERATOR'] }
+        }).lean();
+
+        if (!callerMember) return res.status(403).json({ error: 'Only moderators, admins, and the owner can mute members' });
+
+        const targetMember = await CommunityMember.findOne({ communityId: id, userId: targetUserId, status: 'ACTIVE' });
+        if (!targetMember) return res.status(404).json({ error: 'Target member not found' });
+
+        if (roleHierarchy[targetMember.role] >= roleHierarchy[callerMember.role]) {
+            return res.status(403).json({ error: 'Cannot mute a member with equal or higher role' });
+        }
+
+        const mutedUntil = new Date(Date.now() + muteDuration * 60000);
+        targetMember.mutedUntil = mutedUntil;
+        targetMember.mutedBy = userId;
+        targetMember.mutedReason = reason || null;
+        await targetMember.save();
+
+        const CommunityModerationAction = (await import('../../models/communityModerationAction.model.js')).default;
+        await CommunityModerationAction.create({
+            communityId: id, actionBy: userId, targetUserId,
+            actionType: 'member_muted', reason: reason || '',
+            metadata: { durationMinutes: muteDuration, mutedUntil }
+        });
+
+        await logAction(userId, id, 'member_muted', { targetUserId, durationMinutes: muteDuration, reason });
+
+        const durationLabel = muteDuration >= 60 ? `${Math.floor(muteDuration / 60)} hour(s)` : `${muteDuration} minute(s)`;
+        return res.json({ message: `Member muted for ${durationLabel}`, mutedUntil, durationMinutes: muteDuration });
+    } catch (error) {
+        console.error('muteMember error:', error);
+        return res.status(500).json({ error: 'Failed to mute member' });
+    }
+};
+
+// ═══════════════════════════════════════════════════
+// GET /api/v2/communities/:id/moderation-log — Get moderation action log
+// ═══════════════════════════════════════════════════
+export const getModerationLog = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { page = 1, limit = 20 } = req.query;
+
+        const callerMember = await CommunityMember.findOne({
+            communityId: id, userId, status: 'ACTIVE',
+            role: { $in: ['OWNER', 'ADMIN'] }
+        }).lean();
+
+        if (!callerMember) return res.status(403).json({ error: 'Only admins and the owner can view the moderation log' });
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const CommunityModerationAction = (await import('../../models/communityModerationAction.model.js')).default;
+
+        const [actions, total] = await Promise.all([
+            CommunityModerationAction.find({ communityId: id })
+                .sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit))
+                .populate('actionBy', 'userName channelName channelPicture')
+                .populate('targetUserId', 'userName channelName channelPicture')
+                .lean(),
+            CommunityModerationAction.countDocuments({ communityId: id })
+        ]);
+
+        return res.json({ actions, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+    } catch (error) {
+        console.error('getModerationLog error:', error);
+        return res.status(500).json({ error: 'Failed to fetch moderation log' });
     }
 };

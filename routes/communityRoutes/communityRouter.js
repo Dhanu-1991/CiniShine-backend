@@ -26,7 +26,12 @@ import {
     removeMember,
     addMember,
     updateCommunitySettings,
-    reimportChannelContent
+    reimportChannelContent,
+    deleteCommunity,
+    moderateContent,
+    warnMember,
+    muteMember,
+    getModerationLog
 } from '../../controllers/community-controllers/communityController.js';
 import {
     getCommunityFeed,
@@ -86,6 +91,13 @@ router.post('/:id/add-member', universalTokenVerifier, addMember);
 // ── Role management ──
 router.post('/:id/role/:targetUserId', universalTokenVerifier, changeRole);
 router.post('/:id/transfer', universalTokenVerifier, transferOwnership);
+
+// ── Moderation & enforcement ──
+router.delete('/:id', universalTokenVerifier, deleteCommunity);
+router.post('/:id/moderate-content', universalTokenVerifier, moderateContent);
+router.post('/:id/warn/:targetUserId', universalTokenVerifier, warnMember);
+router.post('/:id/mute/:targetUserId', universalTokenVerifier, muteMember);
+router.get('/:id/moderation-log', universalTokenVerifier, getModerationLog);
 
 // ── Rules ──
 router.get('/:id/rules', optionalTokenVerifier, getRules);
