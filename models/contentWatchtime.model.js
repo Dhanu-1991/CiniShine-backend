@@ -6,15 +6,37 @@ import mongoose from 'mongoose';
  * Works for both authenticated and anonymous users (session-based).
  */
 const ContentWatchtimeSchema = new mongoose.Schema({
+    eventId: {
+        type: String,
+        required: true,
+        unique: true,
+        index: true,
+    },
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         default: null,
         index: true,
     },
+    anonymousViewerId: {
+        type: String,
+        default: null,
+        index: true,
+    },
     sessionId: {
         type: String,
         required: true,
+        index: true,
+    },
+    watchSessionId: {
+        type: String,
+        default: null,
+        index: true,
+    },
+    eventType: {
+        type: String,
+        enum: ['play', 'heartbeat', 'pause', 'seek', 'ended', 'unload', 'pagehide'],
+        default: 'heartbeat',
         index: true,
     },
     contentId: {
@@ -35,6 +57,11 @@ const ContentWatchtimeSchema = new mongoose.Schema({
         required: true,
         min: 0,
     },
+    playheadSeconds: {
+        type: Number,
+        default: 0,
+        min: 0,
+    },
     // Total duration of the content
     contentDuration: {
         type: Number,
@@ -49,6 +76,10 @@ const ContentWatchtimeSchema = new mongoose.Schema({
     },
     // Whether the content was fully consumed
     completed: {
+        type: Boolean,
+        default: false,
+    },
+    isAuthenticated: {
         type: Boolean,
         default: false,
     },
@@ -101,6 +132,9 @@ ContentWatchtimeSchema.index({ dateBucket: 1, contentType: 1 });
 ContentWatchtimeSchema.index({ contentId: 1, dateBucket: 1 });
 ContentWatchtimeSchema.index({ creatorId: 1, dateBucket: 1 });
 ContentWatchtimeSchema.index({ userId: 1, contentType: 1, dateBucket: 1 });
+ContentWatchtimeSchema.index({ contentId: 1, watchSessionId: 1 });
+ContentWatchtimeSchema.index({ contentId: 1, anonymousViewerId: 1 });
+ContentWatchtimeSchema.index({ contentId: 1, userId: 1 });
 
 const ContentWatchtime = mongoose.model('ContentWatchtime', ContentWatchtimeSchema);
 export default ContentWatchtime;

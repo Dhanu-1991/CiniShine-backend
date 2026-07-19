@@ -531,6 +531,15 @@ export const getContentAnalytics = async (req, res) => {
             getCfUrl(content.imageKey),
         ]);
 
+        const signedInUniqueViewers = content.authenticatedUniqueViewers || 0;
+        const anonymousUniqueViewers = content.anonymousUniqueViewers || 0;
+        const splitUniqueViewers = signedInUniqueViewers + anonymousUniqueViewers;
+        const completionRate = content.completionRate !== null && content.completionRate !== undefined
+            ? content.completionRate
+            : (content.duration > 0 && content.furthestPlayheadSeconds > 0)
+                ? Math.min(100, Math.round((content.furthestPlayheadSeconds / content.duration) * 100))
+                : (watchEntries.length > 0 ? null : 0);
+
         // Compute daily views from watchHistory sessions (last 30 days)
         const now = new Date();
         const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
@@ -541,8 +550,9 @@ export const getContentAnalytics = async (req, res) => {
         }
         watchEntries.forEach(entry => {
             (entry.sessions || []).forEach(session => {
-                if (session.timestamp && new Date(session.timestamp) >= thirtyDaysAgo) {
-                    const day = new Date(session.timestamp).toISOString().split('T')[0];
+                const sessionDate = session.endedAt || session.startedAt;
+                if (sessionDate && new Date(sessionDate) >= thirtyDaysAgo) {
+                    const day = new Date(sessionDate).toISOString().split('T')[0];
                     if (dailyViews[day] !== undefined) dailyViews[day]++;
                 }
             });
@@ -575,16 +585,20 @@ export const getContentAnalytics = async (req, res) => {
             },
             stats: {
                 views: content.views || 0,
+                signedInViews: content.authenticatedViews || 0,
+                anonymousViews: content.anonymousViews || 0,
                 likes,
                 dislikes,
                 commentCount,
                 averageWatchTime: content.averageWatchTime || 0,
                 totalWatchTime: content.totalWatchTime || 0,
-                completionRate: watchEntries.length > 0 ? parseFloat(((completedCount / watchEntries.length) * 100).toFixed(1)) : 0,
+                completionRate: completionRate === null ? null : parseFloat(Number(completionRate).toFixed(1)),
                 avgWatchPercentage: parseFloat(avgWatchPercent.toFixed(1)),
                 totalWatchSessions,
                 engagementRate,
-                uniqueViewers: uniqueViewers,  // from ContentView — immutable, not affected by history deletion
+                uniqueViewers: splitUniqueViewers || uniqueViewers,
+                signedInUniqueViewers,
+                anonymousUniqueViewers,
             },
             dailyViews: Object.entries(dailyViews).sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, views: count })),
         });

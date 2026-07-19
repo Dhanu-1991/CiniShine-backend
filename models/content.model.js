@@ -118,6 +118,22 @@ const ContentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    authenticatedViews: {
+        type: Number,
+        default: 0
+    },
+    anonymousViews: {
+        type: Number,
+        default: 0
+    },
+    authenticatedUniqueViewers: {
+        type: Number,
+        default: 0
+    },
+    anonymousUniqueViewers: {
+        type: Number,
+        default: 0
+    },
     likeCount: {
         type: Number,
         default: 0
@@ -139,12 +155,28 @@ const ContentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    averageWatchPercent: {
+        type: Number,
+        default: null
+    },
     // NOTE: watchCount was removed from Content model - it was dead/unused code.
     // The watchCount in WatchHistory model (per-user re-watch count) is still used
     // by the recommendation algorithm (watchHistoryRecommendation.js) for "rewatch bonus".
     totalWatchTime: {
         type: Number,
         default: 0
+    },
+    furthestPlayheadSeconds: {
+        type: Number,
+        default: 0
+    },
+    lastWatchEventAt: {
+        type: Date,
+        default: null
+    },
+    completionRate: {
+        type: Number,
+        default: null
     },
 
     // ============================================

@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
  * ContentView — per-viewer view tracking record.
  *
  * Supports BOTH authenticated users (via userId) and anonymous visitors
- * (via visitorFingerprint = sha256(ip + userAgent + acceptLanguage)).
+ * (via anonymousViewerId, which now comes from a persistent client-side id).
  *
  * Unlike WatchHistory (which users can delete), this model is NEVER deleted.
  * It provides a reliable, history-deletion-proof unique viewer count for analytics.
@@ -30,9 +30,29 @@ const ContentViewSchema = new mongoose.Schema({
         default: null,
         index: true,
     },
+    anonymousViewerId: {
+        type: String,
+        default: null,
+        index: true,
+    },
     ipAddress: {
         type: String,
         default: null,
+    },
+    sessionId: {
+        type: String,
+        default: null,
+        index: true,
+    },
+    watchSessionId: {
+        type: String,
+        default: null,
+        index: true,
+    },
+    viewerType: {
+        type: String,
+        enum: ['authenticated', 'anonymous'],
+        default: 'anonymous',
     },
     firstViewedAt: {
         type: Date,
@@ -47,6 +67,22 @@ const ContentViewSchema = new mongoose.Schema({
     viewCount: {
         type: Number,
         default: 0,
+    },
+    lastPlayheadSeconds: {
+        type: Number,
+        default: 0,
+    },
+    bestPlayheadSeconds: {
+        type: Number,
+        default: 0,
+    },
+    lastWatchEventAt: {
+        type: Date,
+        default: null,
+    },
+    lastCountedWatchSessionId: {
+        type: String,
+        default: null,
     },
     // Optional: track the week/month bucket for fast aggregated queries
     weekBucket: {
@@ -71,8 +107,8 @@ ContentViewSchema.index(
 
 // Anonymous viewer: unique per (content, fingerprint)
 ContentViewSchema.index(
-    { contentId: 1, visitorFingerprint: 1 },
-    { unique: true, partialFilterExpression: { visitorFingerprint: { $ne: null } } }
+    { contentId: 1, anonymousViewerId: 1 },
+    { unique: true, partialFilterExpression: { anonymousViewerId: { $ne: null } } }
 );
 
 const ContentView = mongoose.model('ContentView', ContentViewSchema);

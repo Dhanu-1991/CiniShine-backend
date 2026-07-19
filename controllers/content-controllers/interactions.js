@@ -12,66 +12,10 @@ import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
 import WatchHistory from "../../models/watchHistory.model.js";
 import ContentView from "../../models/contentView.model.js";
-import { incrementView } from "../../utils/viewCountQueue.js";
+import { recordWatchSignal } from "../../utils/watchAnalytics.js";
 
 // In-memory rate limiting (resets on server restart — acceptable for throttling)
 const watchRateLimit = new Map();
-
-/**
- * Compute a visitor fingerprint for anonymous users.
- */
-const computeFingerprint = (req) => {
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
-    const ua = req.get('User-Agent') || '';
-    const lang = req.get('Accept-Language') || '';
-    return crypto.createHash('sha256').update(`${ip}|${ua}|${lang}`).digest('hex');
-};
-
-/**
- * View threshold: min(30s, 30% of duration), minimum 1s.
- */
-const getViewThreshold = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 5;
-    return Math.max(1, Math.min(30, durationSeconds * 0.3));
-};
-
-/**
- * Rate limit gap between watch-time updates (ms).
- */
-const getMinUpdateGapMs = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 10000;
-    if (durationSeconds <= 10) return 3000;
-    if (durationSeconds <= 60) return 5000;
-    if (durationSeconds <= 600) return 10000;
-    return 15000;
-};
-
-/**
- * View recount cooldown: max(duration × 5, 30s) in ms.
- */
-const getViewRecountCooldownMs = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 5 * 60 * 1000;
-    return Math.max(durationSeconds * 5 * 1000, 30 * 1000);
-};
-
-/**
- * Max acceptable watch time per update: 1.5× duration or 1hr fallback.
- */
-const getMaxWatchTime = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 3600;
-    return durationSeconds * 1.5;
-};
-
-const buildViewBuckets = (now = new Date()) => {
-    const year = now.getFullYear();
-    const week = Math.ceil(((now - new Date(year, 0, 1)) / 86400000 + 1) / 7);
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    return {
-        weekBucket: `${year}-W${String(week).padStart(2, '0')}`,
-        monthBucket: `${year}-${month}`,
-    };
-};
-
 
 export const likeVideo = async (req, res) => {
     try {
@@ -87,15 +31,10 @@ export const likeVideo = async (req, res) => {
             return res.status(404).json({ message: "Video not found" });
         }
 
-        // Check if user already has a reaction - O(log N) indexed lookup
-        const existingReaction = await VideoReaction.findOne({
-            videoId,
-            userId
-        });
+        const existingReaction = await VideoReaction.findOne({ videoId, userId });
 
         if (existingReaction) {
             if (existingReaction.type === 'like') {
-                // User already liked, remove like (unlike)
                 await VideoReaction.deleteOne({ _id: existingReaction._id });
                 video.likeCount = Math.max(0, (video.likeCount || 1) - 1);
                 await video.save();
@@ -106,32 +45,15 @@ export const likeVideo = async (req, res) => {
                     dislikes: video.dislikeCount,
                     userReaction: null
                 });
-            } else {
-                // User disliked before, change to like
-                existingReaction.type = 'like';
-                await existingReaction.save();
-                video.dislikeCount = Math.max(0, (video.dislikeCount || 1) - 1);
-                video.likeCount = (video.likeCount || 0) + 1;
-                await video.save();
-                return res.json({
-                    message: "Changed to like",
-                    liked: true,
-                    likes: video.likeCount,
-                    dislikes: video.dislikeCount,
-                    userReaction: 'like'
-                });
             }
-        } else {
-            // Add new like
-            await VideoReaction.create({
-                videoId,
-                userId,
-                type: 'like'
-            });
+
+            existingReaction.type = 'like';
+            await existingReaction.save();
+            video.dislikeCount = Math.max(0, (video.dislikeCount || 1) - 1);
             video.likeCount = (video.likeCount || 0) + 1;
             await video.save();
             return res.json({
-                message: "Video liked",
+                message: "Changed to like",
                 liked: true,
                 likes: video.likeCount,
                 dislikes: video.dislikeCount,
@@ -139,6 +61,17 @@ export const likeVideo = async (req, res) => {
             });
         }
 
+        await VideoReaction.create({ videoId, userId, type: 'like' });
+        video.likeCount = (video.likeCount || 0) + 1;
+        await video.save();
+
+        return res.json({
+            message: "Liked",
+            liked: true,
+            likes: video.likeCount,
+            dislikes: video.dislikeCount,
+            userReaction: 'like'
+        });
     } catch (error) {
         console.error("Error liking video:", error);
         res.status(500).json({ message: "Internal server error" });
@@ -159,15 +92,10 @@ export const dislikeVideo = async (req, res) => {
             return res.status(404).json({ message: "Video not found" });
         }
 
-        // Check if user already has a reaction - O(log N) indexed lookup
-        const existingReaction = await VideoReaction.findOne({
-            videoId,
-            userId
-        });
+        const existingReaction = await VideoReaction.findOne({ videoId, userId });
 
         if (existingReaction) {
             if (existingReaction.type === 'dislike') {
-                // User already disliked, remove dislike
                 await VideoReaction.deleteOne({ _id: existingReaction._id });
                 video.dislikeCount = Math.max(0, (video.dislikeCount || 1) - 1);
                 await video.save();
@@ -178,32 +106,15 @@ export const dislikeVideo = async (req, res) => {
                     dislikes: video.dislikeCount,
                     userReaction: null
                 });
-            } else {
-                // User liked before, change to dislike
-                existingReaction.type = 'dislike';
-                await existingReaction.save();
-                video.likeCount = Math.max(0, (video.likeCount || 1) - 1);
-                video.dislikeCount = (video.dislikeCount || 0) + 1;
-                await video.save();
-                return res.json({
-                    message: "Changed to dislike",
-                    disliked: true,
-                    likes: video.likeCount,
-                    dislikes: video.dislikeCount,
-                    userReaction: 'dislike'
-                });
             }
-        } else {
-            // Add new dislike
-            await VideoReaction.create({
-                videoId,
-                userId,
-                type: 'dislike'
-            });
+
+            existingReaction.type = 'dislike';
+            await existingReaction.save();
+            video.likeCount = Math.max(0, (video.likeCount || 1) - 1);
             video.dislikeCount = (video.dislikeCount || 0) + 1;
             await video.save();
             return res.json({
-                message: "Video disliked",
+                message: "Changed to dislike",
                 disliked: true,
                 likes: video.likeCount,
                 dislikes: video.dislikeCount,
@@ -211,9 +122,71 @@ export const dislikeVideo = async (req, res) => {
             });
         }
 
+        await VideoReaction.create({ videoId, userId, type: 'dislike' });
+        video.dislikeCount = (video.dislikeCount || 0) + 1;
+        await video.save();
+
+        return res.json({
+            message: "Disliked",
+            disliked: true,
+            likes: video.likeCount,
+            dislikes: video.dislikeCount,
+            userReaction: 'dislike'
+        });
     } catch (error) {
         console.error("Error disliking video:", error);
         res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+export const updateWatchTime = async (req, res) => {
+    try {
+        const videoId = req.params.id;
+        const watchTimeMs = Number(req.body.watchTime);
+
+        if (!Number.isFinite(watchTimeMs) || watchTimeMs <= 0) {
+            return res.status(400).json({ message: "Invalid watch time" });
+        }
+
+        const video = await Content.findById(videoId).lean();
+        if (!video) {
+            return res.status(404).json({ message: "Video not found" });
+        }
+
+        const now = new Date();
+        const result = await recordWatchSignal({
+            req,
+            content: video,
+            contentId: videoId,
+            event: {
+                ...req.body,
+                eventId: req.body.eventId || `${videoId}-${req.body.watchSessionId || req.body.sessionId || 'legacy'}-${Date.now()}`,
+                activePlayTime: watchTimeMs,
+                contentDuration: video.duration || req.body.duration || 0,
+                sessionId: req.body.sessionId || req.body.watchSessionId || null,
+            },
+            device: (req.headers['user-agent'] || '').toLowerCase().includes('mobile') ? 'mobile' : 'desktop',
+            dateBucket: now.toISOString().slice(0, 10),
+            monthBucket: now.toISOString().slice(0, 7),
+        });
+
+        const freshVideo = await Content.findById(videoId).select('averageWatchTime views totalWatchTime completionRate authenticatedViews anonymousViews authenticatedUniqueViewers anonymousUniqueViewers').lean();
+        return res.json({
+            message: "Watch time updated",
+            averageWatchTime: freshVideo?.averageWatchTime || 0,
+            views: freshVideo?.views || 0,
+            totalWatchTime: freshVideo?.totalWatchTime || 0,
+            completionRate: freshVideo?.completionRate ?? null,
+            authenticatedViews: freshVideo?.authenticatedViews || 0,
+            anonymousViews: freshVideo?.anonymousViews || 0,
+            authenticatedUniqueViewers: freshVideo?.authenticatedUniqueViewers || 0,
+            anonymousUniqueViewers: freshVideo?.anonymousUniqueViewers || 0,
+            viewCounted: result.viewCounted,
+            duplicate: result.duplicate,
+        });
+    } catch (error) {
+        console.error("Error updating watch time:", error);
+        res.status(500).json({ message: "Internal server error", error: error.message });
     }
 };
 
@@ -383,7 +356,7 @@ export const updateWatchTime = async (req, res) => {
                         { contentId: videoId, userId },
                         { $setOnInsert: { firstViewedAt: new Date(now), weekBucket, monthBucket } },
                         { upsert: true }
-                    ).catch(() => {});
+                    ).catch(() => { });
                 }
             }
         }

@@ -1,6 +1,8 @@
 import PageUsage from '../../models/pageUsage.model.js';
 import ContentWatchtime from '../../models/contentWatchtime.model.js';
 import UserSession from '../../models/userSession.model.js';
+import Content from '../../models/content.model.js';
+import { recordWatchSignal } from '../../utils/watchAnalytics.js';
 
 /**
  * Helper: get date/month bucket strings for current time
@@ -185,54 +187,36 @@ export const trackPageUsage = async (req, res) => {
  */
 export const trackContentWatchtime = async (req, res) => {
     try {
-        const {
-            sessionId, contentId, contentType,
-            activePlayTime, contentDuration, completed,
-            bufferTime, pauseTime, seekTime, readTime,
-            creatorId,
-        } = req.body;
+        const { sessionId, contentId, contentType } = req.body;
 
-        if (!sessionId || !contentId || !contentType || activePlayTime == null) {
+        if (!sessionId || !contentId || !contentType || !req.body.eventId) {
             return res.status(400).json({
                 success: false,
-                message: 'sessionId, contentId, contentType, activePlayTime required',
+                message: 'sessionId, contentId, contentType, eventId required',
             });
         }
-
-        // Validate activePlayTime (max 4 hours per tracking event)
-        const validPlayTime = Math.min(Math.max(Number(activePlayTime) || 0, 0), 14400);
-        if (validPlayTime < 1) {
-            return res.status(200).json({ success: true }); // Ignore <1s
-        }
-
-        const dur = Number(contentDuration) || 0;
-        const consumptionPercent = dur > 0
-            ? Math.min(Math.round((validPlayTime / dur) * 100), 100)
-            : 0;
-
         const { dateBucket, monthBucket } = getBuckets();
         const device = getDevice(req.headers['user-agent']);
 
-        await ContentWatchtime.create({
-            userId: req.user?.id || null,
-            sessionId,
+        const content = await Content.findById(contentId).lean();
+        const result = await recordWatchSignal({
+            req,
+            content,
             contentId,
-            contentType,
-            activePlayTime: validPlayTime,
-            contentDuration: dur,
-            consumptionPercent,
-            completed: !!completed,
-            totalBufferTime: Math.max(Number(bufferTime) || 0, 0),
-            totalPauseTime: Math.max(Number(pauseTime) || 0, 0),
-            totalSeekTime: Math.max(Number(seekTime) || 0, 0),
-            readTime: Math.max(Number(readTime) || 0, 0),
-            creatorId: creatorId || null,
+            event: {
+                ...req.body,
+                sessionId,
+            },
+            device,
             dateBucket,
             monthBucket,
-            device,
         });
 
-        return res.status(200).json({ success: true });
+        if (!result.success) {
+            return res.status(404).json({ success: false, message: 'Content not found' });
+        }
+
+        return res.status(200).json({ success: true, viewCounted: result.viewCounted, duplicate: result.duplicate });
     } catch (error) {
         console.error('trackContentWatchtime error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -259,7 +243,7 @@ export const batchTrack = async (req, res) => {
         const userId = req.user?.id || null;
 
         const pageOps = [];
-        const contentOps = [];
+        const contentResults = [];
 
         for (const evt of safeEvents) {
             const { dateBucket, monthBucket } = getBuckets(evt.timestamp ? new Date(evt.timestamp) : new Date());
@@ -280,37 +264,30 @@ export const batchTrack = async (req, res) => {
                     });
                 }
             } else if (evt.type === 'content_watchtime') {
-                const activePlayTime = Math.min(Math.max(Number(evt.activePlayTime) || 0, 0), 14400);
-                if (activePlayTime >= 1) {
-                    const dur = Number(evt.contentDuration) || 0;
-                    contentOps.push({
-                        userId,
-                        sessionId,
+                const content = await Content.findById(evt.contentId).lean();
+                if (content) {
+                    contentResults.push(recordWatchSignal({
+                        req: { ...req, user: req.user },
+                        content,
                         contentId: evt.contentId,
-                        contentType: evt.contentType,
-                        activePlayTime,
-                        contentDuration: dur,
-                        consumptionPercent: dur > 0 ? Math.min(Math.round((activePlayTime / dur) * 100), 100) : 0,
-                        completed: !!evt.completed,
-                        totalBufferTime: Math.max(Number(evt.bufferTime) || 0, 0),
-                        totalPauseTime: Math.max(Number(evt.pauseTime) || 0, 0),
-                        totalSeekTime: Math.max(Number(evt.seekTime) || 0, 0),
-                        readTime: Math.max(Number(evt.readTime) || 0, 0),
-                        creatorId: evt.creatorId || null,
+                        event: {
+                            ...evt,
+                            sessionId,
+                        },
+                        device,
                         dateBucket,
                         monthBucket,
-                        device,
-                    });
+                    }));
                 }
             }
         }
 
         const ops = [];
         if (pageOps.length > 0) ops.push(PageUsage.insertMany(pageOps, { ordered: false }));
-        if (contentOps.length > 0) ops.push(ContentWatchtime.insertMany(contentOps, { ordered: false }));
+        if (contentResults.length > 0) ops.push(Promise.all(contentResults));
         if (ops.length > 0) await Promise.all(ops);
 
-        return res.status(200).json({ success: true, tracked: pageOps.length + contentOps.length });
+        return res.status(200).json({ success: true, tracked: pageOps.length + contentResults.length });
     } catch (error) {
         console.error('batchTrack error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });

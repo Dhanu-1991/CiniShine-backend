@@ -35,6 +35,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import User from '../../models/user.model.js';
 import ContentView from '../../models/contentView.model.js';
 import ContentReport from '../../models/contentReport.model.js';
+import { recordWatchSignal } from '../../utils/watchAnalytics.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl } from '../../config/cloudfront.js';
 
@@ -394,146 +395,49 @@ export const updateContentWatchTime = async (req, res) => {
     try {
         const { id } = req.params;
         const { watchTime, duration: clientDuration } = req.body;
-        const userId = req.user?.id || null;
-        const fingerprint = !userId ? computeFingerprint(req) : null;
-        const viewerKey = userId || fingerprint;
-
-        if (!viewerKey) return res.status(400).json({ error: 'Unable to identify viewer' });
-
         const watchTimeMs = Number(watchTime);
-        if (!Number.isFinite(watchTimeMs) || watchTimeMs <= 0)
+        if (!Number.isFinite(watchTimeMs) || watchTimeMs <= 0) {
             return res.status(400).json({ error: 'Invalid watch time' });
+        }
 
         const content = await Content.findById(id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
 
-        // Fix missing duration from client
         const parsedClientDuration = Number(clientDuration);
         if ((!content.duration || content.duration === 0) && Number.isFinite(parsedClientDuration) && parsedClientDuration > 0) {
             content.duration = parsedClientDuration;
             await content.save();
         }
+        const { dateBucket, monthBucket } = getBuckets();
+        const result = await recordWatchSignal({
+            req,
+            content,
+            contentId: id,
+            event: {
+                ...req.body,
+                eventId: req.body.eventId || `${id}-${req.body.watchSessionId || req.body.sessionId || 'legacy'}-${Date.now()}`,
+                activePlayTime: watchTimeMs,
+                contentDuration: content.duration || clientDuration || 0,
+                sessionId: req.body.sessionId || req.body.watchSessionId || null,
+            },
+            device: getDevice(req.headers['user-agent']),
+            dateBucket,
+            monthBucket,
+        });
 
-        const parsedDuration = Number(content.duration);
-        const duration = Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : 0;
-        const watchTimeSeconds = watchTimeMs / 1000;
-        if (!Number.isFinite(watchTimeSeconds) || watchTimeSeconds <= 0) {
-            return res.status(400).json({ error: 'Invalid watch time' });
-        }
-
-        const minWatch = content.contentType === 'post' ? 1 : Math.max(1, duration > 0 ? Math.min(5, duration * 0.1) : 1);
-        const maxWatch = getMaxWatchTime(duration);
-
-        if (watchTimeSeconds < minWatch || watchTimeSeconds > maxWatch) {
-            return res.json({ message: 'Watch time not counted (outlier)', averageWatchTime: content.averageWatchTime || 0, views: content.views || 0, totalWatchTime: content.totalWatchTime || 0, viewCounted: false });
-        }
-
-        // Rate limiting
-        const now = Date.now();
-        const rateKey = `${viewerKey}:${id}`;
-        const lastUpdate = watchTimeRateLimit.get(rateKey) || 0;
-        const minGap = getMinUpdateGapMs(duration);
-        if (now - lastUpdate < minGap) {
-            return res.json({ message: 'Watch time not counted (too frequent)', averageWatchTime: content.averageWatchTime || 0, views: content.views || 0, totalWatchTime: content.totalWatchTime || 0, viewCounted: false, rateLimited: true });
-        }
-        watchTimeRateLimit.set(rateKey, now);
-
-        // Accumulate total watch time atomically
-        await Content.updateOne({ _id: id }, { $inc: { totalWatchTime: watchTimeSeconds } });
-
-        // View counting
-        const threshold = getViewThreshold(content.contentType, duration);
-        let viewCounted = false;
-
-        if (watchTimeSeconds >= threshold) {
-            const viewQuery = userId
-                ? { contentId: id, userId }
-                : { contentId: id, visitorFingerprint: fingerprint };
-
-            const existingView = await ContentView.findOne(viewQuery).lean();
-            const viewCooldownMs = getViewRecountCooldownMs(duration);
-            const lastCountedMs = existingView?.lastCountedAt ? new Date(existingView.lastCountedAt).getTime() : 0;
-            const timeSinceLast = Number.isFinite(lastCountedMs) && lastCountedMs > 0 ? now - lastCountedMs : Infinity;
-            const canCountView = !existingView || timeSinceLast >= viewCooldownMs;
-            const { weekBucket, monthBucket } = buildViewBuckets(new Date(now));
-
-            if (canCountView) {
-                incrementView(id);
-                viewCounted = true;
-
-                const upsertData = userId ? { contentId: id, userId } : { contentId: id, visitorFingerprint: fingerprint };
-                await ContentView.updateOne(
-                    upsertData,
-                    {
-                        $set: { lastCountedAt: new Date(now) },
-                        $inc: { viewCount: 1 },
-                        $setOnInsert: {
-                            firstViewedAt: new Date(now), weekBucket, monthBucket,
-                            ipAddress: !userId ? (req.ip || req.headers['x-forwarded-for'] || '') : undefined,
-                        },
-                    },
-                    { upsert: true }
-                );
-
-                const updatedContent = await Content.findById(id).select('views totalWatchTime').lean();
-                if (updatedContent && updatedContent.views > 0) {
-                    await Content.updateOne({ _id: id }, { $set: { averageWatchTime: updatedContent.totalWatchTime / updatedContent.views } });
-                }
-            } else if (userId) {
-                await ContentView.updateOne(
-                    { contentId: id, userId },
-                    { $setOnInsert: { firstViewedAt: new Date(now), weekBucket, monthBucket } },
-                    { upsert: true }
-                ).catch(() => {});
-            }
-        }
-
-        // WatchHistory (authenticated only)
-        if (userId) {
-            try {
-                const historyUser = await User.findById(userId, 'historyPaused').lean();
-                if (!historyUser?.historyPaused) {
-                    const watchPct = duration > 0 ? Math.min(100, (watchTimeSeconds / duration) * 100) : 0;
-                    const completed = watchPct >= 80;
-                    const existing = await WatchHistory.findOne({ userId, contentId: id });
-                    const isNew = !existing;
-
-                    await WatchHistory.findOneAndUpdate(
-                        { userId, contentId: id },
-                        {
-                            $set: {
-                                contentType: content.contentType, lastWatchedAt: new Date(),
-                                watchPercentage: Math.max(watchPct, existing?.watchPercentage || 0),
-                                completedWatch: completed || existing?.completedWatch || false,
-                                'contentMetadata.title': content.title, 'contentMetadata.tags': content.tags || [],
-                                'contentMetadata.category': content.category, 'contentMetadata.creatorId': content.userId,
-                                'contentMetadata.duration': content.duration
-                            },
-                            $inc: { watchTime: watchTimeSeconds, watchCount: 1 },
-                            $setOnInsert: { firstWatchedAt: new Date() },
-                            $push: { sessions: { $each: [{ startedAt: new Date(now - watchTimeMs), endedAt: new Date(), watchTime: watchTimeSeconds, completedWatch: completed }], $slice: -20 } }
-                        },
-                        { upsert: true, new: true }
-                    );
-
-                    if (isNew) {
-                        const count = await WatchHistory.countDocuments({ userId });
-                        if (count > 100) {
-                            const oldest = await WatchHistory.find({ userId }).sort({ lastWatchedAt: 1 }).limit(count - 100).select('_id');
-                            await WatchHistory.deleteMany({ _id: { $in: oldest.map(h => h._id) } });
-                        }
-                    }
-                }
-            } catch (_) { /* non-blocking */ }
-        }
-
-        const fresh = await Content.findById(id).select('averageWatchTime views totalWatchTime').lean();
+        const fresh = await Content.findById(id).select('averageWatchTime views totalWatchTime completionRate authenticatedViews anonymousViews authenticatedUniqueViewers anonymousUniqueViewers').lean();
         res.json({
             message: 'Watch time updated',
             averageWatchTime: fresh?.averageWatchTime || 0,
             views: fresh?.views || 0,
             totalWatchTime: fresh?.totalWatchTime || 0,
-            viewCounted
+            completionRate: fresh?.completionRate ?? null,
+            authenticatedViews: fresh?.authenticatedViews || 0,
+            anonymousViews: fresh?.anonymousViews || 0,
+            authenticatedUniqueViewers: fresh?.authenticatedUniqueViewers || 0,
+            anonymousUniqueViewers: fresh?.anonymousUniqueViewers || 0,
+            viewCounted: result.viewCounted,
+            duplicate: result.duplicate,
         });
     } catch (error) {
         console.error('Error updating watch time:', error);
