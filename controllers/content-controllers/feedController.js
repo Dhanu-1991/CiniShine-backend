@@ -441,7 +441,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
             const filterQuery = {
                 _id: { $ne: current._id },
                 status: 'completed',
-                visibility: 'public',
+                visibility: { $in: ['public', 'pay_per_view'] },
                 contentType: 'video',
             };
 
@@ -501,7 +501,7 @@ export const getRecommendationsWithShorts = async (req, res) => {
             const relatedCandidates = await Content.find({
                 _id: { $nin: Array.from(excluded) },
                 status: 'completed',
-                visibility: 'public',
+                visibility: { $in: ['public', 'pay_per_view'] },
                 contentType
             })
                 .sort({ createdAt: -1, views: -1 })
@@ -714,7 +714,7 @@ export const getCategoryFeed = async (req, res) => {
 
         let query = {
             status: 'completed',
-            visibility: 'public',
+            visibility: { $in: ['public', 'pay_per_view'] },
         };
         if (excludeIdSet.length > 0) query._id = { $nin: excludeIdSet };
 
@@ -872,7 +872,7 @@ export const getCategoryTrending = async (req, res) => {
 
         const query = {
             status: 'completed',
-            visibility: 'public',
+            visibility: { $in: ['public', 'pay_per_view'] },
         };
 
         if (excludeIdSet.length > 0) {

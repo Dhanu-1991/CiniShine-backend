@@ -2,6 +2,7 @@
 import crypto from "crypto";
 import dotenv from "dotenv";
 import PaymentDetails from "../../models/payment.details.model.js";
+import Purchase from "../../models/purchase.model.js";
 
 dotenv.config();
 
@@ -31,7 +32,7 @@ export const handleCashfreeWebhook = async (req, res) => {
     }
 
     // Raw payload buffer → string (exact bytes)
-    const rawBodyString = req.rawBody.toString("utf8");
+    const rawBodyString = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body);
 
     let dataToSign;
     if (version === "2025-01-01") {
@@ -67,10 +68,74 @@ export const handleCashfreeWebhook = async (req, res) => {
 
     // Business logic
     const payload = JSON.parse(rawBodyString);
+    
     if (payload.type === "PAYMENT_SUCCESS_WEBHOOK") {
       const { order, payment } = payload.data || {};
-      console.log(`Processing success for Order: ${order?.order_id}`);
-      // e.g. await PaymentDetails.create({ order, payment, timestamp: payload.event_time });
+      const orderId = order?.order_id;
+      const paymentId = payment?.cf_payment_id || payment?.payment_id;
+      const amount = payment?.payment_amount;
+      const currency = payment?.payment_currency || "INR";
+      
+      console.log(`Processing success for Order: ${orderId}`);
+      
+      const contentId = order?.order_tags?.contentId || order?.order_meta?.contentId;
+      const userId = order?.order_tags?.userId || order?.order_meta?.userId;
+      
+      const existingPayment = await PaymentDetails.findOne({ orderId });
+      if (!existingPayment) {
+        // Calculate 48 hours from now
+        const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+        
+        // Create Purchase
+        const purchase = await Purchase.create({
+          contentId,
+          buyerId: userId,
+          orderId,
+          paymentId,
+          amount,
+          currency,
+          status: 'active',
+          expiresAt
+        });
+        
+        // Create PaymentDetails
+        await PaymentDetails.create({
+          orderId,
+          paymentId,
+          amount,
+          currency,
+          status: "SUCCESS",
+          userId,
+          contentId,
+          purchaseId: purchase._id
+        });
+        console.log(`Purchase and Payment details created for Order: ${orderId}`);
+      } else {
+        console.log(`Order ${orderId} already processed.`);
+      }
+    } else if (payload.type === "PAYMENT_FAILED_WEBHOOK") {
+      const { order, payment } = payload.data || {};
+      const orderId = order?.order_id;
+      const paymentId = payment?.cf_payment_id || payment?.payment_id;
+      const amount = payment?.payment_amount;
+      const currency = payment?.payment_currency || "INR";
+      
+      const contentId = order?.order_tags?.contentId || order?.order_meta?.contentId;
+      const userId = order?.order_tags?.userId || order?.order_meta?.userId;
+      
+      const existingPayment = await PaymentDetails.findOne({ orderId });
+      if (!existingPayment) {
+        await PaymentDetails.create({
+          orderId,
+          paymentId,
+          amount,
+          currency,
+          status: "FAILED",
+          userId,
+          contentId
+        });
+        console.log(`Payment failure recorded for Order: ${orderId}`);
+      }
     }
 
     return res.status(200).send("Webhook processed");

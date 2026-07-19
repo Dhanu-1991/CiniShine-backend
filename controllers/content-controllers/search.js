@@ -174,7 +174,7 @@ export const searchVideos = async (req, res) => {
 
         const matchQuery = {
             status: 'completed',
-            visibility: 'public',
+            visibility: { $in: ['public', 'pay_per_view'] },
             $or: [
                 { title: searchRegex },
                 { description: searchRegex }
@@ -427,7 +427,7 @@ export const unifiedSearch = async (req, res) => {
 
         // Build mongo filter for content — only show completed items
         const contentFilter = {
-            visibility: 'public',
+            visibility: { $in: ['public', 'pay_per_view'] },
             status: 'completed',
             ...(searchRegex ? { $or: [{ title: searchRegex }, { description: searchRegex }, { tags: searchRegex }] } : {}),
         };

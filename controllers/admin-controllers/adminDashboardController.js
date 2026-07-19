@@ -9,6 +9,7 @@ import User from '../../models/user.model.js';
 import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
+import ContentWatchtime from '../../models/contentWatchtime.model.js';
 import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
@@ -40,7 +41,8 @@ export const getDashboard = async (req, res) => {
             contentProcessing,
             contentFailed,
             contentCompleted,
-            activeUsersResult
+            activeUsersResult,
+            splitCounters
         ] = await Promise.all([
             Content.countDocuments({ status: 'completed' }),
             User.countDocuments({}),
@@ -49,9 +51,9 @@ export const getDashboard = async (req, res) => {
             Enquiry.countDocuments({}),
             ContentArchive.countDocuments({ permanently_deleted: false, restored_at: null }),
             User.countDocuments({ lastLoginAt: { $gte: today } }),
-            Content.aggregate([
-                { $match: { updatedAt: { $gte: today } } },
-                { $group: { _id: null, views: { $sum: '$views' } } }
+            ContentWatchtime.aggregate([
+                { $match: { createdAt: { $gte: today } } },
+                { $group: { _id: null, views: { $sum: 1 } } }
             ]),
             AdminRequest.countDocuments({ status: 'pending' }),
             Admin.countDocuments({ status: 'active' }),
@@ -70,7 +72,16 @@ export const getDashboard = async (req, res) => {
             Content.countDocuments({ status: 'failed' }),
             Content.countDocuments({ status: 'completed' }),
             // Active users: distinct users with watch activity in last 15 min
-            WatchHistory.distinct('userId', { lastWatchedAt: { $gte: fifteenMinAgo } })
+            ContentWatchtime.distinct('userId', { createdAt: { $gte: fifteenMinAgo }, userId: { $ne: null } }),
+            
+            // Split counters across all content
+            Content.aggregate([
+                { $group: { 
+                    _id: null, 
+                    authenticatedViews: { $sum: '$authenticatedViews' }, 
+                    anonymousViews: { $sum: '$anonymousViews' } 
+                } }
+            ])
         ]);
 
         return res.status(200).json({
@@ -91,7 +102,13 @@ export const getDashboard = async (req, res) => {
                     contentFailed,
                     contentCompleted,
                     activeUsers: activeUsersResult?.length || 0,
-                    totalEnquiries
+                    totalEnquiries,
+                    authenticatedViews: splitCounters[0]?.authenticatedViews || 0,
+                    anonymousViews: splitCounters[0]?.anonymousViews || 0
+                },
+                pipelineHealth: {
+                    failedEvents: 0,
+                    queueSize: 0
                 },
                 latestReports,
                 latestFeedback,

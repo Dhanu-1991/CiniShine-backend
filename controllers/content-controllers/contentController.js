@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Content Controller
  * Handles: shorts, audio, posts
  * 
@@ -592,7 +592,7 @@ export const getFeedContent = async (req, res) => {
 
         const query = {
             status: 'completed',
-            visibility: 'public'
+            visibility: { $in: ['public', 'pay_per_view'] }
         };
 
         if (type && ['short', 'audio', 'post'].includes(type)) {
@@ -769,7 +769,7 @@ export const getShortsPlayerFeed = async (req, res) => {
             const contents = await Content.find({
                 contentType: 'short',
                 status: 'completed',
-                visibility: 'public',
+                visibility: { $in: ['public', 'pay_per_view'] },
                 _id: { $nin: allExcludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
                 .populate('userId', 'userName channelName channelHandle channelPicture')
@@ -825,7 +825,7 @@ export const getShortsPlayerFeed = async (req, res) => {
         const totalShorts = await Content.countDocuments({
             contentType: 'short',
             status: 'completed',
-            visibility: 'public'
+            visibility: { $in: ['public', 'pay_per_view'] }
         });
 
         res.json({
@@ -881,7 +881,7 @@ export const getAudioPlayerFeed = async (req, res) => {
             const contents = await Content.find({
                 contentType: 'audio',
                 status: 'completed',
-                visibility: 'public',
+                visibility: { $in: ['public', 'pay_per_view'] },
                 _id: { $nin: excludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
                 .populate('userId', 'userName channelName channelHandle channelPicture')
@@ -897,7 +897,7 @@ export const getAudioPlayerFeed = async (req, res) => {
         const totalAudio = await Content.countDocuments({
             contentType: 'audio',
             status: 'completed',
-            visibility: 'public'
+            visibility: { $in: ['public', 'pay_per_view'] }
         });
 
         res.json({

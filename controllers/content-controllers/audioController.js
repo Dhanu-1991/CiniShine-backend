@@ -163,7 +163,7 @@ export const getAudioPlayerFeed = async (req, res) => {
             if (audioList.length === 0) {
                 const skip = (parseInt(page) - 1) * parseInt(limit);
                 const contents = await Content.find({
-                    contentType: 'audio', status: 'completed', visibility: 'public',
+                    contentType: 'audio', status: 'completed', visibility: { $in: ['public', 'pay_per_view'] },
                     _id: { $nin: allExcludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) }
                 })
                     .populate('userId', 'userName channelName channelHandle channelPicture')
@@ -174,7 +174,7 @@ export const getAudioPlayerFeed = async (req, res) => {
         } else {
             const skip = (parseInt(page) - 1) * parseInt(limit);
             const contents = await Content.find({
-                contentType: 'audio', status: 'completed', visibility: 'public',
+                contentType: 'audio', status: 'completed', visibility: { $in: ['public', 'pay_per_view'] },
                 _id: { $nin: allExcludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
                 .populate('userId', 'userName channelName channelHandle channelPicture')
@@ -183,7 +183,7 @@ export const getAudioPlayerFeed = async (req, res) => {
         }
 
         const allAudio = startingAudio ? [startingAudio, ...audioList] : audioList;
-        const totalAudio = await Content.countDocuments({ contentType: 'audio', status: 'completed', visibility: 'public' });
+        const totalAudio = await Content.countDocuments({ contentType: 'audio', status: 'completed', visibility: { $in: ['public', 'pay_per_view'] } });
 
         res.json({
             audio: allAudio,

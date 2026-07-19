@@ -122,6 +122,17 @@ const ContentWatchtimeSchema = new mongoose.Schema({
         enum: ['desktop', 'mobile', 'tablet'],
         default: 'desktop',
     },
+    // ── Content-type specific metrics ──
+    // Shorts/Frames
+    loopCount: { type: Number, default: 0 },
+    swipeAwayAt: { type: Number, default: null }, // playhead seconds when swiped away
+    swipedAway: { type: Boolean, default: false },
+    // Audio
+    skipped: { type: Boolean, default: false },
+    replayCount: { type: Number, default: 0 },
+    // Posts
+    impression: { type: Boolean, default: false },
+    clickedThrough: { type: Boolean, default: false },
 }, {
     timestamps: true,
     versionKey: false,

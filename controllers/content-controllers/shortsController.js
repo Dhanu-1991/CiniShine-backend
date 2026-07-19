@@ -167,7 +167,7 @@ export const getShortsPlayerFeed = async (req, res) => {
             if (shorts.length === 0) {
                 const skip = (parseInt(page) - 1) * parseInt(limit);
                 const contents = await Content.find({
-                    contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: 'public',
+                    contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: { $in: ['public', 'pay_per_view'] },
                     _id: { $nin: allExcludeIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) }
                 })
                     .populate('userId', 'userName channelName channelHandle channelPicture')
@@ -193,7 +193,7 @@ export const getShortsPlayerFeed = async (req, res) => {
         } else {
             const skip = (parseInt(page) - 1) * parseInt(limit);
             const contents = await Content.find({
-                contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: 'public',
+                contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: { $in: ['public', 'pay_per_view'] },
                 _id: { $nin: allExcludeIds.map(id => new mongoose.Types.ObjectId(id)) }
             })
                 .populate('userId', 'userName channelName channelHandle channelPicture')
@@ -218,7 +218,7 @@ export const getShortsPlayerFeed = async (req, res) => {
         }
 
         const allShorts = startingShort ? [startingShort, ...shorts] : shorts;
-        const totalShorts = await Content.countDocuments({ contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: 'public' });
+        const totalShorts = await Content.countDocuments({ contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: { $in: ['public', 'pay_per_view'] } });
 
         res.json({
             shorts: allShorts,

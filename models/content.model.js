@@ -47,8 +47,13 @@ const ContentSchema = new mongoose.Schema({
     // Content settings
     visibility: {
         type: String,
-        enum: ['public', 'unlisted', 'private'],
+        enum: ['public', 'unlisted', 'private', 'pay_per_view'],
         default: 'public'
+    },
+    price: {
+        type: Number,
+        default: null,
+        min: 1,
     },
     isAgeRestricted: {
         type: Boolean,
@@ -177,6 +182,46 @@ const ContentSchema = new mongoose.Schema({
     completionRate: {
         type: Number,
         default: null
+    },
+    // Running average completion: sum / count
+    completionSumPercent: {
+        type: Number,
+        default: 0
+    },
+    completionSessionCount: {
+        type: Number,
+        default: 0
+    },
+
+    // ============================================
+    // CONTENT-TYPE SPECIFIC METRICS
+    // ============================================
+    // Shorts/Frames
+    loopCount: {
+        type: Number,
+        default: 0
+    },
+    swipeAwayCount: {
+        type: Number,
+        default: 0
+    },
+    // Audio
+    skipCount: {
+        type: Number,
+        default: 0
+    },
+    replayCount: {
+        type: Number,
+        default: 0
+    },
+    // Posts
+    impressions: {
+        type: Number,
+        default: 0
+    },
+    clickThroughCount: {
+        type: Number,
+        default: 0
     },
 
     // ============================================

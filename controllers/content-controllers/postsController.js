@@ -150,7 +150,7 @@ export const getSubscriptionPosts = async (req, res) => {
         // Build query — exclude already-loaded IDs
         let query;
         const baseFilter = {
-            contentType: 'post', status: 'completed', visibility: 'public',
+            contentType: 'post', status: 'completed', visibility: { $in: ['public', 'pay_per_view'] },
             ...(excludeIdSet.size > 0 && { _id: { $nin: Array.from(excludeIdSet) } })
         };
 

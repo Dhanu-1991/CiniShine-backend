@@ -3,19 +3,12 @@
  *
  * View counting: min(30s, 30% of duration) threshold.
  * Supports both authenticated (userId) and anonymous (IP+fingerprint) viewers.
- * View counts are batched via viewCountQueue and flushed every 10s.
- * Cooldown dedup uses ContentView.lastCountedAt instead of user.viewHistory.
+ * Watch time tracking delegated to shared watchAnalytics.js helper.
  */
-import crypto from 'crypto';
 import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
-import WatchHistory from "../../models/watchHistory.model.js";
-import ContentView from "../../models/contentView.model.js";
 import { recordWatchSignal } from "../../utils/watchAnalytics.js";
-
-// In-memory rate limiting (resets on server restart — acceptable for throttling)
-const watchRateLimit = new Map();
 
 export const likeVideo = async (req, res) => {
     try {

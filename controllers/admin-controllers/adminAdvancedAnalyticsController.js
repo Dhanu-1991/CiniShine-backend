@@ -80,6 +80,9 @@ export const getPlatformAnalytics = async (req, res) => {
 
             // Device breakdown
             deviceBreakdown,
+            
+            // Views by content type
+            viewsByContentType,
         ] = await Promise.all([
             // Total sessions in period
             UserSession.countDocuments({ startedAt: { $gte: start } }),
@@ -172,6 +175,18 @@ export const getPlatformAnalytics = async (req, res) => {
                     },
                 },
             ]),
+            
+            // View counts by content type (from Content model)
+            Content.aggregate([
+                {
+                    $group: {
+                        _id: '$contentType',
+                        totalViews: { $sum: '$views' },
+                        authenticatedViews: { $sum: '$authenticatedViews' },
+                        anonymousViews: { $sum: '$anonymousViews' }
+                    }
+                }
+            ]),
         ]);
 
         // Format page usage into map
@@ -183,10 +198,14 @@ export const getPlatformAnalytics = async (req, res) => {
         // Format watchtime by type
         const watchtimeMap = {};
         for (const w of watchtimeByType) {
+            const v = viewsByContentType.find(x => x._id === w._id) || {};
             watchtimeMap[w._id] = {
                 totalPlayMinutes: Math.round(w.totalPlayTime / 60),
                 totalBufferMinutes: Math.round(w.totalBufferTime / 60),
-                count: w.count,
+                count: w.count, // Watchtime event count
+                totalViews: v.totalViews || 0,
+                authenticatedViews: v.authenticatedViews || 0,
+                anonymousViews: v.anonymousViews || 0,
                 avgCompletion: Math.round(w.avgCompletion || 0),
             };
         }
@@ -264,6 +283,9 @@ export const getContentAnalytics = async (req, res) => {
 
             // Average completion rates
             completionRates,
+            
+            // Completion rate distribution
+            completionRateDistribution,
         ] = await Promise.all([
             // Top 20 most watched content
             ContentWatchtime.aggregate([
@@ -294,7 +316,9 @@ export const getContentAnalytics = async (req, res) => {
                         title: '$content.title',
                         thumbnailKey: '$content.thumbnailKey',
                         totalPlayMinutes: { $round: [{ $divide: ['$totalPlayTime', 60] }, 1] },
-                        viewCount: 1,
+                        viewCount: { $ifNull: ['$content.views', 0] },
+                        authenticatedViews: { $ifNull: ['$content.authenticatedViews', 0] },
+                        anonymousViews: { $ifNull: ['$content.anonymousViews', 0] },
                         avgCompletion: { $round: ['$avgCompletion', 0] },
                     },
                 },
@@ -337,6 +361,21 @@ export const getContentAnalytics = async (req, res) => {
                     },
                 },
             ]),
+            
+            // Completion rate distribution
+            ContentWatchtime.aggregate([
+                { $match: matchStage }, // or use matchStage to support contentType filter
+                {
+                    $bucket: {
+                        groupBy: "$consumptionPercent",
+                        boundaries: [0, 25, 50, 75, 100],
+                        default: "100+",
+                        output: {
+                            count: { $sum: 1 }
+                        }
+                    }
+                }
+            ]),
         ]);
 
         // Format type distribution for pie chart
@@ -362,6 +401,7 @@ export const getContentAnalytics = async (req, res) => {
                 dailyContent,
                 typeDistribution: typePie,
                 completionRates: completionMap,
+                completionRateDistribution,
             },
         });
     } catch (error) {

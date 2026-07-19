@@ -53,7 +53,7 @@ export const getChannelPage = async (req, res) => {
 
         // Content counts by type (only public + completed)
         const contentCounts = await Content.aggregate([
-            { $match: { userId: user._id, status: 'completed', visibility: 'public' } },
+            { $match: { userId: user._id, status: 'completed', visibility: { $in: ['public', 'pay_per_view'] } } },
             { $group: { _id: '$contentType', count: { $sum: 1 } } }
         ]);
 
@@ -64,7 +64,7 @@ export const getChannelPage = async (req, res) => {
         const newestReleases = await Content.find({
             userId: user._id,
             status: 'completed',
-            visibility: 'public'
+            visibility: { $in: ['public', 'pay_per_view'] }
         })
             .sort({ createdAt: -1 })
             .limit(6)
@@ -93,7 +93,7 @@ export const getChannelPage = async (req, res) => {
         const popularContent = await Content.find({
             userId: user._id,
             status: 'completed',
-            visibility: 'public'
+            visibility: { $in: ['public', 'pay_per_view'] }
         })
             .sort({ views: -1 })
             .limit(6)
@@ -182,7 +182,7 @@ export const getChannelContent = async (req, res) => {
             userId: user._id,
             contentType: type,
             status: 'completed',
-            visibility: 'public'
+            visibility: { $in: ['public', 'pay_per_view'] }
         };
 
         const sortBy = sort === 'popular' ? { views: -1, likeCount: -1 } : sort === 'oldest' ? { createdAt: 1 } : { createdAt: -1 };
@@ -255,7 +255,7 @@ export const checkNewContent = async (req, res) => {
         const newContent = await Content.distinct('userId', {
             userId: { $in: validIds },
             createdAt: { $gt: sinceDate },
-            visibility: 'public',
+            visibility: { $in: ['public', 'pay_per_view'] },
         });
 
         res.json({ channelsWithNew: newContent.map(id => id.toString()) });

@@ -1,6 +1,7 @@
 import User from '../../models/user.model.js';
 import Content from '../../models/content.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
+import ContentWatchtime from '../../models/contentWatchtime.model.js';
 import Message from '../../models/message.model.js';
 import CommunityChat from '../../models/communityChat.model.js';
 import mongoose from 'mongoose';
@@ -89,9 +90,9 @@ export const getAnalytics = async (req, res) => {
                 ]
             }),
 
-            // Total platform watch time (sum of all watchHistory watchTime)
-            WatchHistory.aggregate([
-                { $group: { _id: null, total: { $sum: '$watchTime' } } }
+            // Total platform watch time (sum of all activePlayTime)
+            ContentWatchtime.aggregate([
+                { $group: { _id: null, total: { $sum: '$activePlayTime' } } }
             ]),
 
             // Total DM messages
@@ -153,14 +154,14 @@ export const getAnalytics = async (req, res) => {
             ]),
 
             // Daily watch time (last 30 days)
-            WatchHistory.aggregate([
-                { $match: { lastWatchedAt: { $gte: thirtyDaysAgo } } },
+            ContentWatchtime.aggregate([
+                { $match: { createdAt: { $gte: thirtyDaysAgo } } },
                 {
                     $group: {
                         _id: {
-                            $dateToString: { format: '%Y-%m-%d', date: '$lastWatchedAt' }
+                            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
                         },
-                        totalWatchTime: { $sum: '$watchTime' },
+                        totalWatchTime: { $sum: '$activePlayTime' },
                         sessions: { $sum: 1 }
                     }
                 },

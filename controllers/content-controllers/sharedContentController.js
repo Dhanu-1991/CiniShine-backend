@@ -39,6 +39,25 @@ import { recordWatchSignal } from '../../utils/watchAnalytics.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl } from '../../config/cloudfront.js';
 
+/**
+ * Helper: get date/month bucket strings for current time
+ */
+function getBuckets(date = new Date()) {
+    const d = date.toISOString().slice(0, 10); // "2025-01-15"
+    const m = date.toISOString().slice(0, 7);  // "2025-01"
+    return { dateBucket: d, monthBucket: m };
+}
+
+/**
+ * Helper: detect device type from user-agent
+ */
+function getDevice(ua = '') {
+    ua = ua.toLowerCase();
+    if (/tablet|ipad/i.test(ua)) return 'tablet';
+    if (/mobile|android|iphone/i.test(ua)) return 'mobile';
+    return 'desktop';
+}
+
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
     credentials: {
@@ -157,7 +176,7 @@ export const getFeedContent = async (req, res) => {
         const { type, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const query = { status: 'completed', visibility: 'public' };
+        const query = { status: 'completed', visibility: { $in: ['public', 'pay_per_view'] } };
         if (type && ['short', 'audio', 'post'].includes(type)) {
             query.contentType = type;
         } else {
@@ -340,52 +359,7 @@ export const updateContentEngagement = async (req, res) => {
     }
 };
 
-// In-memory rate limiter: viewerKey:contentId -> last update timestamp
-const watchTimeRateLimit = new Map();
-
-import crypto from 'crypto';
-import { incrementView } from '../../utils/viewCountQueue.js';
-
-const computeFingerprint = (req) => {
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
-    const ua = req.get('User-Agent') || '';
-    const lang = req.get('Accept-Language') || '';
-    return crypto.createHash('sha256').update(`${ip}|${ua}|${lang}`).digest('hex');
-};
-
-const getViewThreshold = (contentType, durationSeconds = 0) => {
-    if (contentType === 'post') return 1;
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 5;
-    return Math.max(1, Math.min(30, durationSeconds * 0.3));
-};
-
-const getMinUpdateGapMs = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 10000;
-    if (durationSeconds <= 10) return 3000;
-    if (durationSeconds <= 60) return 5000;
-    if (durationSeconds <= 600) return 10000;
-    return 15000;
-};
-
-const getViewRecountCooldownMs = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 5 * 60 * 1000;
-    return Math.max(durationSeconds * 5 * 1000, 30 * 1000);
-};
-
-const getMaxWatchTime = (durationSeconds = 0) => {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 3600;
-    return durationSeconds * 1.5;
-};
-
-const buildViewBuckets = (now = new Date()) => {
-    const year = now.getFullYear();
-    const week = Math.ceil(((now - new Date(year, 0, 1)) / 86400000 + 1) / 7);
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    return {
-        weekBucket: `${year}-W${String(week).padStart(2, '0')}`,
-        monthBucket: `${year}-${month}`,
-    };
-};
+// Dead code (computeFingerprint, getViewThreshold, etc.) removed — all handled by watchAnalytics.js
 
 /**
  * Track watch time for shorts/audio/posts

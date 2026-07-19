@@ -1,7 +1,16 @@
 import Content from '../models/content.model.js';
 
 /**
- * ViewCountQueue — In-memory batched view counter.
+ * @deprecated — ORPHANED MODULE
+ *
+ * View counting is now handled atomically inside watchAnalytics.js via
+ * ContentView findOneAndUpdate + Content $inc.  This batched queue is
+ * no longer imported anywhere and should be removed in a future cleanup.
+ *
+ * Kept temporarily in case rollback is needed.
+ *
+ * ───────────────────────────────────────────────────────────────────────
+ * ViewCountQueue — In-memory batched view counter (LEGACY).
  *
  * Instead of writing `content.views++` on every view event, we accumulate
  * increments in a Map and flush them to the database periodically using
