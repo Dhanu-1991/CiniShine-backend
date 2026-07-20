@@ -3,8 +3,9 @@ import dotenv from "dotenv";
 import PaymentDetails from "../../models/payment.details.model.js";
 import Purchase from "../../models/purchase.model.js";
 import Content from "../../models/content.model.js";
-import { ensureSecondaryWallet, creditWallet } from "../../utils/walletService.js";
+import { ensureSecondaryWallet, ensurePrimaryWallet, creditWallet } from "../../utils/walletService.js";
 import SecondaryWallet from "../../models/secondaryWallet.model.js";
+import PrimaryWallet from "../../models/primaryWallet.model.js";
 import mongoose from "mongoose";
 
 dotenv.config();
@@ -85,67 +86,104 @@ export const handleCashfreeWebhook = async (req, res) => {
       const contentId = order?.order_tags?.contentId || order?.order_meta?.contentId;
       const userId = order?.order_tags?.userId || order?.order_meta?.userId;
       
+      const type = order?.order_tags?.type || "ppv_purchase";
+      
       const existingPayment = await PaymentDetails.findOne({ orderId });
       if (!existingPayment) {
-        const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-        
-        const purchase = await Purchase.create({
-          contentId,
-          buyerId: userId,
-          orderId,
-          paymentId,
-          amount,
-          currency,
-          status: 'active',
-          expiresAt
-        });
-        
-        await PaymentDetails.create({
-          orderId,
-          paymentId,
-          amount,
-          currency,
-          status: "SUCCESS",
-          userId,
-          contentId,
-          purchaseId: purchase._id
-        });
-        console.log(`Purchase and Payment details created for Order: ${orderId}`);
+        if (type === "wallet_recharge") {
+          // --- WALLET RECHARGE LOGIC ---
+          const session = await mongoose.startSession();
+          try {
+            await session.withTransaction(async () => {
+              const wallet = await ensurePrimaryWallet(userId);
+              
+              await creditWallet(
+                wallet._id,
+                'primary',
+                amount,
+                'recharge',
+                { relatedOrderId: orderId, relatedBuyerId: userId },
+                `recharge_${orderId}`,
+                session
+              );
+              
+              await PaymentDetails.create([{
+                orderId,
+                paymentId,
+                amount,
+                currency,
+                status: "SUCCESS",
+                userId
+              }], { session });
+            });
+            console.log(`✅ Credited ₹${amount} to user ${userId} primary wallet for recharge`);
+          } catch (walletErr) {
+            console.error('❌ Failed to process wallet recharge webhook', walletErr);
+          } finally {
+            await session.endSession();
+          }
+        } else {
+          // --- PPV PURCHASE LOGIC ---
+          const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+          
+          const purchase = await Purchase.create({
+            contentId,
+            buyerId: userId,
+            orderId,
+            paymentId,
+            amount,
+            currency,
+            status: 'active',
+            expiresAt
+          });
+          
+          await PaymentDetails.create({
+            orderId,
+            paymentId,
+            amount,
+            currency,
+            status: "SUCCESS",
+            userId,
+            contentId,
+            purchaseId: purchase._id
+          });
+          console.log(`Purchase and Payment details created for Order: ${orderId}`);
 
-        // Credit creator's secondary wallet with 70% of PPV earnings
-        try {
-          if (contentId) {
-            const content = await Content.findById(contentId).select('userId').lean();
-            if (content?.userId) {
-              const creatorId = content.userId.toString();
-              const creatorAmount = Math.round(amount * (100 - PLATFORM_CUT_PERCENT) / 100);
-              // Find or create creator's secondary wallet
-              let creatorWallet = await SecondaryWallet.findOne({ userId: creatorId });
-              if (!creatorWallet) {
-                creatorWallet = await ensureSecondaryWallet(creatorId);
-              }
-              const session = await mongoose.startSession();
-              try {
-                await session.withTransaction(async () => {
-                  await creditWallet(
-                    creatorWallet._id, 'secondary', creatorAmount, 'ppv_earning_credit',
-                    {
-                      relatedContentId: contentId,
-                      relatedPurchaseId: purchase._id,
-                      relatedOrderId: orderId,
-                      relatedBuyerId: userId,
-                    },
-                    `ppv_earning_${orderId}`, session
-                  );
-                });
-                console.log(`✅ Credited ₹${creatorAmount} (70% of ₹${amount}) to creator ${creatorId} secondary wallet`);
-              } finally {
-                await session.endSession();
+          // Credit creator's secondary wallet with 70% of PPV earnings
+          try {
+            if (contentId) {
+              const content = await Content.findById(contentId).select('userId').lean();
+              if (content?.userId) {
+                const creatorId = content.userId.toString();
+                const creatorAmount = Math.round(amount * (100 - PLATFORM_CUT_PERCENT) / 100);
+                // Find or create creator's secondary wallet
+                let creatorWallet = await SecondaryWallet.findOne({ userId: creatorId });
+                if (!creatorWallet) {
+                  creatorWallet = await ensureSecondaryWallet(creatorId);
+                }
+                const session = await mongoose.startSession();
+                try {
+                  await session.withTransaction(async () => {
+                    await creditWallet(
+                      creatorWallet._id, 'secondary', creatorAmount, 'ppv_earning_credit',
+                      {
+                        relatedContentId: contentId,
+                        relatedPurchaseId: purchase._id,
+                        relatedOrderId: orderId,
+                        relatedBuyerId: userId,
+                      },
+                      `ppv_earning_${orderId}`, session
+                    );
+                  });
+                  console.log(`✅ Credited ₹${creatorAmount} (70% of ₹${amount}) to creator ${creatorId} secondary wallet`);
+                } finally {
+                  await session.endSession();
+                }
               }
             }
+          } catch (walletErr) {
+            console.error('❌ Failed to credit creator wallet (purchase still valid):', walletErr);
           }
-        } catch (walletErr) {
-          console.error('❌ Failed to credit creator wallet (purchase still valid):', walletErr);
         }
       } else {
         console.log(`Order ${orderId} already processed.`);
