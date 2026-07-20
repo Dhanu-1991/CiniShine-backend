@@ -1,14 +1,16 @@
-// controllers/payment-gateway-controllers/payment-webhook.js
 import crypto from "crypto";
 import dotenv from "dotenv";
 import PaymentDetails from "../../models/payment.details.model.js";
 import Purchase from "../../models/purchase.model.js";
 import Content from "../../models/content.model.js";
-import { ensurePrimaryWallet, creditWallet } from "../../utils/walletService.js";
-import Wallet from "../../models/wallet.model.js";
+import { ensureSecondaryWallet, creditWallet } from "../../utils/walletService.js";
+import SecondaryWallet from "../../models/secondaryWallet.model.js";
 import mongoose from "mongoose";
 
 dotenv.config();
+
+/** Platform cut percentage for PPV purchases via gateway */
+const PLATFORM_CUT_PERCENT = 30;
 
 // Helper: flatten nested objects for pre-2025-01-01 versions
 const flattenObject = (obj, parentKey = "", result = {}) => {
@@ -40,10 +42,8 @@ export const handleCashfreeWebhook = async (req, res) => {
 
     let dataToSign;
     if (version === "2025-01-01") {
-      // 📣 v2025-01-01: sign the RAW JSON string directly
       dataToSign = rawBodyString;
     } else {
-      // 📣 Older versions: parse, flatten, sort values, concat
       const payload = JSON.parse(rawBodyString);
       const flat = flattenObject(payload);
       const sortedKeys = Object.keys(flat).sort();
@@ -53,7 +53,6 @@ export const handleCashfreeWebhook = async (req, res) => {
       }, "");
     }
 
-    // HMAC-SHA256 → Base64
     const generatedSignature = crypto
       .createHmac("sha256", secret)
       .update(dataToSign)
@@ -70,7 +69,6 @@ export const handleCashfreeWebhook = async (req, res) => {
 
     console.log("✅ Webhook verified (v" + version + ")");
 
-    // Business logic
     const payload = JSON.parse(rawBodyString);
     
     if (payload.type === "PAYMENT_SUCCESS_WEBHOOK") {
@@ -87,10 +85,8 @@ export const handleCashfreeWebhook = async (req, res) => {
       
       const existingPayment = await PaymentDetails.findOne({ orderId });
       if (!existingPayment) {
-        // Calculate 48 hours from now
         const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
         
-        // Create Purchase
         const purchase = await Purchase.create({
           contentId,
           buyerId: userId,
@@ -102,7 +98,6 @@ export const handleCashfreeWebhook = async (req, res) => {
           expiresAt
         });
         
-        // Create PaymentDetails
         await PaymentDetails.create({
           orderId,
           paymentId,
@@ -115,27 +110,33 @@ export const handleCashfreeWebhook = async (req, res) => {
         });
         console.log(`Purchase and Payment details created for Order: ${orderId}`);
 
-        // Credit creator's wallet with PPV earnings
+        // Credit creator's secondary wallet with 70% of PPV earnings
         try {
           if (contentId) {
             const content = await Content.findById(contentId).select('userId').lean();
             if (content?.userId) {
               const creatorId = content.userId.toString();
-              // Find creator's settlement wallet, fall back to primary
-              let creatorWallet = await Wallet.findOne({ userId: creatorId, type: 'settlement', kycStatus: 'submitted' });
+              const creatorAmount = Math.round(amount * (100 - PLATFORM_CUT_PERCENT) / 100);
+              // Find or create creator's secondary wallet
+              let creatorWallet = await SecondaryWallet.findOne({ userId: creatorId });
               if (!creatorWallet) {
-                creatorWallet = await ensurePrimaryWallet(creatorId);
+                creatorWallet = await ensureSecondaryWallet(creatorId);
               }
               const session = await mongoose.startSession();
               try {
                 await session.withTransaction(async () => {
                   await creditWallet(
-                    creatorWallet._id, amount, 'ppv_earning_credit',
-                    { relatedContentId: contentId, relatedPurchaseId: purchase._id, relatedOrderId: orderId },
+                    creatorWallet._id, 'secondary', creatorAmount, 'ppv_earning_credit',
+                    {
+                      relatedContentId: contentId,
+                      relatedPurchaseId: purchase._id,
+                      relatedOrderId: orderId,
+                      relatedBuyerId: userId,
+                    },
                     `ppv_earning_${orderId}`, session
                   );
                 });
-                console.log(`✅ Credited ₹${amount} to creator ${creatorId} wallet`);
+                console.log(`✅ Credited ₹${creatorAmount} (70% of ₹${amount}) to creator ${creatorId} secondary wallet`);
               } finally {
                 await session.endSession();
               }

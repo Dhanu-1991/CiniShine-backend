@@ -1,15 +1,18 @@
 /**
  * Payout Job Controller
  *
- * - runMonthEndPayout: Processes all settlement wallets with balance > 0
+ * - runMonthEndPayout: Processes all secondary wallets with balance > 0
  *   Idempotent — safe to run multiple times per month
  * - getPayoutReport: Admin view of payouts for a given month
+ *
+ * REFACTORED: Uses SecondaryWallet + KycDetails (separate models)
  */
 import mongoose from 'mongoose';
-import Wallet from '../../models/wallet.model.js';
+import SecondaryWallet from '../../models/secondaryWallet.model.js';
+import KycDetails from '../../models/kycDetails.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
 import Payout from '../../models/payout.model.js';
-import { decryptBankDetails, encryptBankDetails } from '../../utils/encryption.js';
+import { decryptBankDetails } from '../../utils/encryption.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -25,29 +28,39 @@ const MAINTENANCE_FEE_PERCENT = 0.01; // 1%
 
 /**
  * POST /admin/payouts/run — Run month-end payout job
- * Finds all settlement wallets with kycStatus=submitted and balance > 0
+ * Finds all secondary wallets with balance > 0, paired with submitted KYC
  * Processes each in an individual atomic transaction
  */
 export const runMonthEndPayout = async (req, res) => {
     try {
-        // Determine payout month (default: current month, or override via query)
         const now = new Date();
         const payoutMonth = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-        // Find all settlement wallets with balance > 0 and completed KYC
-        const wallets = await Wallet.find({
-            type: 'settlement',
-            kycStatus: 'submitted',
-            balance: { $gt: 0 },
-        }).lean();
+        // Find all secondary wallets with balance > 0
+        const wallets = await SecondaryWallet.find({ balance: { $gt: 0 } }).lean();
 
-        const results = { processed: 0, skipped: 0, failed: 0, errors: [] };
+        // Get KYC details for all wallet owners
+        const userIds = wallets.map(w => w.userId);
+        const kycDocs = await KycDetails.find({
+            userId: { $in: userIds },
+            kycStatus: 'submitted',
+        }).lean();
+        const kycByUser = new Map(kycDocs.map(k => [k.userId.toString(), k]));
+
+        const results = { processed: 0, skipped: 0, failed: 0, skippedNoKyc: 0, errors: [] };
 
         for (const wallet of wallets) {
+            // Skip wallets without submitted KYC
+            const kyc = kycByUser.get(wallet.userId.toString());
+            if (!kyc) {
+                results.skippedNoKyc++;
+                continue;
+            }
+
             const session = await mongoose.startSession();
             try {
                 await session.withTransaction(async () => {
-                    // Idempotency check: skip if payout already exists for this wallet + month
+                    // Idempotency check
                     const existingPayout = await Payout.findOne({
                         walletId: wallet._id,
                         payoutMonth,
@@ -58,7 +71,7 @@ export const runMonthEndPayout = async (req, res) => {
                     }
 
                     // Re-read wallet inside session to get latest balance
-                    const freshWallet = await Wallet.findById(wallet._id).session(session);
+                    const freshWallet = await SecondaryWallet.findById(wallet._id).session(session);
                     if (!freshWallet || freshWallet.balance <= 0) {
                         results.skipped++;
                         return;
@@ -69,7 +82,7 @@ export const runMonthEndPayout = async (req, res) => {
                     const netAmount = Math.round((grossAmount - feeAmount) * 100) / 100;
 
                     // Zero out the wallet balance atomically
-                    await Wallet.findOneAndUpdate(
+                    await SecondaryWallet.findOneAndUpdate(
                         { _id: freshWallet._id },
                         { $set: { balance: 0 } },
                         { session }
@@ -79,6 +92,7 @@ export const runMonthEndPayout = async (req, res) => {
                     const idempotencyKey = `payout_${wallet._id}_${payoutMonth}`;
                     await WalletTransaction.create([{
                         walletId: freshWallet._id,
+                        walletType: 'secondary',
                         type: 'payout',
                         amount: grossAmount,
                         balanceAfter: 0,
@@ -86,17 +100,17 @@ export const runMonthEndPayout = async (req, res) => {
                         idempotencyKey,
                     }], { session });
 
-                    // Snapshot encrypted bank details for the payout record
+                    // Snapshot encrypted bank details from KYC for the payout record
                     const bankSnapshot = {};
                     const bankFields = [
                         'bankAccountNumberEncrypted', 'bankAccountIv', 'bankAccountTag',
                         'ifscCodeEncrypted', 'ifscCodeIv', 'ifscCodeTag',
                         'accountHolderNameEncrypted', 'accountHolderNameIv', 'accountHolderNameTag',
                     ];
-                    bankFields.forEach(f => { bankSnapshot[f] = freshWallet[f]; });
+                    bankFields.forEach(f => { bankSnapshot[f] = kyc[f]; });
 
                     // Decrypt bank name for the payout record (plain text field)
-                    const decrypted = decryptBankDetails(freshWallet);
+                    const decrypted = decryptBankDetails(kyc);
 
                     await Payout.create([{
                         walletId: freshWallet._id,
@@ -141,7 +155,7 @@ export const runMonthEndPayout = async (req, res) => {
  */
 export const getPayoutReport = async (req, res) => {
     try {
-        const { month } = req.params; // '2026-07' format
+        const { month } = req.params;
 
         if (!month || !/^\d{4}-\d{2}$/.test(month)) {
             return res.status(400).json({ error: 'Month must be in YYYY-MM format' });
@@ -156,18 +170,21 @@ export const getPayoutReport = async (req, res) => {
         const enrichedPayouts = await Promise.all(payouts.map(async (payout) => {
             const bankDetails = decryptBankDetails(payout);
 
-            // Get KYC document presigned URL from the wallet
+            // Get KYC document presigned URL from KycDetails
             let kycDocumentUrl = null;
-            const wallet = await Wallet.findById(payout.walletId).select('kycDocumentKey kycDocumentType').lean();
-            if (wallet?.kycDocumentKey) {
+            let kycDocumentType = null;
+            const kyc = await KycDetails.findOne({ userId: payout.userId?._id || payout.userId })
+                .select('kycDocumentKey kycDocumentType').lean();
+            if (kyc?.kycDocumentKey) {
+                kycDocumentType = kyc.kycDocumentType;
                 try {
                     const command = new GetObjectCommand({
-                        Bucket: process.env.S3_BUCKET, // Using main bucket until private KYC bucket is set up
-                        Key: wallet.kycDocumentKey,
+                        Bucket: process.env.S3_BUCKET,
+                        Key: kyc.kycDocumentKey,
                     });
                     kycDocumentUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 }); // 15 min
                 } catch (err) {
-                    console.error(`Failed to generate presigned URL for ${wallet.kycDocumentKey}:`, err);
+                    console.error(`Failed to generate presigned URL for ${kyc.kycDocumentKey}:`, err);
                 }
             }
 
@@ -186,7 +203,7 @@ export const getPayoutReport = async (req, res) => {
                     accountHolderName: bankDetails.accountHolderName,
                 },
                 kycDocument: {
-                    type: wallet?.kycDocumentType,
+                    type: kycDocumentType,
                     url: kycDocumentUrl,
                 },
                 status: payout.status,
@@ -196,7 +213,6 @@ export const getPayoutReport = async (req, res) => {
             };
         }));
 
-        // Summary totals
         const totalGross = payouts.reduce((sum, p) => sum + p.grossAmount, 0);
         const totalFees = payouts.reduce((sum, p) => sum + p.feeAmount, 0);
         const totalNet = payouts.reduce((sum, p) => sum + p.netAmount, 0);

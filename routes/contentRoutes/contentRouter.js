@@ -113,6 +113,21 @@ import commentRouter from '../commentRoutes/commentRouter.js';
 // Using :videoId directly so mergeParams works correctly with commentRouter
 router.use('/:videoId/comments', commentRouter);
 
+// ============================================
+// RESUME POSITION ROUTES (cross-device resume)
+// ============================================
+import {
+    getResumePosition,
+    saveResumePosition,
+    getBatchResumePositions,
+} from '../../controllers/content-controllers/resumeController.js';
+
+// Batch: get resume positions for multiple content IDs (must be before :contentId route)
+router.get('/resume/batch', universalTokenVerifier, getBatchResumePositions);
+// Single: get/save resume position
+router.get('/resume/:contentId', universalTokenVerifier, getResumePosition);
+router.post('/resume/:contentId', universalTokenVerifier, saveResumePosition);
+
 // Get specific content by ID (legacy) — PPV gated
 router.get('/:id', optionalTokenVerifier, payPerViewAccess, getContent);
 

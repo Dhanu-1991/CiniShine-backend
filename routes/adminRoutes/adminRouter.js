@@ -25,6 +25,9 @@ import {
     adminSendMessage, adminGetMessages, adminGetConversations
 } from '../../controllers/admin-controllers/adminChatController.js';
 import {
+    getKycList, getWalletsList, getSecondaryWalletsList
+} from '../../controllers/admin-controllers/adminWalletController.js';
+import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
 
@@ -96,6 +99,11 @@ adminRouter.post('/send-email', auditLog('email_sent', 'user'), adminSendEmailHa
 
 // Admin requests (signup approvals, forgot-password activations)
 adminRouter.get('/requests', listRequests);
+
+// Wallet & KYC management
+adminRouter.get('/kyc', getKycList);
+adminRouter.get('/wallets/primary', getWalletsList);
+adminRouter.get('/wallets/secondary', getSecondaryWalletsList);
 
 // ─── SuperAdmin-only routes ──────────────────────────────────────────────────
 adminRouter.post('/approve-signup', requireSuperAdmin, auditLog('signup_approved', 'admin'), approveSignup);

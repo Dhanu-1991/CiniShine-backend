@@ -12,6 +12,8 @@ import {
 import { handleRechargeWebhook } from '../../controllers/wallet-controllers/rechargeWebhookController.js';
 import { runMonthEndPayout, getPayoutReport } from '../../controllers/wallet-controllers/payoutJobController.js';
 
+import { adminTokenVerifier } from '../../middlewares/admin.middleware.js';
+
 const walletRouter = express.Router();
 
 // Multer for KYC document upload (memory storage, max 5MB, images only)
@@ -35,9 +37,8 @@ walletRouter.post('/wallets/purchase-ppv', universalTokenVerifier, purchasePpvWi
 // ── Cashfree recharge webhook (no auth, signature-verified) ──
 walletRouter.post('/wallets/recharge-webhook', express.raw({ type: 'application/json' }), handleRechargeWebhook);
 
-// ── Admin endpoints ──
-// Note: These should be protected by admin auth middleware in production
-walletRouter.post('/admin/payouts/run', universalTokenVerifier, runMonthEndPayout);
-walletRouter.get('/admin/payouts/:month', universalTokenVerifier, getPayoutReport);
+// ── Admin endpoints (protected by admin auth) ──
+walletRouter.post('/admin/payouts/run', adminTokenVerifier, runMonthEndPayout);
+walletRouter.get('/admin/payouts/:month', adminTokenVerifier, getPayoutReport);
 
 export default walletRouter;

@@ -2,21 +2,32 @@
  * Wallet Controller
  *
  * Endpoints:
- * - GET  /wallets                     — Get user's wallets (primary + settlement if exists)
+ * - GET  /wallets                     — Get user's wallets (primary + secondary if exists)
  * - GET  /wallets/:walletId/transactions — Paginated transaction history
  * - POST /wallets/recharge            — Initiate wallet recharge via Cashfree
- * - POST /wallets/transfer            — Transfer from settlement to primary wallet
- * - POST /wallets/kyc                 — Submit KYC and create settlement wallet
+ * - POST /wallets/transfer            — Transfer from secondary to primary wallet
+ * - POST /wallets/kyc                 — Submit/edit KYC details
  * - POST /wallets/purchase-ppv        — Purchase PPV content using wallet balance
+ *
+ * REFACTORED: Uses PrimaryWallet + SecondaryWallet + KycDetails (separate models)
  */
 import mongoose from 'mongoose';
-import Wallet from '../../models/wallet.model.js';
+import PrimaryWallet from '../../models/primaryWallet.model.js';
+import SecondaryWallet from '../../models/secondaryWallet.model.js';
+import KycDetails from '../../models/kycDetails.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
-import { ensurePrimaryWallet, executePpvPurchase, executeTransfer, executeRecharge } from '../../utils/walletService.js';
-import { encryptBankDetails, decryptBankDetails } from '../../utils/encryption.js';
+import {
+    ensurePrimaryWallet,
+    ensureSecondaryWallet,
+    executePpvPurchase,
+    executeTransfer,
+    createPendingRechargeRecord,
+} from '../../utils/walletService.js';
+import { encryptBankDetails } from '../../utils/encryption.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import Content from '../../models/content.model.js';
+import Purchase from '../../models/purchase.model.js';
 import { Cashfree, CFEnvironment } from 'cashfree-pg';
 import crypto from 'crypto';
 
@@ -28,8 +39,14 @@ const s3Client = new S3Client({
     },
 });
 
+// Initialize Cashfree
+const cfEnv = process.env.CASHFREE_MODE === 'production'
+    ? CFEnvironment.PRODUCTION
+    : CFEnvironment.SANDBOX;
+const cashfree = new Cashfree(cfEnv);
+
 /**
- * GET /wallets — Returns both wallets for the authenticated user
+ * GET /wallets — Get user's wallets (primary + secondary if exists)
  */
 export const getMyWallets = async (req, res) => {
     try {
@@ -38,7 +55,8 @@ export const getMyWallets = async (req, res) => {
 
         // Ensure primary wallet exists (lazy creation for existing users)
         const primaryWallet = await ensurePrimaryWallet(userId);
-        const settlementWallet = await Wallet.findOne({ userId, type: 'settlement' });
+        const secondaryWallet = await SecondaryWallet.findOne({ userId });
+        const kycDetails = await KycDetails.findOne({ userId });
 
         const wallets = {
             primary: {
@@ -51,13 +69,13 @@ export const getMyWallets = async (req, res) => {
             },
         };
 
-        if (settlementWallet) {
+        if (secondaryWallet) {
             wallets.settlement = {
-                _id: settlementWallet._id,
-                type: 'settlement',
-                balance: settlementWallet.balance,
-                currency: settlementWallet.currency,
-                kycStatus: settlementWallet.kycStatus,
+                _id: secondaryWallet._id,
+                type: 'secondary',
+                balance: secondaryWallet.balance,
+                currency: secondaryWallet.currency,
+                kycStatus: kycDetails?.kycStatus || 'not_started',
                 label: 'Settlement Wallet',
                 withdrawable: true,
                 note: 'Paid out automatically at month-end to your bank account, minus 1% maintenance fee.',
@@ -67,58 +85,70 @@ export const getMyWallets = async (req, res) => {
             wallets.kycRequired = true;
         }
 
+        // Include KYC status separately for frontend guards
+        wallets.kyc = kycDetails ? {
+            status: kycDetails.kycStatus,
+            submittedAt: kycDetails.submittedAt,
+            lastEditedAt: kycDetails.lastEditedAt,
+            rejectionReason: kycDetails.rejectionReason,
+        } : null;
+
         res.json({ wallets });
     } catch (error) {
         console.error('❌ Error fetching wallets:', error);
-        res.status(500).json({ error: 'Failed to fetch wallets' });
+        res.status(500).json({ error: 'Failed to fetch wallet information' });
     }
 };
 
 /**
  * GET /wallets/:walletId/transactions — Paginated transaction history
+ *
+ * PRIVACY: For secondary wallet transactions, relatedBuyerId is NEVER
+ * included in the response. Creators see aggregate purchase data only.
  */
 export const getWalletTransactions = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { walletId } = req.params;
-        const { page = 1, limit = 20 } = req.query;
-
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-        // Verify wallet ownership
-        const wallet = await Wallet.findById(walletId);
+        const { walletId } = req.params;
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(50, parseInt(req.query.limit) || 20);
+        const skip = (page - 1) * limit;
+
+        // Verify wallet ownership — check both models
+        let wallet = await PrimaryWallet.findById(walletId);
+        let walletType = 'primary';
+        if (!wallet) {
+            wallet = await SecondaryWallet.findById(walletId);
+            walletType = 'secondary';
+        }
         if (!wallet || wallet.userId.toString() !== userId) {
-            return res.status(403).json({ error: 'Not authorized' });
+            return res.status(403).json({ error: 'Access denied' });
         }
 
-        const skip = (parseInt(page) - 1) * parseInt(limit);
+        // Only show completed transactions to users
+        const query = { walletId, status: 'completed' };
         const [transactions, total] = await Promise.all([
-            WalletTransaction.find({ walletId })
+            WalletTransaction.find(query)
                 .sort({ createdAt: -1 })
                 .skip(skip)
-                .limit(parseInt(limit))
+                .limit(limit)
                 .populate('relatedContentId', 'title contentType thumbnailKey')
                 .lean(),
-            WalletTransaction.countDocuments({ walletId }),
+            WalletTransaction.countDocuments(query),
         ]);
 
+        // PRIVACY: Strip relatedBuyerId from secondary wallet transactions
+        if (walletType === 'secondary') {
+            for (const txn of transactions) {
+                delete txn.relatedBuyerId;
+            }
+        }
+
         res.json({
-            transactions: transactions.map(t => ({
-                _id: t._id,
-                type: t.type,
-                amount: t.amount,
-                balanceAfter: t.balanceAfter,
-                status: t.status,
-                contentTitle: t.relatedContentId?.title || null,
-                contentType: t.relatedContentId?.contentType || null,
-                relatedOrderId: t.relatedOrderId,
-                createdAt: t.createdAt,
-            })),
-            pagination: {
-                currentPage: parseInt(page),
-                totalPages: Math.ceil(total / parseInt(limit)),
-                totalItems: total,
-            },
+            transactions,
+            pagination: { page, limit, total, pages: Math.ceil(total / limit) },
         });
     } catch (error) {
         console.error('❌ Error fetching transactions:', error);
@@ -127,7 +157,8 @@ export const getWalletTransactions = async (req, res) => {
 };
 
 /**
- * POST /wallets/recharge — Initiate Cashfree recharge order (min ₹19)
+ * POST /wallets/recharge — Initiate wallet recharge via Cashfree
+ * Creates a pending record, then creates Cashfree order.
  */
 export const rechargeInit = async (req, res) => {
     try {
@@ -137,36 +168,33 @@ export const rechargeInit = async (req, res) => {
         const { amount } = req.body;
         const numAmount = Number(amount);
 
-        // Server-side minimum enforcement
         if (!numAmount || numAmount < 19) {
             return res.status(400).json({ error: 'Minimum recharge amount is ₹19' });
         }
 
-        // Ensure primary wallet exists
-        await ensurePrimaryWallet(userId);
+        const primaryWallet = await ensurePrimaryWallet(userId);
 
-        // Import User model to get customer details
+        const orderId = `RECHARGE_${Date.now()}_${userId.toString().slice(-6)}`;
+
+        // Create pending initiation record (auto-expires in 24h if never completed)
+        await createPendingRechargeRecord(userId, numAmount, orderId);
+
+        // Get user details for Cashfree
         const User = mongoose.model('User');
-        const user = await User.findById(userId).select('contact userName fullName');
-        if (!user) return res.status(404).json({ error: 'User not found' });
-
-        const orderId = `RECHARGE_${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-
-        const cfEnv = process.env.CASHFREE_MODE === 'production' ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX;
-        const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID, process.env.CF_CLIENT_SECRET);
+        const user = await User.findById(userId).select('userName contact').lean();
 
         const orderRequest = {
             order_id: orderId,
             order_amount: numAmount,
             order_currency: 'INR',
             customer_details: {
-                customer_id: userId,
-                customer_email: user.contact || `${userId}@noemail.com`,
-                customer_phone: '9999999999',
-                customer_name: user.fullName || user.userName || 'User',
+                customer_id: userId.toString(),
+                customer_name: user?.userName || 'User',
+                customer_email: user?.contact?.includes('@') ? user.contact : `${userId}@watchinit.com`,
+                customer_phone: (!user?.contact?.includes('@') && user?.contact) ? user.contact : '9999999999',
             },
             order_meta: {
-                return_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/wallet?order_id={order_id}`,
+                return_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment/result?order_id=${orderId}`,
             },
             order_tags: {
                 type: 'wallet_recharge',
@@ -189,7 +217,7 @@ export const rechargeInit = async (req, res) => {
 };
 
 /**
- * POST /wallets/transfer — Transfer from settlement to primary wallet
+ * POST /wallets/transfer — Transfer from secondary to primary wallet
  */
 export const transferToWalletOne = async (req, res) => {
     try {
@@ -230,8 +258,8 @@ export const transferToWalletOne = async (req, res) => {
             },
         });
     } catch (error) {
-        if (error.message === 'Insufficient settlement wallet balance') {
-            return res.status(400).json({ error: 'Insufficient settlement wallet balance' });
+        if (error.message?.includes('Insufficient')) {
+            return res.status(400).json({ error: error.message });
         }
         console.error('❌ Error transferring funds:', error);
         res.status(500).json({ error: 'Failed to transfer funds' });
@@ -239,7 +267,10 @@ export const transferToWalletOne = async (req, res) => {
 };
 
 /**
- * POST /wallets/kyc — Submit KYC details and create settlement wallet immediately
+ * POST /wallets/kyc — Submit or edit KYC details.
+ *
+ * DESIGN DECISION: Editing KYC after initial submission resets kycStatus
+ * to 'pending' so admin can re-verify. This is flagged explicitly here.
  */
 export const submitKyc = async (req, res) => {
     try {
@@ -259,18 +290,11 @@ export const submitKyc = async (req, res) => {
             return res.status(400).json({ error: 'KYC document (passbook or cancelled cheque image) is required' });
         }
 
-        // Check if settlement wallet already exists
-        const existing = await Wallet.findOne({ userId, type: 'settlement' });
-        if (existing && existing.kycStatus === 'submitted') {
-            return res.status(400).json({ error: 'KYC already submitted. Settlement wallet is active.' });
-        }
-
-        // Upload document to private KYC bucket with encryption at rest
+        // Upload document to S3 with encryption at rest
         const fileExtension = req.file.originalname?.split('.').pop()?.toLowerCase() || 'jpg';
         const kycDocumentKey = `kyc-documents/${userId}/${uuidv4()}.${fileExtension}`;
 
-        // Upload document — use KYC bucket if configured and reachable, else fall back to main bucket
-        const kycBucket = process.env.S3_BUCKET; // Always use main bucket for now until private KYC bucket is created in AWS
+        const kycBucket = process.env.S3_BUCKET;
 
         await s3Client.send(new PutObjectCommand({
             Bucket: kycBucket,
@@ -283,37 +307,52 @@ export const submitKyc = async (req, res) => {
         // Encrypt bank details
         const encryptedFields = encryptBankDetails({ bankAccountNumber, bankName, ifscCode, accountHolderName });
 
-        // Create or update settlement wallet
-        const wallet = existing
-            ? await Wallet.findOneAndUpdate(
-                { _id: existing._id },
-                { ...encryptedFields, kycDocumentKey, kycDocumentType, kycStatus: 'submitted' },
+        // Check existing KYC
+        const existingKyc = await KycDetails.findOne({ userId });
+        const isEdit = !!existingKyc;
+
+        const kycData = {
+            ...encryptedFields,
+            kycDocumentKey,
+            kycDocumentType,
+            kycStatus: 'submitted',
+            submittedAt: new Date(),
+        };
+
+        // If editing existing KYC, reset status to pending for re-verification
+        if (isEdit && existingKyc.kycStatus === 'submitted') {
+            kycData.kycStatus = 'pending';
+            kycData.lastEditedAt = new Date();
+        }
+
+        let kycDetails;
+        if (existingKyc) {
+            kycDetails = await KycDetails.findOneAndUpdate(
+                { userId },
+                { $set: kycData },
                 { new: true }
-            )
-            : await Wallet.create({
-                userId,
-                type: 'settlement',
-                balance: 0,
-                currency: 'INR',
-                kycStatus: 'submitted',
-                kycDocumentKey,
-                kycDocumentType,
-                ...encryptedFields,
-            });
+            );
+        } else {
+            kycDetails = await KycDetails.create({ userId, ...kycData });
+        }
+
+        // Ensure secondary wallet exists alongside KYC
+        await ensureSecondaryWallet(userId);
 
         res.json({
             success: true,
-            message: 'KYC submitted successfully. Settlement wallet is now active.',
-            wallet: {
-                _id: wallet._id,
-                type: 'settlement',
-                balance: wallet.balance,
-                kycStatus: wallet.kycStatus,
+            message: isEdit
+                ? 'KYC updated. Status reset to pending for re-verification.'
+                : 'KYC submitted successfully. Settlement wallet is now active.',
+            kyc: {
+                status: kycDetails.kycStatus,
+                submittedAt: kycDetails.submittedAt,
+                isEdit,
             },
         });
     } catch (error) {
         if (error.code === 11000) {
-            return res.status(400).json({ error: 'Settlement wallet already exists' });
+            return res.status(400).json({ error: 'KYC already exists for this user' });
         }
         console.error('❌ Error submitting KYC:', error);
         res.status(500).json({ error: 'Failed to submit KYC' });
@@ -349,7 +388,7 @@ export const purchasePpvWithWallet = async (req, res) => {
         }
 
         // Check for existing active purchase
-        const existingPurchase = await mongoose.model('Purchase').findOne({
+        const existingPurchase = await Purchase.findOne({
             contentId,
             buyerId: userId,
             status: 'active',
@@ -359,7 +398,7 @@ export const purchasePpvWithWallet = async (req, res) => {
             return res.status(400).json({ error: 'You already have an active purchase for this content', expiresAt: existingPurchase.expiresAt });
         }
 
-        // Execute atomic wallet purchase
+        // Execute atomic wallet purchase (70% to creator, 30% platform)
         const result = await executePpvPurchase(userId, content.userId.toString(), contentId, content.price);
 
         res.json({
@@ -373,6 +412,10 @@ export const purchasePpvWithWallet = async (req, res) => {
                 status: result.purchase.status,
             },
             walletBalance: result.buyerTxn.balanceAfter,
+            revenueBreakdown: {
+                creatorEarning: result.creatorAmount,
+                platformFee: result.platformAmount,
+            },
         });
     } catch (error) {
         if (error.message === 'Insufficient wallet balance') {

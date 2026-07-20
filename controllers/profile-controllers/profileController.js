@@ -124,7 +124,7 @@ export const updateContent = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
-        const { title, description, visibility, price, commentsEnabled, tags, category } = req.body;
+        const { title, description, visibility, price, trailerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
 
         const update = {};
         if (title !== undefined) update.title = title;
@@ -138,18 +138,26 @@ export const updateContent = async (req, res) => {
                     return res.status(400).json({ error: 'Price is required and must be at least ₹1 for Pay Per View content' });
                 }
                 update.price = numPrice;
+                if (trailerContentId !== undefined) update.trailerContentId = trailerContentId;
+                if (spoilerText !== undefined) update.spoilerText = spoilerText;
             } else {
                 // When switching away from PPV, clear the price
                 // Existing purchases remain valid until their expiry
                 update.price = null;
+                update.trailerContentId = null;
+                update.spoilerText = null;
             }
-        } else if (price !== undefined && content.visibility === 'pay_per_view') {
+        } else if (content.visibility === 'pay_per_view') {
             // Allow price update without changing visibility (already PPV)
-            const numPrice = Number(price);
-            if (!numPrice || numPrice < 1) {
-                return res.status(400).json({ error: 'Price must be at least ₹1' });
+            if (price !== undefined) {
+                const numPrice = Number(price);
+                if (!numPrice || numPrice < 1) {
+                    return res.status(400).json({ error: 'Price must be at least ₹1' });
+                }
+                update.price = numPrice;
             }
-            update.price = numPrice;
+            if (trailerContentId !== undefined) update.trailerContentId = trailerContentId;
+            if (spoilerText !== undefined) update.spoilerText = spoilerText;
         }
         if (typeof commentsEnabled === 'boolean') update.commentsEnabled = commentsEnabled;
         if (tags !== undefined) update.tags = Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim());
@@ -166,6 +174,8 @@ export const updateContent = async (req, res) => {
                 description: updated.description,
                 visibility: updated.visibility,
                 price: updated.price,
+                trailerContentId: updated.trailerContentId,
+                spoilerText: updated.spoilerText,
                 commentsEnabled: updated.commentsEnabled,
                 tags: updated.tags,
                 category: updated.category,

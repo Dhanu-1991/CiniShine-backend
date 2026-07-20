@@ -55,6 +55,17 @@ const ContentSchema = new mongoose.Schema({
         default: null,
         min: 1,
     },
+    // PPV-only fields: trailer and spoiler are links to other content on the platform
+    trailerContentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Content',
+        default: null,
+    },
+    spoilerContentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Content',
+        default: null,
+    },
     isAgeRestricted: {
         type: Boolean,
         default: false
