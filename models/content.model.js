@@ -66,6 +66,10 @@ const ContentSchema = new mongoose.Schema({
         ref: 'Content',
         default: null,
     },
+    spoilerText: {
+        type: String,
+        default: '',
+    },
     isAgeRestricted: {
         type: Boolean,
         default: false

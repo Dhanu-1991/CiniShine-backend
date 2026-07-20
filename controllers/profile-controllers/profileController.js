@@ -126,6 +126,13 @@ export const updateContent = async (req, res) => {
 
         const { title, description, visibility, price, trailerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
 
+        const extractId = (val) => {
+            if (!val) return null;
+            const match = val.match(/([a-f\d]{24})$/i);
+            return match ? match[1] : null;
+        };
+        const parsedTrailerId = extractId(trailerContentId);
+
         const update = {};
         if (title !== undefined) update.title = title;
         if (description !== undefined) update.description = description;
@@ -138,14 +145,14 @@ export const updateContent = async (req, res) => {
                     return res.status(400).json({ error: 'Price is required and must be at least ₹1 for Pay Per View content' });
                 }
                 update.price = numPrice;
-                if (trailerContentId !== undefined) update.trailerContentId = trailerContentId;
+                if (trailerContentId !== undefined) update.trailerContentId = parsedTrailerId;
                 if (spoilerText !== undefined) update.spoilerText = spoilerText;
             } else {
                 // When switching away from PPV, clear the price
                 // Existing purchases remain valid until their expiry
                 update.price = null;
                 update.trailerContentId = null;
-                update.spoilerText = null;
+                update.spoilerText = '';
             }
         } else if (content.visibility === 'pay_per_view') {
             // Allow price update without changing visibility (already PPV)
@@ -156,7 +163,7 @@ export const updateContent = async (req, res) => {
                 }
                 update.price = numPrice;
             }
-            if (trailerContentId !== undefined) update.trailerContentId = trailerContentId;
+            if (trailerContentId !== undefined) update.trailerContentId = parsedTrailerId;
             if (spoilerText !== undefined) update.spoilerText = spoilerText;
         }
         if (typeof commentsEnabled === 'boolean') update.commentsEnabled = commentsEnabled;

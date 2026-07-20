@@ -9,7 +9,7 @@ const router = express.Router();
 
 router.post("/payment", universalTokenVerifier, payment);
 router.post("/payment-verify", paymentVerify);
-router.post("/payment-webhook", express.raw({ type: 'application/json' }), handleCashfreeWebhook);
+// Webhook route is mounted in index.js to handle raw body parsing correctly
 
 router.get("/purchase/check/:contentId", universalTokenVerifier, checkAccess);
 router.get("/purchases", universalTokenVerifier, getUserPurchases);

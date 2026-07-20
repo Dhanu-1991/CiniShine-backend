@@ -168,8 +168,8 @@ export const rechargeInit = async (req, res) => {
         const { amount } = req.body;
         const numAmount = Number(amount);
 
-        if (!numAmount || numAmount < 19) {
-            return res.status(400).json({ error: 'Minimum recharge amount is ₹19' });
+        if (!numAmount || numAmount < 1) {
+            return res.status(400).json({ error: 'Minimum recharge amount is ₹1' });
         }
 
         const primaryWallet = await ensurePrimaryWallet(userId);
