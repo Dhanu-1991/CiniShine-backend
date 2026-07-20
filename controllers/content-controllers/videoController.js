@@ -820,7 +820,14 @@ export const getVideoStatus = async (req, res) => {
             progress: video.status === 'processing' ? 'Transcoding in progress' : null,
             estimatedTimeRemaining,
             processingStart: video.processingStart,
-            processingEnd: video.processingEnd
+            processingEnd: video.processingEnd,
+            // Basic metadata (safe to expose, used by PPV landing page)
+            title: video.title,
+            description: video.description,
+            thumbnailUrl: getCfUrl(video.thumbnailKey),
+            contentType: video.contentType,
+            visibility: video.visibility,
+            price: video.visibility === 'pay_per_view' ? video.price : undefined,
         });
     } catch (error) {
         console.error('Error getting video status:', error);

@@ -43,7 +43,7 @@ const s3Client = new S3Client({
 const cfEnv = process.env.CASHFREE_MODE === 'production'
     ? CFEnvironment.PRODUCTION
     : CFEnvironment.SANDBOX;
-const cashfree = new Cashfree(cfEnv);
+const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID, process.env.CF_CLIENT_SECRET);
 
 /**
  * GET /wallets — Get user's wallets (primary + secondary if exists)
