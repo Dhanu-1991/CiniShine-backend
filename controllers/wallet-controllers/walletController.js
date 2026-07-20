@@ -17,7 +17,7 @@ import { encryptBankDetails, decryptBankDetails } from '../../utils/encryption.j
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import Content from '../../models/content.model.js';
-import { Cashfree } from 'cashfree-pg';
+import { Cashfree, CFEnvironment } from 'cashfree-pg';
 import crypto from 'crypto';
 
 const s3Client = new S3Client({
@@ -152,7 +152,7 @@ export const rechargeInit = async (req, res) => {
 
         const orderId = `RECHARGE_${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
 
-        const cfEnv = process.env.CASHFREE_MODE === 'production' ? 'PRODUCTION' : 'SANDBOX';
+        const cfEnv = process.env.CASHFREE_MODE === 'production' ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX;
         const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID, process.env.CF_CLIENT_SECRET);
 
         const orderRequest = {
@@ -269,8 +269,11 @@ export const submitKyc = async (req, res) => {
         const fileExtension = req.file.originalname?.split('.').pop()?.toLowerCase() || 'jpg';
         const kycDocumentKey = `kyc-documents/${userId}/${uuidv4()}.${fileExtension}`;
 
+        // Upload document — use KYC bucket if configured and reachable, else fall back to main bucket
+        const kycBucket = process.env.S3_BUCKET; // Always use main bucket for now until private KYC bucket is created in AWS
+
         await s3Client.send(new PutObjectCommand({
-            Bucket: process.env.S3_KYC_BUCKET || process.env.S3_BUCKET,
+            Bucket: kycBucket,
             Key: kycDocumentKey,
             Body: req.file.buffer,
             ContentType: req.file.mimetype,

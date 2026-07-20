@@ -162,7 +162,7 @@ export const getPayoutReport = async (req, res) => {
             if (wallet?.kycDocumentKey) {
                 try {
                     const command = new GetObjectCommand({
-                        Bucket: process.env.S3_KYC_BUCKET || process.env.S3_BUCKET,
+                        Bucket: process.env.S3_BUCKET, // Using main bucket until private KYC bucket is set up
                         Key: wallet.kycDocumentKey,
                     });
                     kycDocumentUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 }); // 15 min

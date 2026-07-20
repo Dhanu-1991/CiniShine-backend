@@ -29,6 +29,7 @@ export const universalTokenVerifier = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = { id: decoded.userId };
+    console.log(`✅ Token verified for user ID: ${req.user.id}`);
     next();
   } catch (error) {
     if (error.name === "TokenExpiredError") {
