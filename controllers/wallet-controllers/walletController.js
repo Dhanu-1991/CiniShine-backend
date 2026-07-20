@@ -40,10 +40,10 @@ const s3Client = new S3Client({
 });
 
 // Initialize Cashfree
-const cfEnv = process.env.CASHFREE_MODE === 'production'
+const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production'
     ? CFEnvironment.PRODUCTION
     : CFEnvironment.SANDBOX;
-const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID, process.env.CF_CLIENT_SECRET);
+const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID?.trim(), process.env.CF_CLIENT_SECRET?.trim());
 
 /**
  * GET /wallets — Get user's wallets (primary + secondary if exists)
@@ -191,7 +191,7 @@ export const rechargeInit = async (req, res) => {
                 customer_id: userId.toString(),
                 customer_name: user?.userName || 'User',
                 customer_email: user?.contact?.includes('@') ? user.contact : `${userId}@watchinit.com`,
-                customer_phone: (!user?.contact?.includes('@') && user?.contact) ? user.contact : '9999999999',
+                customer_phone: (!user?.contact?.includes('@') && user?.contact) ? user.contact : '9876543210',
             },
             order_meta: {
                 return_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment/result?order_id=${orderId}`,
@@ -211,8 +211,9 @@ export const rechargeInit = async (req, res) => {
             orderAmount: numAmount,
         });
     } catch (error) {
-        console.error('❌ Error creating recharge order:', error);
-        res.status(500).json({ error: 'Failed to create recharge order' });
+        console.error('❌ Recharge initiation error:', error?.response?.data || error.message);
+        const cfError = error?.response?.data?.message || error?.message || 'Unknown error';
+        res.status(500).json({ error: `Failed to create recharge order: ${cfError}` });
     }
 };
 

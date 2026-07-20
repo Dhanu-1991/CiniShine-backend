@@ -7,8 +7,8 @@ import generateOrderId from "./get.order.id.js";
 import User from "../../models/user.model.js";
 
 // ✅ Correct instantiation for SDK v5.0.8
-const cfEnv = process.env.CASHFREE_MODE === 'production' ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX;
-const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID, process.env.CF_CLIENT_SECRET);
+const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production' ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX;
+const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID?.trim(), process.env.CF_CLIENT_SECRET?.trim());
 
 const payment = async (req, res) => {
   try {
@@ -35,7 +35,7 @@ const payment = async (req, res) => {
       customer_details: {
         customer_id: user._id.toString(),
         customer_email: user.email || "user@example.com",
-        customer_phone: user.phone || "9999999999"
+        customer_phone: user.phone || "9876543210"
       },
       order_meta: {
         return_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment/result?order_id=${orderId}`,
@@ -57,8 +57,9 @@ const payment = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error creating payment session:", error?.response?.data || error.message);
-    res.status(500).json({ error: "Failed to create payment session" });
+    console.error("Payment initiation error:", error?.response?.data || error.message);
+    const cfError = error?.response?.data?.message || error?.message || 'Unknown error';
+    res.status(500).json({ error: `Failed to create payment session: ${cfError}` });
   }
 };
 
