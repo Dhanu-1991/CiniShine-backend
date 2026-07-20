@@ -17,6 +17,7 @@ import Comment from '../../models/comment.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import ContentView from '../../models/contentView.model.js';
+import Purchase from '../../models/purchase.model.js';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
@@ -123,13 +124,32 @@ export const updateContent = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
-        const { title, description, visibility, commentsEnabled, tags, category } = req.body;
+        const { title, description, visibility, price, commentsEnabled, tags, category } = req.body;
 
         const update = {};
         if (title !== undefined) update.title = title;
         if (description !== undefined) update.description = description;
-        if (visibility !== undefined && ['public', 'unlisted', 'private'].includes(visibility)) {
+        if (visibility !== undefined && ['public', 'unlisted', 'private', 'pay_per_view'].includes(visibility)) {
             update.visibility = visibility;
+            // When switching to PPV, price is required
+            if (visibility === 'pay_per_view') {
+                const numPrice = Number(price);
+                if (!numPrice || numPrice < 1) {
+                    return res.status(400).json({ error: 'Price is required and must be at least ₹1 for Pay Per View content' });
+                }
+                update.price = numPrice;
+            } else {
+                // When switching away from PPV, clear the price
+                // Existing purchases remain valid until their expiry
+                update.price = null;
+            }
+        } else if (price !== undefined && content.visibility === 'pay_per_view') {
+            // Allow price update without changing visibility (already PPV)
+            const numPrice = Number(price);
+            if (!numPrice || numPrice < 1) {
+                return res.status(400).json({ error: 'Price must be at least ₹1' });
+            }
+            update.price = numPrice;
         }
         if (typeof commentsEnabled === 'boolean') update.commentsEnabled = commentsEnabled;
         if (tags !== undefined) update.tags = Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim());
@@ -145,6 +165,7 @@ export const updateContent = async (req, res) => {
                 title: updated.title,
                 description: updated.description,
                 visibility: updated.visibility,
+                price: updated.price,
                 commentsEnabled: updated.commentsEnabled,
                 tags: updated.tags,
                 category: updated.category,
@@ -519,8 +540,10 @@ export const getContentAnalytics = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
-        // Parallel fetch: comments, reactions, watch history, signed URLs, immutable unique viewer count
-        const [commentCount, likes, dislikes, watchEntries, uniqueViewers, thumbnailUrl, imageUrl] = await Promise.all([
+        const isPpv = content.visibility === 'pay_per_view';
+
+        // Parallel fetch: comments, reactions, watch history, signed URLs, unique viewers, PPV purchases
+        const [commentCount, likes, dislikes, watchEntries, uniqueViewers, thumbnailUrl, imageUrl, ppvData] = await Promise.all([
             Comment.countDocuments({ videoId: id, parentCommentId: { $exists: false } }),
             VideoReaction.countDocuments({ videoId: id, type: 'like' }),
             VideoReaction.countDocuments({ videoId: id, type: 'dislike' }),
@@ -529,6 +552,33 @@ export const getContentAnalytics = async (req, res) => {
             ContentView.countDocuments({ contentId: id }),
             getCfUrl(content.thumbnailKey),
             getCfUrl(content.imageKey),
+            // PPV analytics: purchase count, revenue, and recent purchases
+            isPpv ? (async () => {
+                const [purchaseCount, revenueAgg, recentPurchases] = await Promise.all([
+                    Purchase.countDocuments({ contentId: id, status: 'active' }),
+                    Purchase.aggregate([
+                        { $match: { contentId: new mongoose.Types.ObjectId(id), status: { $in: ['active', 'expired'] } } },
+                        { $group: { _id: null, total: { $sum: '$amount' } } }
+                    ]),
+                    Purchase.find({ contentId: id, status: { $in: ['active', 'expired'] } })
+                        .sort({ purchasedAt: -1 })
+                        .limit(5)
+                        .populate('buyerId', 'userName channelName profilePicture')
+                        .lean()
+                ]);
+                return {
+                    totalPurchases: purchaseCount,
+                    totalRevenue: revenueAgg[0]?.total || 0,
+                    recentPurchases: recentPurchases.map(p => ({
+                        buyerName: p.buyerId?.channelName || p.buyerId?.userName || 'Unknown',
+                        buyerPicture: p.buyerId?.profilePicture ? getCfUrl(p.buyerId.profilePicture) : null,
+                        amount: p.amount,
+                        purchasedAt: p.purchasedAt,
+                        expiresAt: p.expiresAt,
+                        status: p.status
+                    }))
+                };
+            })() : null,
         ]);
 
         const signedInUniqueViewers = content.authenticatedUniqueViewers || 0;
@@ -577,6 +627,7 @@ export const getContentAnalytics = async (req, res) => {
                 duration: content.duration,
                 status: content.status,
                 visibility: content.visibility,
+                price: content.price,
                 tags: content.tags,
                 category: content.category,
                 createdAt: content.createdAt,
@@ -601,6 +652,7 @@ export const getContentAnalytics = async (req, res) => {
                 anonymousUniqueViewers,
             },
             dailyViews: Object.entries(dailyViews).sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, views: count })),
+            ...(ppvData ? { ppvAnalytics: ppvData } : {}),
         });
     } catch (error) {
         console.error('❌ Error fetching content analytics:', error);

@@ -12,6 +12,7 @@ import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import Comment from '../../models/comment.model.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
+import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 
 /**
  * Get channel page data by channelName
@@ -86,8 +87,17 @@ export const getChannelPage = async (req, res) => {
                 hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
                 videoUrl: (item.contentType === 'video' || item.contentType === 'short') && mediaKey ? getCfUrl(mediaKey) : null,
                 audioUrl: item.contentType === 'audio' && mediaKey ? getCfUrl(mediaKey) : null,
+                visibility: item.visibility,
+                price: item.price,
             });
         }));
+
+        // PPV: strip media URLs for items the viewer hasn't purchased
+        const newestPpvAccess = await batchCheckPpvAccess(newestReleases, req.user?.id);
+        const newestSanitized = newestWithUrls.map(item => {
+            if (item.visibility !== 'pay_per_view' || newestPpvAccess.has(item._id.toString())) return item;
+            return { ...item, hlsMasterUrl: null, videoUrl: null, audioUrl: null, ppvRequired: true };
+        });
 
         // Popular content (top 6 by views, public only)
         const popularContent = await Content.find({
@@ -115,8 +125,17 @@ export const getChannelPage = async (req, res) => {
                 hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
                 videoUrl: (item.contentType === 'video' || item.contentType === 'short') && mediaKey ? getCfUrl(mediaKey) : null,
                 audioUrl: item.contentType === 'audio' && mediaKey ? getCfUrl(mediaKey) : null,
+                visibility: item.visibility,
+                price: item.price,
             });
         }));
+
+        // PPV: strip media URLs for items the viewer hasn't purchased
+        const popularPpvAccess = await batchCheckPpvAccess(popularContent, req.user?.id);
+        const popularSanitized = popularWithUrls.map(item => {
+            if (item.visibility !== 'pay_per_view' || popularPpvAccess.has(item._id.toString())) return item;
+            return { ...item, hlsMasterUrl: null, videoUrl: null, audioUrl: null, ppvRequired: true };
+        });
 
         // Channel picture URL
         const channelPictureUrl = user.channelPicture
@@ -143,8 +162,8 @@ export const getChannelPage = async (req, res) => {
                 contentCounts: counts,
                 createdAt: user._id.getTimestamp ? user._id.getTimestamp() : null,
             },
-            newestReleases: newestWithUrls,
-            popularContent: popularWithUrls,
+            newestReleases: newestSanitized,
+            popularContent: popularSanitized,
         });
     } catch (error) {
         console.error('❌ Error fetching channel page:', error);
@@ -209,11 +228,20 @@ export const getChannelContent = async (req, res) => {
                 hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
                 videoUrl: (item.contentType === 'video' || item.contentType === 'short') && mediaKey ? getCfUrl(mediaKey) : null,
                 audioUrl: item.contentType === 'audio' && mediaKey ? getCfUrl(mediaKey) : null,
+                visibility: item.visibility,
+                price: item.price,
             });
         }));
 
+        // PPV: strip media URLs for items the viewer hasn't purchased
+        const contentPpvAccess = await batchCheckPpvAccess(contents, req.user?.id);
+        const contentsSanitized = contentsWithUrls.map(item => {
+            if (item.visibility !== 'pay_per_view' || contentPpvAccess.has(item._id.toString())) return item;
+            return { ...item, hlsMasterUrl: null, videoUrl: null, audioUrl: null, ppvRequired: true };
+        });
+
         res.json({
-            contents: contentsWithUrls,
+            contents: contentsSanitized,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / parseInt(limit)),

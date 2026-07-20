@@ -25,6 +25,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 import ContentToCommunity from '../../models/contentToCommunity.model.js';
+import { hasPpvAccess, batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 import Community from '../../models/community.model.js';
 
 const s3Client = new S3Client({
@@ -546,6 +547,9 @@ export const getContent = async (req, res) => {
             audioUrl = getCfUrl(content.originalKey);
         }
 
+        // PPV access check for single content item
+        const ppvAllowed = await hasPpvAccess(content, req.user?.id);
+
         res.json({
             _id: content._id,
             contentType: content.contentType,
@@ -555,7 +559,7 @@ export const getContent = async (req, res) => {
             duration: content.duration,
             thumbnailUrl,
             imageUrl,
-            audioUrl,
+            audioUrl: ppvAllowed ? audioUrl : null,
             status: content.status,
             views: content.views,
             likeCount: content.likeCount,
@@ -569,7 +573,9 @@ export const getContent = async (req, res) => {
             artist: content.artist,
             album: content.album,
             visibility: content.visibility,
-            commentsEnabled: content.commentsEnabled
+            price: content.price,
+            commentsEnabled: content.commentsEnabled,
+            ...(!ppvAllowed ? { ppvRequired: true } : {})
         });
     } catch (error) {
         console.error('âŒ Error fetching content:', error);
@@ -720,6 +726,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                     parentCommentId: { $exists: false }
                 });
 
+                // PPV access check for starting short
+                const ppvAllowed = await hasPpvAccess(content, req.user?.id);
+
                 startingShort = {
                     _id: content._id,
                     contentType: 'short',
@@ -727,8 +736,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                     description: content.description,
                     duration: content.duration,
                     thumbnailUrl,
-                    hlsMasterUrl,
-                    videoUrl,
+                    hlsMasterUrl: ppvAllowed ? hlsMasterUrl : null,
+                    videoUrl: ppvAllowed ? videoUrl : null,
                     views: content.views,
                     likeCount: content.likeCount || 0,
                     commentCount, // âœ… ADD
@@ -737,7 +746,10 @@ export const getShortsPlayerFeed = async (req, res) => {
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: getCfUrl(content.userId?.channelPicture),
                     userId: content.userId?._id || content.userId,
-                    tags: content.tags
+                    tags: content.tags,
+                    visibility: content.visibility,
+                    price: content.price,
+                    ...(!ppvAllowed ? { ppvRequired: true } : {})
                 };
 
                 console.log(`âœ… [ShortsPlayerFeed] Starting short found - views: ${content.views}, likes: ${content.likeCount}`);
@@ -807,7 +819,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: getCfUrl(content.userId?.channelPicture),
                     userId: content.userId?._id || content.userId,
-                    tags: content.tags
+                    tags: content.tags,
+                    visibility: content.visibility,
+                    price: content.price
                 };
             }));
 
@@ -818,6 +832,18 @@ export const getShortsPlayerFeed = async (req, res) => {
         if (userId && shorts.length > 0) {
             shorts = await attachCommentCounts(shorts);
         }
+
+        // PPV access check for shorts array
+        const ppvAccessSet = await batchCheckPpvAccess(
+            shorts.map(s => ({ _id: s._id, visibility: s.visibility, userId: s.userId })),
+            req.user?.id
+        );
+        shorts = shorts.map(short => {
+            if (short.visibility === 'pay_per_view' && !ppvAccessSet.has(short._id.toString())) {
+                return { ...short, hlsMasterUrl: null, videoUrl: null, ppvRequired: true };
+            }
+            return short;
+        });
 
         // Add starting short at the beginning if provided
         const allShorts = startingShort ? [startingShort, ...shorts] : shorts;
@@ -892,6 +918,27 @@ export const getAudioPlayerFeed = async (req, res) => {
             audioList = await Promise.all(contents.map(formatAudioContent));
         }
 
+        // PPV access check for starting audio
+        if (startingAudio) {
+            const content = await Content.findById(currentAudioId);
+            const ppvAllowed = await hasPpvAccess(content, req.user?.id);
+            if (!ppvAllowed) {
+                startingAudio = { ...startingAudio, audioUrl: null, ppvRequired: true };
+            }
+        }
+
+        // PPV access check for audio list
+        const ppvAccessSet = await batchCheckPpvAccess(
+            audioList.map(a => ({ _id: a._id, visibility: a.visibility, userId: a.userId })),
+            req.user?.id
+        );
+        audioList = audioList.map(audio => {
+            if (audio.visibility === 'pay_per_view' && !ppvAccessSet.has(audio._id.toString())) {
+                return { ...audio, audioUrl: null, ppvRequired: true };
+            }
+            return audio;
+        });
+
         const allAudio = startingAudio ? [startingAudio, ...audioList] : audioList;
 
         const totalAudio = await Content.countDocuments({
@@ -953,7 +1000,9 @@ async function formatAudioContent(content) {
         artist: content.artist,
         album: content.album,
         audioCategory: content.audioCategory,
-        tags: content.tags
+        tags: content.tags,
+        visibility: content.visibility,
+        price: content.price
     };
 }
 
@@ -1023,6 +1072,9 @@ export const getSingleContent = async (req, res) => {
             mediaUrl = getCfUrl(audioKey);
         }
 
+        // PPV access check for single content item
+        const ppvAllowed = await hasPpvAccess(content, req.user?.id);
+
         res.json({
             _id: content._id,
             contentType: content.contentType,
@@ -1033,9 +1085,9 @@ export const getSingleContent = async (req, res) => {
             thumbnailUrl,
             imageUrl: imageUrl || thumbnailUrl,
             imageUrls: imageUrls, // Array of all image URLs for multi-image posts
-            hlsMasterUrl,
-            videoUrl: content.contentType === 'short' ? mediaUrl : null,
-            audioUrl: content.contentType === 'audio' ? mediaUrl : null,
+            hlsMasterUrl: ppvAllowed ? hlsMasterUrl : null,
+            videoUrl: ppvAllowed ? (content.contentType === 'short' ? mediaUrl : null) : null,
+            audioUrl: ppvAllowed ? (content.contentType === 'audio' ? mediaUrl : null) : null,
             views: content.views,
             likeCount: content.likeCount || 0,
             commentCount, // âœ… ADD
@@ -1050,7 +1102,9 @@ export const getSingleContent = async (req, res) => {
             album: content.album,
             audioCategory: content.audioCategory,
             visibility: content.visibility,
-            status: content.status
+            price: content.price,
+            status: content.status,
+            ...(!ppvAllowed ? { ppvRequired: true } : {})
         });
     } catch (error) {
         console.error('âŒ Error fetching content:', error);

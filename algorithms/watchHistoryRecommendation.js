@@ -45,6 +45,7 @@ import Content from '../models/content.model.js';
 import Comment from '../models/comment.model.js';
 import User from '../models/user.model.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../config/cloudfront.js';
+import { batchCheckPpvAccess } from '../utils/ppvGuard.js';
 
 /**
  * WatchHistoryRecommendationEngine
@@ -479,12 +480,29 @@ export class WatchHistoryRecommendationEngine {
                 album: content.album,
                 audioCategory: content.audioCategory,
                 postContent: content.postContent,
+                visibility: content.visibility,
+                price: content.price,
                 recommendationScore: content.recommendationScore
             };
         });
 
+        // ── PPV URL stripping — strip media URLs from items the user hasn't purchased ──
+        const ppvAccessSet = await batchCheckPpvAccess(paginatedContent, userId);
+        const sanitizedContent = contentWithUrls.map(item => {
+            if (item.visibility !== 'pay_per_view') return item;
+            const hasAccess = ppvAccessSet.has(item._id.toString());
+            if (hasAccess) return item;
+            return {
+                ...item,
+                hlsMasterUrl: null,
+                videoUrl: null,
+                audioUrl: null,
+                ppvRequired: true,
+            };
+        });
+
         return {
-            content: contentWithUrls,
+            content: sanitizedContent,
             pagination: {
                 currentPage: pageNum,
                 totalPages: Math.ceil(scoredContent.length / limitNum),

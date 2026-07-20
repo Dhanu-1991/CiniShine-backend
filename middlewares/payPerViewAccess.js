@@ -1,56 +1,59 @@
+/**
+ * Pay Per View Access Middleware
+ *
+ * Route-level middleware that blocks requests for PPV content when the
+ * requester does not have a valid, non-expired purchase.
+ *
+ * This is the OUTER defense layer. Controllers add a second, inner check
+ * using hasPpvAccess() from utils/ppvGuard.js for defense-in-depth.
+ *
+ * Param name handling: the actual routes use :id, :videoId, or :contentId
+ * depending on the route file. This middleware checks all three.
+ */
+
 import Content from '../models/content.model.js';
-import Purchase from '../models/purchase.model.js';
+import { hasPpvAccess } from '../utils/ppvGuard.js';
 
 const payPerViewAccess = async (req, res, next) => {
-  try {
-    const contentId = req.params.contentId || req.body.contentId;
-    if (!contentId) {
-      return next();
-    }
+    try {
+        // Routes use different param names — check all of them
+        const contentId = req.params.id || req.params.videoId || req.params.contentId || req.body.contentId;
 
-    const content = await Content.findById(contentId);
-    if (!content) {
-      return res.status(404).json({ error: 'Content not found' });
-    }
+        if (!contentId) {
+            // No content ID in this request (e.g., feed listing) — let controller handle it
+            return next();
+        }
 
-    // If it's not pay-per-view, skip
-    if (content.visibility !== 'pay_per_view') {
-      return next();
-    }
-    
-    // If user is not authenticated, they can't access pay-per-view
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({ error: 'Authentication required for pay-per-view content' });
-    }
-    
-    // Allow creator to access their own content
-    if (content.userId.toString() === req.user.id) {
-        return next();
-    }
+        const content = await Content.findById(contentId).select('visibility userId price');
+        if (!content) {
+            return res.status(404).json({ error: 'Content not found' });
+        }
 
-    // Check if user has an active purchase
-    const purchase = await Purchase.findOne({
-      contentId,
-      buyerId: req.user.id,
-      status: 'active',
-      expiresAt: { $gt: new Date() }
-    });
+        // Not PPV → pass through
+        if (content.visibility !== 'pay_per_view') {
+            return next();
+        }
 
-    if (!purchase) {
-      return res.status(403).json({
-        error: 'Purchase required',
-        price: content.price,
-        contentId: content._id
-      });
+        // Use the shared access check (creator check + purchase lookup)
+        const userId = req.user?.id || null;
+        const hasAccess = await hasPpvAccess(content, userId);
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                error: 'Purchase required',
+                ppvRequired: true,
+                price: content.price,
+                contentId: content._id,
+            });
+        }
+
+        // Attach content to request so controllers don't need to re-fetch
+        req.ppvContent = content;
+        next();
+    } catch (error) {
+        console.error('Error in payPerViewAccess middleware:', error);
+        res.status(500).json({ error: 'Server error checking content access' });
     }
-
-    // Attach purchase to request and proceed
-    req.purchase = purchase;
-    next();
-  } catch (error) {
-    console.error('Error in payPerViewAccess middleware:', error);
-    res.status(500).json({ error: 'Server error checking content access' });
-  }
 };
 
 export default payPerViewAccess;

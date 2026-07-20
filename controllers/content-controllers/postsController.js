@@ -60,7 +60,7 @@ export const postImageInit = async (req, res) => {
  */
 export const createPost = async (req, res) => {
     try {
-        const { title, description, postContent, tags, visibility, commentsEnabled, imageUrl, imageUrls } = req.body;
+        const { title, description, postContent, tags, visibility, price, commentsEnabled, imageUrl, imageUrls } = req.body;
         const userId = req.user?.id;
         const finalDescription = (postContent || description || '').trim();
 
@@ -74,6 +74,14 @@ export const createPost = async (req, res) => {
 
         if (countWords(finalDescription) > DESCRIPTION_MAX_WORDS) {
             return res.status(400).json({ error: `Description can be at most ${DESCRIPTION_MAX_WORDS} words` });
+        }
+
+        // Validate PPV price
+        if (visibility === 'pay_per_view') {
+            const numPrice = Number(price);
+            if (!numPrice || numPrice < 1) {
+                return res.status(400).json({ error: "Price is required and must be at least ₹1 for Pay Per View content" });
+            }
         }
 
         const fileId = new mongoose.Types.ObjectId();
@@ -90,6 +98,7 @@ export const createPost = async (req, res) => {
             postContent: finalDescription,
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
             visibility: visibility || 'public',
+            price: visibility === 'pay_per_view' ? Number(price) : null,
             commentsEnabled: commentsEnabled !== false,
             imageKey: imageKeys[0] || null,
             imageKeys: imageKeys,

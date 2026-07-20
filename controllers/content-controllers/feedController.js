@@ -9,24 +9,29 @@ import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.
 import { recommendationEngine } from '../../algorithms/recommendationAlgorithm.js';
 import { findSimilarVideos } from '../../algorithms/videoSimilarity.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
+import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 
 /**
  * Generate CloudFront URL for S3 objects (replaces S3 signed URLs)
  */
 const generateCfUrl = (key) => getCfUrl(key);
 
-const normalizeFeedItem = (c) => {
+const normalizeFeedItem = (c, ppvGranted = true) => {
     const contentType = c.contentType || 'video';
     let videoUrl = null;
     let hlsMasterUrl = null;
     let audioUrl = null;
     const thumbnailKey = c.thumbnailKey || c.imageKey || null;
 
-    if (contentType === 'video' || contentType === 'short') {
+    // Only generate media URLs if PPV access is granted (or content is not PPV)
+    const isPpv = c.visibility === 'pay_per_view';
+    const canStream = ppvGranted || !isPpv;
+
+    if (canStream && (contentType === 'video' || contentType === 'short')) {
         hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
         const videoKey = c.hlsMasterKey || c.processedKey || c.originalKey;
         if (videoKey) videoUrl = getCfUrl(videoKey);
-    } else if (contentType === 'audio') {
+    } else if (canStream && contentType === 'audio') {
         const audioKey = c.processedKey || c.originalKey;
         if (audioKey) audioUrl = getCfUrl(audioKey);
     }
@@ -56,7 +61,24 @@ const normalizeFeedItem = (c) => {
         album: c.album,
         audioCategory: c.audioCategory,
         postContent: c.postContent,
+        // PPV gate flags
+        visibility: c.visibility,
+        ppvRequired: isPpv && !ppvGranted,
+        price: isPpv ? c.price : undefined,
     };
+};
+
+/**
+ * Normalize an array of feed items with batch PPV access checking.
+ * Strips media URLs from PPV items the user hasn't purchased.
+ */
+const normalizeFeedItems = async (items, userId) => {
+    const ppvAccessSet = await batchCheckPpvAccess(items, userId);
+    return items.map(c => {
+        const isPpv = c.visibility === 'pay_per_view';
+        const ppvGranted = !isPpv || ppvAccessSet.has(c._id.toString());
+        return normalizeFeedItem(c, ppvGranted);
+    });
 };
 
 /**
@@ -542,18 +564,18 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 .filter((entry) => entry.hasStrongRelation)
                 .sort((a, b) => b.score - a.score);
 
-            const relatedItems = [];
+            const relatedItemsRaw = [];
             const usedIds = new Set();
             for (const entry of scoredRelated) {
-                if (relatedItems.length >= safeLimit) break;
+                if (relatedItemsRaw.length >= safeLimit) break;
                 const id = entry.item._id?.toString();
                 if (!id || usedIds.has(id)) continue;
-                relatedItems.push(normalizeFeedItem(entry.item));
+                relatedItemsRaw.push(entry.item);
                 usedIds.add(id);
                 excluded.add(id);
             }
 
-            if (relatedItems.length < safeLimit) {
+            if (relatedItemsRaw.length < safeLimit) {
                 const fallback = await watchHistoryEngine.getRecommendations(userId, contentType, {
                     page: 1,
                     limit: safeLimit * 2,
@@ -561,15 +583,17 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 });
 
                 for (const item of fallback.content || []) {
-                    if (relatedItems.length >= safeLimit) break;
+                    if (relatedItemsRaw.length >= safeLimit) break;
                     const id = item._id?.toString();
                     if (!id || usedIds.has(id)) continue;
-                    relatedItems.push(item);
+                    relatedItemsRaw.push(item);
                     usedIds.add(id);
                 }
             }
 
-            return relatedItems;
+            // Normalize with PPV stripping
+            return normalizeFeedItems(relatedItemsRaw, userId);
+
         };
 
         const [shorts, audio] = await Promise.all([
@@ -830,7 +854,7 @@ export const getCategoryFeed = async (req, res) => {
         }
 
         // Normalize output format (include all fields needed by frontend cards)
-        const content = results.map((c) => normalizeFeedItem(c));
+        const content = await normalizeFeedItems(results, userId);
 
         res.json({
             content,
@@ -894,7 +918,7 @@ export const getCategoryTrending = async (req, res) => {
         }
 
         const trending = recommendationEngine.getTrendingVideos(candidates, limit);
-        const content = trending.map((item) => normalizeFeedItem(item));
+        const content = await normalizeFeedItems(trending, req.user?.id);
 
         return res.json({ content });
     } catch (error) {

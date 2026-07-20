@@ -10,6 +10,7 @@ import { updateViews } from "./videoParameters.js";
 import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.js";
 import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
+import { hasPpvAccess } from '../../utils/ppvGuard.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -105,13 +106,16 @@ export const getVideo = async (req, res) => {
             parentCommentId: null
         });
 
+        // ── PPV controller-level check (second layer after route middleware) ──
+        const ppvGranted = await hasPpvAccess(video, req.user?.id);
+
         res.json({
             _id: video._id,
             title: video.title,
             description: video.description,
             duration: video.duration,
-            // Point client directly to CloudFront HLS master playlist
-            hlsMasterUrl: getCfHlsMasterUrl(video.hlsMasterKey),
+            // Only include playable stream URL if PPV access is granted
+            hlsMasterUrl: ppvGranted ? getCfHlsMasterUrl(video.hlsMasterKey) : null,
             thumbnailUrl,
             renditions,
             status: video.status,
@@ -131,7 +135,10 @@ export const getVideo = async (req, res) => {
             tags: video.tags || [],
             category: video.category || '',
             visibility: video.visibility || 'public',
-            commentsEnabled: video.commentsEnabled !== false
+            commentsEnabled: video.commentsEnabled !== false,
+            // PPV gate flags
+            ppvRequired: !ppvGranted && video.visibility === 'pay_per_view',
+            price: video.visibility === 'pay_per_view' ? video.price : undefined,
         });
 
     } catch (error) {
@@ -154,6 +161,14 @@ export const getHLSMasterPlaylist = async (req, res) => {
         if (!video) {
             console.error('❌ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // ── PPV controller-level check (second layer after route middleware) ──
+        if (video.visibility === 'pay_per_view') {
+            const granted = await hasPpvAccess(video, req.user?.id);
+            if (!granted) {
+                return res.status(403).json({ error: 'Purchase required', ppvRequired: true, price: video.price });
+            }
         }
 
         if (video.status !== 'completed') {
@@ -308,6 +323,14 @@ export const getHLSVariantPlaylist = async (req, res) => {
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
 
+        // ── PPV controller-level check (second layer after route middleware) ──
+        if (video.visibility === 'pay_per_view') {
+            const granted = await hasPpvAccess(video, req.user?.id);
+            if (!granted) {
+                return res.status(403).json({ error: 'Purchase required', ppvRequired: true, price: video.price });
+            }
+        }
+
         // Determine base path (folder containing master)
         const basePath = video.hlsMasterKey ?
             video.hlsMasterKey.substring(0, video.hlsMasterKey.lastIndexOf('/') + 1) :
@@ -439,6 +462,14 @@ export const getHLSSegment = async (req, res) => {
         const video = await Content.findById(videoId);
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
+
+        // ── PPV controller-level check (second layer after route middleware) ──
+        if (video.visibility === 'pay_per_view') {
+            const granted = await hasPpvAccess(video, req.user?.id);
+            if (!granted) {
+                return res.status(403).json({ error: 'Purchase required', ppvRequired: true, price: video.price });
+            }
+        }
 
         // Determine base path in S3
         const userId = video.userId;
@@ -807,6 +838,7 @@ export const uploadInit = async (req, res) => {
             tags,
             category,
             visibility,
+            price,
             isAgeRestricted,
             commentsEnabled,
             selectedRoles
@@ -820,6 +852,14 @@ export const uploadInit = async (req, res) => {
         const fileId = new mongoose.Types.ObjectId();
         const key = `uploads/${userId}/${fileId}_${fileName}`;
 
+        // Validate PPV price
+        if (visibility === 'pay_per_view') {
+            const numPrice = Number(price);
+            if (!numPrice || numPrice < 1) {
+                return res.status(400).json({ error: "Price is required and must be at least ₹1 for Pay Per View content" });
+            }
+        }
+
         const video = await Content.create({
             _id: fileId,
             contentType: 'video',
@@ -828,6 +868,7 @@ export const uploadInit = async (req, res) => {
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [],
             category: category || '',
             visibility: visibility || 'public',
+            price: visibility === 'pay_per_view' ? Number(price) : null,
             isAgeRestricted: isAgeRestricted || false,
             commentsEnabled: commentsEnabled !== false,
             selectedRoles: selectedRoles || [],

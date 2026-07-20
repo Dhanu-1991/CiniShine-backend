@@ -18,6 +18,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
+import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 
 /**
  * Get paginated watch history for the current user
@@ -106,12 +107,21 @@ export const getWatchHistory = async (req, res) => {
                 channelName: content.channelName || creator?.channelName,
                 channelPicture: channelPicUrl,
                 userId: content.userId,
+                visibility: content.visibility,
+                price: content.price,
                 deleted: false,
             };
         }));
 
+        // Strip media URLs for unpurchased PPV items in history
+        const ppvAccessSet = await batchCheckPpvAccess(enrichedHistory.map(h => ({ ...h, _id: h.contentId })), userId);
+        const sanitizedHistory = enrichedHistory.map(h => {
+            if (h.visibility !== 'pay_per_view' || ppvAccessSet.has(h.contentId?.toString())) return h;
+            return { ...h, hlsMasterUrl: null, videoUrl: null, audioUrl: null, ppvRequired: true };
+        });
+
         res.json({
-            history: enrichedHistory,
+            history: sanitizedHistory,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / parseInt(limit)),

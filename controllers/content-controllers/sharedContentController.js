@@ -36,6 +36,7 @@ import User from '../../models/user.model.js';
 import ContentView from '../../models/contentView.model.js';
 import ContentReport from '../../models/contentReport.model.js';
 import { recordWatchSignal } from '../../utils/watchAnalytics.js';
+import { hasPpvAccess } from '../../utils/ppvGuard.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl } from '../../config/cloudfront.js';
 
@@ -115,16 +116,22 @@ export const getContent = async (req, res) => {
             audioUrl = getCfUrl(content.originalKey);
         }
 
+        // ── PPV controller-level check (second layer after route middleware) ──
+        const ppvGranted = await hasPpvAccess(content, req.user?.id);
+
         res.json({
             _id: content._id, contentType: content.contentType, title: content.title,
             description: content.description, postContent: content.postContent,
-            duration: content.duration, thumbnailUrl, imageUrl, audioUrl,
+            duration: content.duration, thumbnailUrl, imageUrl,
+            audioUrl: ppvGranted ? audioUrl : null,
             status: content.status, views: content.views, likeCount: content.likeCount,
             dislikeCount: content.dislikeCount, createdAt: content.createdAt,
             user: content.userId, channelName: content.channelName,
             tags: content.tags, category: content.category,
             audioCategory: content.audioCategory, artist: content.artist, album: content.album,
-            visibility: content.visibility, commentsEnabled: content.commentsEnabled
+            visibility: content.visibility, commentsEnabled: content.commentsEnabled,
+            ppvRequired: !ppvGranted && content.visibility === 'pay_per_view',
+            price: content.visibility === 'pay_per_view' ? content.price : undefined,
         });
     } catch (error) {
         console.error('❌ Error fetching content:', error);
@@ -243,13 +250,16 @@ export const getSingleContent = async (req, res) => {
             mediaUrl = getCfUrl(audioKey);
         }
 
+        // ── PPV controller-level check (second layer after route middleware) ──
+        const ppvGranted = await hasPpvAccess(content, req.user?.id);
+
         res.json({
             _id: content._id, contentType: content.contentType, title: content.title,
             description: content.description, postContent: content.postContent,
             duration: content.duration, thumbnailUrl,
             imageUrl: imageUrl || thumbnailUrl, imageUrls,
-            videoUrl: content.contentType === 'short' ? mediaUrl : null,
-            audioUrl: content.contentType === 'audio' ? mediaUrl : null,
+            videoUrl: ppvGranted ? (content.contentType === 'short' ? mediaUrl : null) : null,
+            audioUrl: ppvGranted ? (content.contentType === 'audio' ? mediaUrl : null) : null,
             views: content.views, likeCount: content.likeCount || 0, commentCount,
             createdAt: content.createdAt,
             channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
@@ -257,7 +267,9 @@ export const getSingleContent = async (req, res) => {
             userId: content.userId?._id || content.userId,
             tags: content.tags, category: content.category,
             artist: content.artist, album: content.album, audioCategory: content.audioCategory,
-            visibility: content.visibility, status: content.status
+            visibility: content.visibility, status: content.status,
+            ppvRequired: !ppvGranted && content.visibility === 'pay_per_view',
+            price: content.visibility === 'pay_per_view' ? content.price : undefined,
         });
     } catch (error) {
         console.error('❌ Error fetching content:', error);

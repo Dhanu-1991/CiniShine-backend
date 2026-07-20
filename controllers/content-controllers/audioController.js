@@ -9,6 +9,7 @@ import Comment from '../../models/comment.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getCfUrl } from '../../config/cloudfront.js';
+import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 
@@ -127,7 +128,8 @@ async function formatAudioContent(content) {
         channelHandle: content.userId?.channelHandle || null,
         channelPicture: content.userId?.channelPicture,
         userId: content.userId?._id || content.userId,
-        artist: content.artist, album: content.album, audioCategory: content.audioCategory, tags: content.tags
+        artist: content.artist, album: content.album, audioCategory: content.audioCategory, tags: content.tags,
+        visibility: content.visibility, price: content.price
     };
 }
 
@@ -185,8 +187,15 @@ export const getAudioPlayerFeed = async (req, res) => {
         const allAudio = startingAudio ? [startingAudio, ...audioList] : audioList;
         const totalAudio = await Content.countDocuments({ contentType: 'audio', status: 'completed', visibility: { $in: ['public', 'pay_per_view'] } });
 
+        // Strip media URLs for unpurchased PPV audio
+        const ppvAccessSet = await batchCheckPpvAccess(allAudio, userId);
+        const sanitizedAudio = allAudio.map(a => {
+            if (a.visibility !== 'pay_per_view' || ppvAccessSet.has(a._id.toString())) return a;
+            return { ...a, audioUrl: null, ppvRequired: true };
+        });
+
         res.json({
-            audio: allAudio,
+            audio: sanitizedAudio,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(totalAudio / parseInt(limit)),

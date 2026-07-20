@@ -27,6 +27,7 @@ import { issueCloudFrontCookies } from "./config/cloudfront.js";
 import { universalTokenVerifier } from "./controllers/auth-controllers/universalTokenVerifier.js";
 import adminRouter from "./routes/adminRoutes/adminRouter.js";
 import analyticsRouter from "./routes/analyticsRoutes/analyticsRouter.js";
+import walletRouter from "./routes/walletRoutes/walletRouter.js";
 import { startViewCountFlusher, stopViewCountFlusher } from "./utils/viewCountQueue.js";
 
 // ── Global crash handlers — prevent silent 521 ─────────────────────────
@@ -108,6 +109,7 @@ app.use("/api/admin", adminRouter);
 
 // Analytics tracking (page usage, content watchtime, sessions)
 app.use("/api/v2/analytics", analyticsRouter);
+app.use("/api/v2", walletRouter); // Wallet system
 
 // CloudFront signed cookies endpoint (protected — user must be logged in)
 app.get("/api/v2/auth/cloudfront-cookies", universalTokenVerifier, issueCloudFrontCookies);

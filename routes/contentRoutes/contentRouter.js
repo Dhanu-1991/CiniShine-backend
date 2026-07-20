@@ -32,6 +32,7 @@ import { getSubscriptionPosts } from '../../controllers/content-controllers/post
 
 import { multipartInit, multipartComplete, multipartAbort } from '../../controllers/content-controllers/multipartUploadController.js';
 import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
+import payPerViewAccess from '../../middlewares/payPerViewAccess.js';
 
 const router = express.Router();
 
@@ -98,8 +99,8 @@ router.get('/feed', getFeedContent);
 
 router.get('/user/my-content', universalTokenVerifier, getUserContent);
 
-// Get single content by ID (with all URLs)
-router.get('/single/:id', getSingleContent);
+// Get single content by ID (with all URLs) — PPV gated
+router.get('/single/:id', optionalTokenVerifier, payPerViewAccess, getSingleContent);
 
 // ============================================
 // COMMENTS ROUTES (for shorts, audio, posts)
@@ -112,7 +113,7 @@ import commentRouter from '../commentRoutes/commentRouter.js';
 // Using :videoId directly so mergeParams works correctly with commentRouter
 router.use('/:videoId/comments', commentRouter);
 
-// Get specific content by ID (legacy)
-router.get('/:id', optionalTokenVerifier, getContent);
+// Get specific content by ID (legacy) — PPV gated
+router.get('/:id', optionalTokenVerifier, payPerViewAccess, getContent);
 
 export default router;

@@ -75,6 +75,7 @@ export const multipartInit = async (req, res) => {
             tags,
             category,
             visibility,
+            price,
             isAgeRestricted,
             commentsEnabled,
             selectedRoles,
@@ -100,6 +101,14 @@ export const multipartInit = async (req, res) => {
             return res.status(400).json({ error: "File size exceeds 5GB limit" });
         }
 
+        // Validate PPV price
+        if (visibility === 'pay_per_view') {
+            const numPrice = Number(price);
+            if (!numPrice || numPrice < 1) {
+                return res.status(400).json({ error: "Price is required and must be at least ₹1 for Pay Per View content" });
+            }
+        }
+
         const contentType = cType || "video";
         const fileId = new mongoose.Types.ObjectId();
 
@@ -119,6 +128,7 @@ export const multipartInit = async (req, res) => {
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(",").map((t) => t.trim())) : [],
             category: category || "",
             visibility: visibility || "public",
+            price: visibility === 'pay_per_view' ? Number(price) : null,
             isAgeRestricted: isAgeRestricted || false,
             commentsEnabled: commentsEnabled !== false,
             selectedRoles: selectedRoles || [],

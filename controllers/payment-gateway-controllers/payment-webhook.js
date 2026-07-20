@@ -3,6 +3,10 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 import PaymentDetails from "../../models/payment.details.model.js";
 import Purchase from "../../models/purchase.model.js";
+import Content from "../../models/content.model.js";
+import { ensurePrimaryWallet, creditWallet } from "../../utils/walletService.js";
+import Wallet from "../../models/wallet.model.js";
+import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -110,6 +114,36 @@ export const handleCashfreeWebhook = async (req, res) => {
           purchaseId: purchase._id
         });
         console.log(`Purchase and Payment details created for Order: ${orderId}`);
+
+        // Credit creator's wallet with PPV earnings
+        try {
+          if (contentId) {
+            const content = await Content.findById(contentId).select('userId').lean();
+            if (content?.userId) {
+              const creatorId = content.userId.toString();
+              // Find creator's settlement wallet, fall back to primary
+              let creatorWallet = await Wallet.findOne({ userId: creatorId, type: 'settlement', kycStatus: 'submitted' });
+              if (!creatorWallet) {
+                creatorWallet = await ensurePrimaryWallet(creatorId);
+              }
+              const session = await mongoose.startSession();
+              try {
+                await session.withTransaction(async () => {
+                  await creditWallet(
+                    creatorWallet._id, amount, 'ppv_earning_credit',
+                    { relatedContentId: contentId, relatedPurchaseId: purchase._id, relatedOrderId: orderId },
+                    `ppv_earning_${orderId}`, session
+                  );
+                });
+                console.log(`✅ Credited ₹${amount} to creator ${creatorId} wallet`);
+              } finally {
+                await session.endSession();
+              }
+            }
+          }
+        } catch (walletErr) {
+          console.error('❌ Failed to credit creator wallet (purchase still valid):', walletErr);
+        }
       } else {
         console.log(`Order ${orderId} already processed.`);
       }

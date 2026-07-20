@@ -28,6 +28,7 @@ import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../..
 import { searchVideos, getSearchSuggestions, clearSearchHistory, unifiedSearch } from "../../controllers/content-controllers/search.js";
 import { multipartInit, multipartComplete, multipartAbort } from "../../controllers/content-controllers/multipartUploadController.js";
 import { universalTokenVerifier, optionalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
+import payPerViewAccess from "../../middlewares/payPerViewAccess.js";
 import commentRouter from "../commentRoutes/commentRouter.js";
 
 // Configure multer for thumbnail uploads (memory storage)
@@ -80,10 +81,10 @@ router.get("/search/unified", optionalTokenVerifier, unifiedSearch);
 router.delete("/search/history", universalTokenVerifier, clearSearchHistory);
 router.get("/search", optionalTokenVerifier, searchVideos);
 
-// HLS streaming (public - any viewer can stream)
-router.get('/:id/master.m3u8', optionalTokenVerifier, getHLSMasterPlaylist);
-router.get('/:id/variants/:variantFile', optionalTokenVerifier, getHLSVariantPlaylist);
-router.get('/:id/segments/:segmentFile', optionalTokenVerifier, getHLSSegment);
+// HLS streaming — PPV gated at route level
+router.get('/:id/master.m3u8', optionalTokenVerifier, payPerViewAccess, getHLSMasterPlaylist);
+router.get('/:id/variants/:variantFile', optionalTokenVerifier, payPerViewAccess, getHLSVariantPlaylist);
+router.get('/:id/segments/:segmentFile', optionalTokenVerifier, payPerViewAccess, getHLSSegment);
 
 // Like/Dislike
 router.post("/:id/like", universalTokenVerifier, likeVideo);
@@ -104,7 +105,7 @@ router.post("/:id/thumbnail", universalTokenVerifier, upload.single('thumbnail')
 // Status
 router.get("/:id/status", optionalTokenVerifier, getVideoStatus);
 
-// General video route (MUST BE LAST)
-router.get("/:id", optionalTokenVerifier, getVideo);
+// General video route (MUST BE LAST) — PPV gated at route level
+router.get("/:id", optionalTokenVerifier, payPerViewAccess, getVideo);
 
 export default router;

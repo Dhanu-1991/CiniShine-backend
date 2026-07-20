@@ -12,7 +12,6 @@ const purchaseSchema = new mongoose.Schema({
   status: { type: String, enum: ['pending', 'active', 'expired', 'refunded'], default: 'pending' }
 });
 
-purchaseSchema.index({ orderId: 1 }, { unique: true });
 purchaseSchema.index({ buyerId: 1, contentId: 1, expiresAt: 1 });
 purchaseSchema.index({ contentId: 1 });
 purchaseSchema.index({ expiresAt: 1 });

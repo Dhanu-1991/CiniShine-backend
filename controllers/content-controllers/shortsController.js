@@ -12,6 +12,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 import { getCfUrl } from '../../config/cloudfront.js';
+import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -149,7 +150,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
-                    userId: content.userId?._id || content.userId, tags: content.tags
+                    userId: content.userId?._id || content.userId, tags: content.tags,
+                    visibility: content.visibility, price: content.price
                 };
             }
         }
@@ -186,7 +188,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                         channelHandle: content.userId?.channelHandle || null,
                         channelPicture: content.userId?.channelPicture,
-                        userId: content.userId?._id || content.userId, tags: content.tags
+                        userId: content.userId?._id || content.userId, tags: content.tags,
+                        visibility: content.visibility, price: content.price
                     };
                 }));
             }
@@ -212,7 +215,8 @@ export const getShortsPlayerFeed = async (req, res) => {
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
-                    userId: content.userId?._id || content.userId, tags: content.tags
+                    userId: content.userId?._id || content.userId, tags: content.tags,
+                    visibility: content.visibility, price: content.price
                 };
             }));
         }
@@ -220,8 +224,15 @@ export const getShortsPlayerFeed = async (req, res) => {
         const allShorts = startingShort ? [startingShort, ...shorts] : shorts;
         const totalShorts = await Content.countDocuments({ contentType: 'short', status: { $in: ['completed', 'processing'] }, visibility: { $in: ['public', 'pay_per_view'] } });
 
+        // Strip media URLs for unpurchased PPV shorts
+        const ppvAccessSet = await batchCheckPpvAccess(allShorts, userId);
+        const sanitizedShorts = allShorts.map(s => {
+            if (s.visibility !== 'pay_per_view' || ppvAccessSet.has(s._id.toString())) return s;
+            return { ...s, videoUrl: null, hlsMasterUrl: null, ppvRequired: true };
+        });
+
         res.json({
-            shorts: allShorts,
+            shorts: sanitizedShorts,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(totalShorts / parseInt(limit)),

@@ -2,6 +2,7 @@ import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import SearchHistory from "../../models/searchHistory.model.js";
 import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
+import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 
 /**
  * Get search text suggestions (autocomplete)
@@ -508,6 +509,8 @@ export const unifiedSearch = async (req, res) => {
                 likes: Array.isArray(item.likes) ? item.likes.length : (item.likes || 0),
                 dislikes: item.dislikes || 0,
                 tags: item.tags || [],
+                visibility: item.visibility,
+                price: item.price,
                 createdAt: item.createdAt,
                 user: {
                     _id: item.userId?._id,
@@ -522,6 +525,16 @@ export const unifiedSearch = async (req, res) => {
 
         // Sort each bucket by score
         Object.keys(buckets).forEach(k => buckets[k].sort((a, b) => b.searchScore - a.searchScore));
+
+        // Strip media URLs for unpurchased PPV items across all content buckets
+        const allBucketItems = Object.values(buckets).flat();
+        const ppvAccessSet = await batchCheckPpvAccess(allBucketItems, userId);
+        Object.keys(buckets).forEach(k => {
+            buckets[k] = buckets[k].map(item => {
+                if (item.visibility !== 'pay_per_view' || ppvAccessSet.has(item._id.toString())) return item;
+                return { ...item, hlsMasterUrl: null, videoUrl: null, audioUrl: null, ppvRequired: true };
+            });
+        });
 
         // Compute actual follower counts for all channels in parallel
         // subscriberCount = number of users who have this channel in their subscriptions array

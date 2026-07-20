@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import User from "../../models/user.model.js";
 import { setAuthCookies } from "./services/cookieHelper.js";
+import { ensurePrimaryWallet } from "../../utils/walletService.js";
 
 let googleClient = null;
 let googleClientInitError = null;
@@ -148,6 +149,9 @@ const googleAuth = async (req, res) => {
         emailVerified: true,
         lastLoginAt: new Date(),
       });
+
+      // Create primary wallet for new user (fire-and-forget, non-blocking)
+      ensurePrimaryWallet(user._id).catch(err => console.error('Wallet creation error:', err));
     }
 
     // Set httpOnly auth cookies
