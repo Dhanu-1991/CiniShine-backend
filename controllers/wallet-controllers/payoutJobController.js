@@ -26,7 +26,7 @@ const s3Client = new S3Client({
     },
 });
 
-const MAINTENANCE_FEE_PERCENT = 0.01; // 1%
+const MAINTENANCE_FEE_PERCENT = 0; // 0% — no payout fee
 
 /**
  * POST /admin/payouts/run — Run month-end payout job
@@ -45,7 +45,7 @@ export const runMonthEndPayout = async (req, res) => {
         const userIds = wallets.map(w => w.userId);
         const kycDocs = await KycDetails.find({
             userId: { $in: userIds },
-            kycStatus: 'submitted',
+            kycStatus: { $in: ['submitted', 'pending', 'verified'] },
         }).lean();
         const kycByUser = new Map(kycDocs.map(k => [k.userId.toString(), k]));
 

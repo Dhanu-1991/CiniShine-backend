@@ -12,10 +12,11 @@ export const getRentalRecommendations = async (req, res) => {
             const topContent = await Content.find({
                 price: { $gt: 0 },
                 status: 'completed',
-                visibility: 'public'
+                visibility: 'pay_per_view',
+                contentType: { $in: ['video', 'audio'] },
             }).sort({ views: -1 }).limit(20);
             
-            return res.status(200).json(topContent);
+            return res.status(200).json(topContent.map(c => ({ ...c.toObject(), ppvPrice: c.price })));
         }
 
         // 1. Get already purchased content to exclude
@@ -57,11 +58,12 @@ export const getRentalRecommendations = async (req, res) => {
             }
         }
 
-        // 5. Query Content model for PPV items
+        // 5. Query Content model for PPV items (video and audio only)
         const candidates = await Content.find({
             price: { $gt: 0 },
             status: 'completed',
-            visibility: 'public',
+            visibility: 'pay_per_view',
+            contentType: { $in: ['video', 'audio'] },
             _id: { $nin: purchasedIds }
         });
 
@@ -81,6 +83,7 @@ export const getRentalRecommendations = async (req, res) => {
             
             return {
                 ...content.toObject(),
+                ppvPrice: content.price,
                 score
             };
         });

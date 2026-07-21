@@ -1,5 +1,6 @@
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import mongoose from 'mongoose';
 import KycDetails from '../../models/kycDetails.model.js';
 import PrimaryWallet from '../../models/primaryWallet.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
@@ -83,6 +84,13 @@ export const getWalletsList = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const search = req.query.search?.trim();
+        const sort = req.query.sort || 'balance_desc';
+        const sortObj = {
+            'balance_desc': { balance: -1 },
+            'balance_asc': { balance: 1 },
+            'created_desc': { createdAt: -1 },
+            'created_asc': { createdAt: 1 },
+        }[sort] || { balance: -1 };
 
         let query = {};
         if (search) {
@@ -100,7 +108,7 @@ export const getWalletsList = async (req, res) => {
 
         const wallets = await PrimaryWallet.find(query)
             .populate('userId', 'userName channelName contact')
-            .sort({ balance: -1 })
+            .sort(sortObj)
             .skip((page - 1) * limit)
             .limit(limit);
         
@@ -127,6 +135,13 @@ export const getSecondaryWalletsList = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const search = req.query.search?.trim();
+        const sort = req.query.sort || 'balance_desc';
+        const sortObj = {
+            'balance_desc': { balance: -1 },
+            'balance_asc': { balance: 1 },
+            'created_desc': { createdAt: -1 },
+            'created_asc': { createdAt: 1 },
+        }[sort] || { balance: -1 };
 
         let query = {};
         if (search) {
@@ -144,7 +159,7 @@ export const getSecondaryWalletsList = async (req, res) => {
 
         const wallets = await SecondaryWallet.find(query)
             .populate('userId', 'userName channelName contact')
-            .sort({ balance: -1 })
+            .sort(sortObj)
             .skip((page - 1) * limit)
             .limit(limit);
         
@@ -178,7 +193,7 @@ export const verifyKyc = async (req, res) => {
         await kyc.save();
 
         if (kyc.userId) {
-            await sendAdminEmail(kyc.userId.contact || kyc.userId.email, 'kycApproved', {
+            await sendAdminEmail('kycApproved', kyc.userId.contact || kyc.userId.email, {
                 creatorName: kyc.userId.userName || 'Creator',
                 adminName: req.admin?.name || 'Admin',
             });
@@ -210,7 +225,7 @@ export const rejectKyc = async (req, res) => {
         await kyc.save();
 
         if (kyc.userId) {
-            await sendAdminEmail(kyc.userId.contact || kyc.userId.email, 'kycRejected', {
+            await sendAdminEmail('kycRejected', kyc.userId.contact || kyc.userId.email, {
                 creatorName: kyc.userId.userName || 'Creator',
                 rejectionReason,
                 adminName: req.admin?.name || 'Admin',

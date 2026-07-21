@@ -598,7 +598,7 @@ export const getContentAnalytics = async (req, res) => {
                 ]);
                 return {
                     totalPurchases: purchaseCount,
-                    totalRevenue: revenueAgg[0]?.total || 0,
+                    totalRevenue: parseFloat((revenueAgg[0]?.total || 0).toFixed(2)),
                     recentPurchases: recentPurchases.map(p => ({
                         buyerName: 'Anonymous Viewer',
                         buyerPicture: null,

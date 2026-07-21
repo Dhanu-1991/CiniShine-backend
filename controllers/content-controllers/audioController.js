@@ -26,7 +26,7 @@ const s3Client = new S3Client({
  */
 export const audioUploadInit = async (req, res) => {
     try {
-        const { fileName, fileType, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles } = req.body;
+        const { fileName, fileType, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles, price } = req.body;
         const userId = req.user?.id;
 
         if (!userId) return res.status(401).json({ error: 'User not authenticated' });
@@ -52,7 +52,8 @@ export const audioUploadInit = async (req, res) => {
             selectedRoles: selectedRoles || [],
             originalKey: key,
             mimeType: fileType,
-            status: 'uploading'
+            status: 'uploading',
+            price: visibility === 'pay_per_view' ? (parseFloat(price) || 0) : 0,
         });
 
         const command = new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, ContentType: fileType });
@@ -71,7 +72,7 @@ export const audioUploadInit = async (req, res) => {
  */
 export const audioUploadComplete = async (req, res) => {
     try {
-        const { fileId, fileSize, duration, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles } = req.body;
+        const { fileId, fileSize, duration, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles, price } = req.body;
         const userId = req.user?.id;
 
         if (!fileId) return res.status(400).json({ error: 'fileId is required' });
@@ -93,6 +94,9 @@ export const audioUploadComplete = async (req, res) => {
         if (typeof isAgeRestricted === 'boolean') updateData.isAgeRestricted = isAgeRestricted;
         if (typeof commentsEnabled === 'boolean') updateData.commentsEnabled = commentsEnabled;
         if (selectedRoles) updateData.selectedRoles = selectedRoles;
+        // Set price only for PPV visibility
+        const finalVisibility = updateData.visibility || content.visibility;
+        updateData.price = finalVisibility === 'pay_per_view' ? (parseFloat(price) || content.price || 0) : 0;
 
         await Content.findByIdAndUpdate(fileId, updateData);
 

@@ -265,6 +265,80 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         );
     }
 
+    // ── Upsert WatchHistory for authenticated users ──
+    if (watcherIsAuthenticated) {
+        try {
+            const user = await (await import('../models/user.model.js')).default.findById(userId, 'historyPaused');
+            if (!user?.historyPaused) {
+                const WatchHistory = (await import('../models/watchHistory.model.js')).default;
+                const isCompleted = (consumptionPercent >= 80) || completed;
+                
+                const historyUpdate = {
+                    $set: {
+                        userId,
+                        contentId: contentRecord._id,
+                        contentType: contentRecord.contentType,
+                        lastWatchedAt: now,
+                        contentMetadata: {
+                            title: contentRecord.title,
+                            tags: contentRecord.tags || [],
+                            category: contentRecord.category || '',
+                            creatorId: contentRecord.userId,
+                            duration: contentDuration
+                        }
+                    },
+                    $max: {
+                        watchTime: playheadSeconds,
+                        watchPercentage: consumptionPercent || 0
+                    },
+                    $inc: { watchCount: isSessionEnd ? 1 : 0 }
+                };
+
+                if (isCompleted) {
+                    historyUpdate.$set.completedWatch = true;
+                }
+
+                if (activePlayTime > 0) {
+                    const sessionData = {
+                        startedAt: new Date(now.getTime() - activePlayTime * 1000),
+                        endedAt: now,
+                        watchTime: activePlayTime,
+                        device: device,
+                        completedWatch: isCompleted
+                    };
+                    historyUpdate.$push = {
+                        sessions: {
+                            $each: [sessionData],
+                            $slice: -20
+                        }
+                    };
+                }
+
+                await WatchHistory.findOneAndUpdate(
+                    { userId, contentId: contentRecord._id },
+                    historyUpdate,
+                    { upsert: true }
+                );
+
+                // Enforce 100 item cap per user
+                const historyCount = await WatchHistory.countDocuments({ userId });
+                if (historyCount > 100) {
+                    const oldestItems = await WatchHistory.find({ userId })
+                        .sort({ lastWatchedAt: -1 })
+                        .skip(100)
+                        .select('_id');
+                    
+                    if (oldestItems.length > 0) {
+                        const idsToDelete = oldestItems.map(item => item._id);
+                        await WatchHistory.deleteMany({ _id: { $in: idsToDelete } });
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Error updating WatchHistory:', err);
+        }
+    }
+
     // Recompute running average completion for the response
     const updatedContent = await Content.findById(contentRecord._id)
         .select('views totalWatchTime furthestPlayheadSeconds completionRate completionSumPercent completionSessionCount averageWatchPercent authenticatedViews anonymousViews authenticatedUniqueViewers anonymousUniqueViewers')

@@ -5,7 +5,7 @@ import Content from "../models/content.model.js";
 import SecondaryWallet from "../models/secondaryWallet.model.js";
 import { ensurePrimaryWallet, ensureSecondaryWallet, creditWallet } from "./walletService.js";
 
-export const PLATFORM_CUT_PERCENT = 30;
+export const PLATFORM_CUT_PERCENT = 32;
 
 /**
  * Fulfills a Wallet Recharge.

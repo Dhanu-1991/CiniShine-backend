@@ -11,8 +11,8 @@
  * REFACTORED: Uses PrimaryWallet + SecondaryWallet (separate models) instead of
  * the old single Wallet model with type discriminator.
  *
- * PPV REVENUE SPLIT: Creator receives 70% of the purchase price.
- * The remaining 30% is platform revenue (not stored in any wallet).
+ * PPV REVENUE SPLIT: Creator receives 68% of the purchase price.
+ * The remaining 32% is platform revenue (not stored in any wallet).
  */
 import mongoose from 'mongoose';
 import PrimaryWallet from '../models/primaryWallet.model.js';
@@ -22,7 +22,7 @@ import WalletTransferLog from '../models/walletTransferLog.model.js';
 import Purchase from '../models/purchase.model.js';
 
 /** Platform cut percentage for PPV purchases */
-const PLATFORM_CUT_PERCENT = 30;
+const PLATFORM_CUT_PERCENT = 32;
 
 /**
  * Ensure a primary wallet exists for a user. Creates one if it doesn't exist.
@@ -226,7 +226,7 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
                 `${purchaseIdempotencyKey}_debit`, session
             );
 
-            // Credit creator (70% only)
+            // Credit creator (68% only)
             const creatorTxn = await creditWallet(
                 creatorWallet._id, 'secondary', creatorAmount, 'ppv_earning_credit',
                 {
@@ -313,14 +313,35 @@ export async function executeRecharge(userId, amount, orderId) {
     try {
         let txn;
         await session.withTransaction(async () => {
-            const wallet = await PrimaryWallet.findOne({ userId }).session(session);
+            const wallet = await PrimaryWallet.findOneAndUpdate(
+                { userId },
+                { $inc: { balance: amount } },
+                { new: true, session }
+            );
             if (!wallet) throw new Error('Primary wallet not found');
 
-            txn = await creditWallet(
-                wallet._id, 'primary', amount, 'recharge',
-                { relatedOrderId: orderId },
-                `recharge_${orderId}`, session
+            txn = await WalletTransaction.findOneAndUpdate(
+                { relatedOrderId: orderId, type: 'recharge', status: 'pending' },
+                { 
+                    status: 'completed', 
+                    balanceAfter: wallet.balance, 
+                    idempotencyKey: `recharge_${orderId}` 
+                },
+                { new: true, session }
             );
+
+            if (!txn) {
+                [txn] = await WalletTransaction.create([{
+                    walletId: wallet._id,
+                    walletType: 'primary',
+                    type: 'recharge',
+                    amount,
+                    balanceAfter: wallet.balance,
+                    relatedOrderId: orderId,
+                    status: 'completed',
+                    idempotencyKey: `recharge_${orderId}`
+                }], { session });
+            }
         });
         return txn;
     } finally {
