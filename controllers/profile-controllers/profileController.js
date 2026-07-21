@@ -18,6 +18,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import ContentView from '../../models/contentView.model.js';
 import Purchase from '../../models/purchase.model.js';
+import { PLATFORM_CUT_PERCENT } from '../../utils/paymentFulfillmentService.js';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
@@ -587,7 +588,7 @@ export const getContentAnalytics = async (req, res) => {
                     Purchase.countDocuments({ contentId: id, status: 'active' }),
                     Purchase.aggregate([
                         { $match: { contentId: new mongoose.Types.ObjectId(id), status: { $in: ['active', 'expired'] } } },
-                        { $group: { _id: null, total: { $sum: '$amount' } } }
+                        { $group: { _id: null, total: { $sum: { $multiply: ['$amount', (100 - PLATFORM_CUT_PERCENT) / 100] } } } }
                     ]),
                     Purchase.find({ contentId: id, status: { $in: ['active', 'expired'] } })
                         .sort({ purchasedAt: -1 })

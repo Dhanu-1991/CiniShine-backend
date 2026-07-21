@@ -8,8 +8,9 @@ dotenv.config();
 
 import authRouter from "./routes/authRoutes/authRouter.js";
 import errorHandlingMiddleware from "./middlewares/errorHandlingMiddleware.js";
-import router from "./routes/paymentRoutes/cashfree.js";
+import router from "./routes/paymentRoutes/index.js";
 import { handleCashfreeWebhook } from "./controllers/payment-gateway-controllers/payment-webhook.js";
+import { handleRazorpayWebhook } from "./controllers/payment-gateway-controllers/razorpay-webhook.js";
 import contactRouter from "./routes/contactRoutes/contactRouter.js";
 import selectedRolesRouter from "./routes/selectedRolesRoutes/selectedRolesRouter.js";
 import videoRouter from "./routes/contentRoutes/videoRouter.js"; // Moved to contentRoutes
@@ -77,11 +78,17 @@ const getRawBody = (req, res, next) => {
   });
 };
 
-// Webhook route
+// Webhook routes
 app.post(
   "/api/v1/payments/payment-webhook",
   getRawBody,
   handleCashfreeWebhook
+);
+
+app.post(
+  "/api/v1/payments/razorpay-webhook",
+  express.json(), // Razorpay webhook handler uses stringified req.body
+  handleRazorpayWebhook
 );
 
 // All other routes get normal JSON/body parsing
