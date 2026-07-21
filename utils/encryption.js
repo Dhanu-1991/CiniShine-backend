@@ -46,12 +46,18 @@ export function encrypt(plaintext) {
  */
 export function decrypt(encrypted, iv, tag) {
     if (!encrypted || !iv || !tag) return null;
-    const key = getKey();
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'hex'));
-    decipher.setAuthTag(Buffer.from(tag, 'hex'));
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+    if (encrypted === 'dummy' || iv === 'dummy') return null;
+    try {
+        const key = getKey();
+        const decipher = crypto.createDecipheriv(ALGORITHM, key, Buffer.from(iv, 'hex'));
+        decipher.setAuthTag(Buffer.from(tag, 'hex'));
+        let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    } catch (err) {
+        console.error('Decryption failed for field:', err.message);
+        return null;
+    }
 }
 
 /**

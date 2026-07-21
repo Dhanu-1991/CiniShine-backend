@@ -4,6 +4,7 @@ import KycDetails from '../../models/kycDetails.model.js';
 import PrimaryWallet from '../../models/primaryWallet.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
+import { sendAdminEmail } from '../../services/adminEmailService.js';
 
 // Setup S3 Client using env vars
 const s3Client = new S3Client({
@@ -161,6 +162,64 @@ export const getSecondaryWalletsList = async (req, res) => {
 
     } catch (error) {
         console.error('Error fetching secondary wallets:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+export const verifyKyc = async (req, res) => {
+    try {
+        const { kycId } = req.params;
+        const kyc = await KycDetails.findById(kycId).populate('userId', 'userName contact email');
+        if (!kyc) {
+            return res.status(404).json({ success: false, message: 'KYC not found' });
+        }
+
+        kyc.kycStatus = 'verified';
+        await kyc.save();
+
+        if (kyc.userId) {
+            await sendAdminEmail(kyc.userId.contact || kyc.userId.email, 'kycApproved', {
+                creatorName: kyc.userId.userName || 'Creator',
+                adminName: req.admin?.name || 'Admin',
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'KYC verified successfully' });
+    } catch (error) {
+        console.error('Error verifying KYC:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+export const rejectKyc = async (req, res) => {
+    try {
+        const { kycId } = req.params;
+        const { rejectionReason } = req.body;
+        
+        if (!rejectionReason) {
+            return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+        }
+
+        const kyc = await KycDetails.findById(kycId).populate('userId', 'userName contact email');
+        if (!kyc) {
+            return res.status(404).json({ success: false, message: 'KYC not found' });
+        }
+
+        kyc.kycStatus = 'rejected';
+        kyc.rejectionReason = rejectionReason;
+        await kyc.save();
+
+        if (kyc.userId) {
+            await sendAdminEmail(kyc.userId.contact || kyc.userId.email, 'kycRejected', {
+                creatorName: kyc.userId.userName || 'Creator',
+                rejectionReason,
+                adminName: req.admin?.name || 'Admin',
+            });
+        }
+
+        res.status(200).json({ success: true, message: 'KYC rejected successfully' });
+    } catch (error) {
+        console.error('Error rejecting KYC:', error);
         res.status(500).json({ success: false, message: 'Server error' });
     }
 };

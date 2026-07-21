@@ -117,6 +117,46 @@ const templates = {
         text: `Hi ${creatorName}, ${warningMessage}`
     }),
 
+    kycApproved: ({ creatorName, adminName }) => ({
+        subject: `[${PLATFORM_NAME}] KYC Verification Successful`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #34d399; margin-top: 0;">KYC Verified</h2>
+                    <p>Hi <strong>${creatorName}</strong>,</p>
+                    <p>Great news! Your KYC details have been successfully verified by our team. Your wallet is now fully approved for payouts and monetization features.</p>
+                    <p>Thank you for submitting your details!</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME}${adminName ? ` (via ${adminName})` : ''}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${creatorName}, your KYC details have been successfully verified! Your wallet is now fully approved.`
+    }),
+
+    kycRejected: ({ creatorName, rejectionReason, adminName }) => ({
+        subject: `[${PLATFORM_NAME}] Action Required: KYC Verification Failed`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #e63946 0%, #c1121f 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #ff6b6b; margin-top: 0;">KYC Update Required</h2>
+                    <p>Hi <strong>${creatorName}</strong>,</p>
+                    <p>We encountered an issue while verifying your submitted KYC details.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #e63946; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #ff9999;"><strong>Reason for Rejection:</strong></p>
+                        <p style="margin: 8px 0 0; color: #e0e0e0;">${rejectionReason}</p>
+                    </div>
+                    <p>Please log in to your dashboard and update your KYC details to ensure uninterrupted monetization and payouts.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME} moderation team${adminName ? ` (via ${adminName})` : ''}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${creatorName}, your KYC verification failed. Reason: ${rejectionReason}. Please log in and update your details.`
+    }),
+
     custom: ({ creatorName, subject: customSubject, body, adminName }) => ({
         subject: customSubject || `[${PLATFORM_NAME}] Message from the team`,
         html: `

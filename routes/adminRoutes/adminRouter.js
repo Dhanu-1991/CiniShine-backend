@@ -25,7 +25,7 @@ import {
     adminSendMessage, adminGetMessages, adminGetConversations
 } from '../../controllers/admin-controllers/adminChatController.js';
 import {
-    getKycList, getWalletsList, getSecondaryWalletsList
+    getKycList, getWalletsList, getSecondaryWalletsList, verifyKyc, rejectKyc
 } from '../../controllers/admin-controllers/adminWalletController.js';
 import {
     getDailyLedger, getLiveTransfers
@@ -108,6 +108,8 @@ adminRouter.get('/requests', listRequests);
 
 // Wallet & KYC management
 adminRouter.get('/kyc', getKycList);
+adminRouter.put('/kyc/:kycId/verify', auditLog('kyc_verified', 'admin'), verifyKyc);
+adminRouter.put('/kyc/:kycId/reject', auditLog('kyc_rejected', 'admin'), rejectKyc);
 adminRouter.get('/wallets/primary', getWalletsList);
 adminRouter.get('/wallets/secondary', getSecondaryWalletsList);
 

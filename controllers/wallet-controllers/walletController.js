@@ -384,13 +384,11 @@ export const submitKyc = async (req, res) => {
             ...encryptedFields,
             kycDocumentKey,
             kycDocumentType,
-            kycStatus: 'submitted',
+            kycStatus: 'pending',
             submittedAt: new Date(),
         };
 
-        // If editing existing KYC, reset status to pending for re-verification
-        if (isEdit && existingKyc.kycStatus === 'submitted') {
-            kycData.kycStatus = 'pending';
+        if (isEdit) {
             kycData.lastEditedAt = new Date();
         }
 
