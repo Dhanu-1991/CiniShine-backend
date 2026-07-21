@@ -600,8 +600,8 @@ export const getContentAnalytics = async (req, res) => {
                     totalPurchases: purchaseCount,
                     totalRevenue: revenueAgg[0]?.total || 0,
                     recentPurchases: recentPurchases.map(p => ({
-                        buyerName: p.buyerId?.channelName || p.buyerId?.userName || 'Unknown',
-                        buyerPicture: p.buyerId?.profilePicture ? getCfUrl(p.buyerId.profilePicture) : null,
+                        buyerName: 'Anonymous Viewer',
+                        buyerPicture: null,
                         amount: p.amount,
                         purchasedAt: p.purchasedAt,
                         expiresAt: p.expiresAt,

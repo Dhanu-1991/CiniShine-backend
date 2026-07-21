@@ -81,14 +81,29 @@ export const getWalletsList = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
+        const search = req.query.search?.trim();
 
-        const wallets = await PrimaryWallet.find()
+        let query = {};
+        if (search) {
+            const User = mongoose.model('User');
+            const users = await User.find({
+                $or: [
+                    { userName: new RegExp(search, 'i') },
+                    { contact: new RegExp(search, 'i') },
+                    { channelName: new RegExp(search, 'i') }
+                ]
+            }).select('_id');
+            const userIds = users.map(u => u._id);
+            query = { userId: { $in: userIds } };
+        }
+
+        const wallets = await PrimaryWallet.find(query)
             .populate('userId', 'userName channelName contact')
             .sort({ balance: -1 })
             .skip((page - 1) * limit)
             .limit(limit);
         
-        const total = await PrimaryWallet.countDocuments();
+        const total = await PrimaryWallet.countDocuments(query);
 
         res.status(200).json({
             success: true,
@@ -110,14 +125,29 @@ export const getSecondaryWalletsList = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
+        const search = req.query.search?.trim();
 
-        const wallets = await SecondaryWallet.find()
+        let query = {};
+        if (search) {
+            const User = mongoose.model('User');
+            const users = await User.find({
+                $or: [
+                    { userName: new RegExp(search, 'i') },
+                    { contact: new RegExp(search, 'i') },
+                    { channelName: new RegExp(search, 'i') }
+                ]
+            }).select('_id');
+            const userIds = users.map(u => u._id);
+            query = { userId: { $in: userIds } };
+        }
+
+        const wallets = await SecondaryWallet.find(query)
             .populate('userId', 'userName channelName contact')
             .sort({ balance: -1 })
             .skip((page - 1) * limit)
             .limit(limit);
         
-        const total = await SecondaryWallet.countDocuments();
+        const total = await SecondaryWallet.countDocuments(query);
 
         res.status(200).json({
             success: true,

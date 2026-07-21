@@ -28,6 +28,9 @@ import {
     getKycList, getWalletsList, getSecondaryWalletsList
 } from '../../controllers/admin-controllers/adminWalletController.js';
 import {
+    getDailyLedger, getLiveTransfers
+} from '../../controllers/admin-controllers/adminLedgerController.js';
+import {
     getPayoutReport, runMonthEndPayout
 } from '../../controllers/wallet-controllers/payoutJobController.js';
 import {
@@ -111,6 +114,10 @@ adminRouter.get('/wallets/secondary', getSecondaryWalletsList);
 // ─── Payout routes ───────────────────────────────────────────────────────────
 adminRouter.get('/payouts/:month', getPayoutReport);
 adminRouter.post('/payouts/run', runMonthEndPayout);
+
+// Ledger & Live Transfers
+adminRouter.get('/ledger/daily', getDailyLedger);
+adminRouter.get('/ledger/live', getLiveTransfers);
 
 // ─── SuperAdmin-only routes ──────────────────────────────────────────────────
 adminRouter.post('/approve-signup', requireSuperAdmin, auditLog('signup_approved', 'admin'), approveSignup);

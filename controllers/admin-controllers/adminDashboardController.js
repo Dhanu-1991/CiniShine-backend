@@ -131,7 +131,7 @@ export const listReports = async (req, res) => {
         const {
             page = 1, limit = 20,
             status, reason, dateFrom, dateTo,
-            contentType, sort = 'latest'
+            contentType, sort = 'latest', search
         } = req.query;
 
         const filter = {};
@@ -166,6 +166,18 @@ export const listReports = async (req, res) => {
             },
             { $unwind: { path: '$reporter', preserveNullAndEmptyArrays: true } }
         ];
+
+        if (search) {
+            pipeline.push({
+                $match: {
+                    $or: [
+                        { 'reporter.userName': new RegExp(search, 'i') },
+                        { reason: new RegExp(search, 'i') },
+                        { 'content.title': new RegExp(search, 'i') }
+                    ]
+                }
+            });
+        }
 
         // Add content type filter via lookup
         if (contentType) {

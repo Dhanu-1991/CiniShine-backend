@@ -376,7 +376,7 @@ export const deleteContent = async (req, res) => {
  */
 export const listArchive = async (req, res) => {
     try {
-        const { page = 1, limit = 20, status } = req.query;
+        const { page = 1, limit = 20, status, search } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const filter = {};
@@ -387,6 +387,10 @@ export const listArchive = async (req, res) => {
             filter.restored_at = { $ne: null };
         } else if (status === 'deleted') {
             filter.permanently_deleted = true;
+        }
+
+        if (search) {
+            filter['content_snapshot.title'] = new RegExp(search, 'i');
         }
 
         const [archives, total] = await Promise.all([

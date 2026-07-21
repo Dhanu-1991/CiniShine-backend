@@ -71,5 +71,5 @@ walletTransactionSchema.index(
     { expireAfterSeconds: 0, partialFilterExpression: { status: { $in: ['pending', 'abandoned'] } } }
 );
 
-const WalletTransaction = mongoose.model('WalletTransaction', walletTransactionSchema);
+const WalletTransaction = mongoose.models.WalletTransaction || mongoose.model('WalletTransaction', walletTransactionSchema);
 export default WalletTransaction;
