@@ -23,6 +23,7 @@ import {
     uploadVideoThumbnail,
     getSpecificContent,
 } from "../../controllers/content-controllers/videoController.js";
+import { getRentalRecommendations } from "../../controllers/content-controllers/rentalRecommendationController.js";
 import { getMixedFeed, getRecommendationsWithShorts, getCategoryTags, getCategoryFeed, getCategoryTrending } from "../../controllers/content-controllers/feedController.js";
 import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/content-controllers/interactions.js";
 import { searchVideos, getSearchSuggestions, clearSearchHistory, unifiedSearch } from "../../controllers/content-controllers/search.js";
@@ -72,6 +73,7 @@ router.get("/feed/category/:categoryId", optionalTokenVerifier, getCategoryFeed)
 router.get("/feed/trending/:categoryId", optionalTokenVerifier, getCategoryTrending);
 
 // Recommendations
+router.get("/rental-recommendations", optionalTokenVerifier, getRentalRecommendations);
 router.get("/:videoId/recommendations", optionalTokenVerifier, getRecommendations);
 router.get("/:videoId/recommendations-with-shorts", optionalTokenVerifier, getRecommendationsWithShorts);
 

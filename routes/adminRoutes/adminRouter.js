@@ -31,7 +31,7 @@ import {
     getDailyLedger, getLiveTransfers
 } from '../../controllers/admin-controllers/adminLedgerController.js';
 import {
-    getPayoutReport, runMonthEndPayout
+    getPayoutReport, runMonthEndPayout, getDailyPayoutStats
 } from '../../controllers/wallet-controllers/payoutJobController.js';
 import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
@@ -112,6 +112,7 @@ adminRouter.get('/wallets/primary', getWalletsList);
 adminRouter.get('/wallets/secondary', getSecondaryWalletsList);
 
 // ─── Payout routes ───────────────────────────────────────────────────────────
+adminRouter.get('/payouts/daily-stats', getDailyPayoutStats);
 adminRouter.get('/payouts/:month', getPayoutReport);
 adminRouter.post('/payouts/run', runMonthEndPayout);
 

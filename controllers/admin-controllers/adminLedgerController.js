@@ -175,13 +175,17 @@ export const getLiveTransfers = async (req, res) => {
                 createdAt: t.createdAt,
                 orderId: t.relatedOrderId,
                 walletUser: t.walletUser ? {
+                    id: t.walletUser._id?.toString(),
                     name: t.walletUser.userName,
                     contact: t.walletUser.contact
                 } : null,
+                walletUserId: t.walletUser?._id?.toString() || null,
                 buyer: t.buyer ? {
+                    id: t.buyer._id?.toString(),
                     name: t.buyer.userName,
                     contact: t.buyer.contact
-                } : null
+                } : null,
+                buyerId: t.buyer?._id?.toString() || null,
             })),
             pagination: {
                 page: parseInt(page),

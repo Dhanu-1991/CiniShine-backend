@@ -9,9 +9,11 @@
  */
 import mongoose from 'mongoose';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
+import PrimaryWallet from '../../models/primaryWallet.model.js';
 import KycDetails from '../../models/kycDetails.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
 import Payout from '../../models/payout.model.js';
+import Purchase from '../../models/purchase.model.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -237,5 +239,85 @@ export const getPayoutReport = async (req, res) => {
     } catch (error) {
         console.error('❌ Error fetching payout report:', error);
         res.status(500).json({ error: 'Failed to fetch payout report' });
+    }
+};
+
+/**
+ * GET /admin/payouts/daily-stats — Get daily payout stats
+ */
+export const getDailyPayoutStats = async (req, res) => {
+    try {
+        let dateStr = req.query.date;
+        if (!dateStr) {
+            // Get today in IST YYYY-MM-DD
+            const now = new Date();
+            const istOffset = 5.5 * 60 * 60 * 1000;
+            const istTime = new Date(now.getTime() + istOffset);
+            dateStr = istTime.toISOString().split('T')[0];
+        }
+
+        const startOfDay = new Date(`${dateStr}T00:00:00.000+05:30`);
+        const endOfDay = new Date(`${dateStr}T23:59:59.999+05:30`);
+
+        const wTx = await WalletTransaction.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: startOfDay, $lte: endOfDay },
+                    status: 'completed',
+                    type: { $in: ['recharge', 'transfer_to_primary', 'ppv_purchase_debit'] }
+                }
+            },
+            {
+                $group: {
+                    _id: '$type',
+                    total: { $sum: '$amount' }
+                }
+            }
+        ]);
+
+        let totalCreditedToW1 = 0;
+        let secondaryToPrimary = 0;
+        let walletPPV = 0;
+
+        wTx.forEach(t => {
+            if (t._id === 'recharge') totalCreditedToW1 = t.total;
+            if (t._id === 'transfer_to_primary') secondaryToPrimary = t.total;
+            if (t._id === 'ppv_purchase_debit') walletPPV = t.total;
+        });
+
+        const purchases = await Purchase.aggregate([
+            {
+                $match: {
+                    purchasedAt: { $gte: startOfDay, $lte: endOfDay },
+                    status: { $in: ['active', 'expired'] }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$amount' }
+                }
+            }
+        ]);
+        const gatewayPPV = purchases.length > 0 ? purchases[0].total : 0;
+
+        const w1 = await PrimaryWallet.aggregate([{ $group: { _id: null, total: { $sum: '$balance' } } }]);
+        const totalW1Balance = w1.length > 0 ? w1[0].total : 0;
+
+        const w2 = await SecondaryWallet.aggregate([{ $group: { _id: null, total: { $sum: '$balance' } } }]);
+        const totalW2Balance = w2.length > 0 ? w2[0].total : 0;
+
+        return res.json({
+            date: dateStr,
+            totalCreditedToW1,
+            secondaryToPrimary,
+            walletPPV,
+            gatewayPPV,
+            totalW1Balance,
+            totalW2Balance
+        });
+    } catch (error) {
+        console.error('❌ Error getting daily payout stats:', error);
+        return res.status(500).json({ error: 'Failed to fetch daily payout stats' });
     }
 };
