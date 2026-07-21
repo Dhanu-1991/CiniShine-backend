@@ -24,7 +24,7 @@ const payPerViewAccess = async (req, res, next) => {
             return next();
         }
 
-        const content = await Content.findById(contentId).select('visibility userId price');
+        const content = await Content.findById(contentId).select('visibility userId price trailerContentId');
         if (!content) {
             return res.status(404).json({ error: 'Content not found' });
         }
@@ -44,6 +44,7 @@ const payPerViewAccess = async (req, res, next) => {
                 ppvRequired: true,
                 price: content.price,
                 contentId: content._id,
+                trailerContentId: content.trailerContentId || null,
             });
         }
 

@@ -828,6 +828,7 @@ export const getVideoStatus = async (req, res) => {
             contentType: video.contentType,
             visibility: video.visibility,
             price: video.visibility === 'pay_per_view' ? video.price : undefined,
+            trailerContentId: video.trailerContentId || null,
         });
     } catch (error) {
         console.error('Error getting video status:', error);
