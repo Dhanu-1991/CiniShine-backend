@@ -44,7 +44,7 @@ const kycDetailsSchema = new mongoose.Schema({
     // Verification status
     kycStatus: {
         type: String,
-        enum: ['not_started', 'pending', 'submitted', 'rejected'],
+        enum: ['not_started', 'pending', 'submitted', 'verified', 'rejected'],
         default: 'not_started',
     },
 
