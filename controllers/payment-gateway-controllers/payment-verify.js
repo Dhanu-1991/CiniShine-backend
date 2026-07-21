@@ -3,7 +3,8 @@ dotenv.config();
 import PaymentDetails from "../../models/payment.details.model.js";
 import axios from "axios";
 import mongoose from "mongoose";
-import { ensurePrimaryWallet, creditWallet } from "../../utils/walletService.js";
+import { fulfillWalletRecharge, fulfillPpvPurchase } from "../../utils/paymentFulfillmentService.js";
+const PLATFORM_CUT_PERCENT = 30;
 
 const paymentVerify = async (req, res) => {
   const { orderId } = req.body;
@@ -11,9 +12,9 @@ const paymentVerify = async (req, res) => {
   try {
     let response = await PaymentDetails.findOne({ orderId });
     
-    // Fallback: If not found in DB, check Cashfree directly (Webhook might have failed/delayed)
-    if (!response && orderId) {
-      console.log(`Order ${orderId} missing in DB. Querying Cashfree directly...`);
+    // Fallback: If not found in DB, or if still PENDING (webhook delayed), check Cashfree directly
+    if ((!response || response.status === "PENDING") && orderId) {
+      console.log(`Order ${orderId} is missing or PENDING. Querying Cashfree directly...`);
       const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production' 
         ? 'https://api.cashfree.com/pg/orders' 
         : 'https://sandbox.cashfree.com/pg/orders';
@@ -37,37 +38,33 @@ const paymentVerify = async (req, res) => {
           const type = cfOrder.order_tags?.type || "ppv_purchase";
           
           if (type === "wallet_recharge" && userId) {
-            const session = await mongoose.startSession();
-            try {
-              await session.withTransaction(async () => {
-                const wallet = await ensurePrimaryWallet(userId);
-                await creditWallet(
-                  wallet._id,
-                  'primary',
-                  amount,
-                  'recharge',
-                  { relatedOrderId: orderId, relatedBuyerId: userId },
-                  `recharge_fallback_${orderId}`,
-                  session
-                );
-                
-                response = await PaymentDetails.create([{
-                  orderId,
-                  paymentId: cfOrder.cf_order_id,
-                  amount,
-                  currency,
-                  status: "SUCCESS",
-                  userId
-                }], { session });
-              });
-              console.log(`✅ [Fallback] Credited ₹${amount} to user ${userId} primary wallet for recharge`);
-              response = response[0];
-            } catch (fallbackErr) {
-              console.error('❌ Failed to process wallet recharge fallback', fallbackErr);
-            } finally {
-              await session.endSession();
-            }
+            response = await fulfillWalletRecharge({
+              orderId,
+              paymentId: cfOrder.cf_order_id,
+              amount,
+              currency,
+              userId
+            });
+          } else {
+            // --- PPV PURCHASE FALLBACK LOGIC ---
+            const contentId = cfOrder.order_tags?.contentId;
+            response = await fulfillPpvPurchase({
+              orderId,
+              paymentId: cfOrder.cf_order_id,
+              amount,
+              currency,
+              userId,
+              contentId
+            });
           }
+        } else {
+          // If it's FAILED, ACTIVE, etc., just return that status directly to the frontend!
+          // We don't save it to the DB here (webhook will handle it if it arrives),
+          // but at least the frontend won't get stuck on UNKNOWN.
+          return res.status(200).json({
+            order_status: cfOrder.order_status,
+            paymentDetails: null
+          });
         }
       } catch (cfErr) {
         console.error("Cashfree API fetch error:", cfErr.response?.data || cfErr.message);

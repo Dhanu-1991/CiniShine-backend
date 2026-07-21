@@ -5,6 +5,7 @@ dotenv.config();
 import { Cashfree, CFEnvironment } from "cashfree-pg";
 import generateOrderId from "./get.order.id.js";
 import User from "../../models/user.model.js";
+import PaymentDetails from "../../models/payment.details.model.js";
 
 // ✅ Correct instantiation for SDK v5.0.8
 const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production' ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX;
@@ -46,6 +47,17 @@ const payment = async (req, res) => {
         userId: user._id.toString()
       }
     };
+
+    // Create a pending record in DB so payment-verify never sees null
+    await PaymentDetails.create({
+      orderId,
+      paymentId: "PENDING_GENERATION",
+      status: "PENDING",
+      amount: price,
+      currency: "INR",
+      userId: user._id,
+      contentId: contentId
+    });
 
     const response = await cashfree.PGCreateOrder(request);
     console.log("Payment session created successfully:", response.data);

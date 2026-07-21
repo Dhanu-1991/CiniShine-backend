@@ -126,12 +126,24 @@ export const updateContent = async (req, res) => {
 
         const { title, description, visibility, price, trailerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
 
+        // Extract 24-char MongoDB ID from a full watchinit URL or raw ID
         const extractId = (val) => {
             if (!val) return null;
             const match = val.match(/([a-f\d]{24})$/i);
             return match ? match[1] : null;
         };
         const parsedTrailerId = extractId(trailerContentId);
+
+        // Validate trailer content exists and is publicly visible
+        if (parsedTrailerId) {
+            const trailerContent = await Content.findById(parsedTrailerId).select('visibility');
+            if (!trailerContent) {
+                return res.status(400).json({ error: 'Trailer content not found. Make sure the video exists on WatchinIt.' });
+            }
+            if (trailerContent.visibility !== 'public') {
+                return res.status(400).json({ error: 'Trailer video must be set to Public visibility. Private, unlisted, or PPV videos cannot be used as trailers.' });
+            }
+        }
 
         const update = {};
         if (title !== undefined) update.title = title;

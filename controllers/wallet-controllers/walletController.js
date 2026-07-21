@@ -28,6 +28,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import Content from '../../models/content.model.js';
 import Purchase from '../../models/purchase.model.js';
+import PaymentDetails from '../../models/payment.details.model.js';
 import { Cashfree, CFEnvironment } from 'cashfree-pg';
 import crypto from 'crypto';
 
@@ -201,6 +202,16 @@ export const rechargeInit = async (req, res) => {
                 userId: userId.toString(),
             },
         };
+
+        // Create a pending record in DB so payment-verify never sees null
+        await PaymentDetails.create({
+            orderId,
+            paymentId: "PENDING_GENERATION",
+            status: "PENDING",
+            amount: numAmount,
+            currency: "INR",
+            userId: userId
+        });
 
         const response = await cashfree.PGCreateOrder(orderRequest);
 

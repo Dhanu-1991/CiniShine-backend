@@ -111,6 +111,22 @@ export const multipartInit = async (req, res) => {
             }
         }
 
+        // Validate trailer: only public watchinit videos are allowed
+        let parsedTrailerId = null;
+        if (visibility === 'pay_per_view' && trailerContentId) {
+            const match = trailerContentId.match(/([a-f\d]{24})$/i);
+            parsedTrailerId = match ? match[1] : null;
+            if (parsedTrailerId) {
+                const trailerContent = await Content.findById(parsedTrailerId).select('visibility');
+                if (!trailerContent) {
+                    return res.status(400).json({ error: 'Trailer content not found. Make sure the video exists on WatchinIt.' });
+                }
+                if (trailerContent.visibility !== 'public') {
+                    return res.status(400).json({ error: 'Trailer video must be set to Public visibility. Private, unlisted, or PPV videos cannot be used as trailers.' });
+                }
+            }
+        }
+
         const contentType = cType || "video";
         const fileId = new mongoose.Types.ObjectId();
 
@@ -131,7 +147,7 @@ export const multipartInit = async (req, res) => {
             category: category || "",
             visibility: visibility || "public",
             price: visibility === 'pay_per_view' ? Number(price) : null,
-            trailerContentId: visibility === 'pay_per_view' ? trailerContentId : null,
+            trailerContentId: parsedTrailerId,
             spoilerText: visibility === 'pay_per_view' ? spoilerText : null,
             isAgeRestricted: isAgeRestricted || false,
             commentsEnabled: commentsEnabled !== false,
