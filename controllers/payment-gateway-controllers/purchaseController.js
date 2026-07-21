@@ -37,7 +37,7 @@ export const getUserPurchases = async (req, res) => {
   try {
     const userId = req.user.id;
     const purchases = await Purchase.find({ buyerId: userId })
-      .populate('contentId', 'title thumbnailUrl contentType')
+      .populate('contentId', 'title thumbnailKey contentType coverArtKey imageKey')
       .sort({ purchasedAt: -1 });
 
     res.status(200).json({

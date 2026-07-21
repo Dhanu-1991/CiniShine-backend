@@ -133,10 +133,25 @@ export const getLiveTransfers = async (req, res) => {
             { $unwind: { path: '$buyer', preserveNullAndEmptyArrays: true } },
             {
                 $lookup: {
-                    from: 'wallets', localField: 'walletId', foreignField: '_id', as: 'wallet'
+                    from: 'primarywallets', localField: 'walletId', foreignField: '_id', as: 'pwallet'
                 }
             },
-            { $unwind: { path: '$wallet', preserveNullAndEmptyArrays: true } },
+            {
+                $lookup: {
+                    from: 'secondarywallets', localField: 'walletId', foreignField: '_id', as: 'swallet'
+                }
+            },
+            {
+                $addFields: {
+                    wallet: {
+                        $cond: {
+                            if: { $gt: [{ $size: '$pwallet' }, 0] },
+                            then: { $arrayElemAt: ['$pwallet', 0] },
+                            else: { $arrayElemAt: ['$swallet', 0] }
+                        }
+                    }
+                }
+            },
             {
                 $lookup: {
                     from: 'users', localField: 'wallet.userId', foreignField: '_id', as: 'walletUser'
