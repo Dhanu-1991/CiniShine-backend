@@ -30,7 +30,14 @@ import Content from '../../models/content.model.js';
 import Purchase from '../../models/purchase.model.js';
 import PaymentDetails from '../../models/payment.details.model.js';
 import { Cashfree, CFEnvironment } from 'cashfree-pg';
+import Razorpay from 'razorpay';
 import crypto from 'crypto';
+
+// Razorpay instance (lazy — only used when ACTIVE_PAYMENT_GATEWAY=razorpay)
+const getRazorpayInstance = () => new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -158,8 +165,8 @@ export const getWalletTransactions = async (req, res) => {
 };
 
 /**
- * POST /wallets/recharge — Initiate wallet recharge via Cashfree
- * Creates a pending record, then creates Cashfree order.
+ * POST /wallets/recharge — Initiate wallet recharge
+ * Gateway is determined by ACTIVE_PAYMENT_GATEWAY env var (razorpay | cashfree).
  */
 export const rechargeInit = async (req, res) => {
     try {
@@ -173,16 +180,65 @@ export const rechargeInit = async (req, res) => {
             return res.status(400).json({ error: 'Minimum recharge amount is ₹1' });
         }
 
-        const primaryWallet = await ensurePrimaryWallet(userId);
+        await ensurePrimaryWallet(userId);
 
+        const gateway = process.env.ACTIVE_PAYMENT_GATEWAY?.toLowerCase() || 'cashfree';
+        const User = mongoose.model('User');
+        const user = await User.findById(userId).select('userName channelName email contact').lean();
+
+        // ─── RAZORPAY BRANCH ────────────────────────────────────────────────────
+        if (gateway === 'razorpay') {
+            console.log(`[rechargeInit] Using Razorpay for user ${userId}`);
+            const rzp = getRazorpayInstance();
+            const receiptId = `RECHARGE_${Date.now()}_${userId.toString().slice(-6)}`;
+
+            const order = await rzp.orders.create({
+                amount: Math.round(numAmount * 100), // paise
+                currency: 'INR',
+                receipt: receiptId,
+                notes: {
+                    type: 'wallet_recharge',
+                    userId: userId.toString(),
+                },
+            });
+
+            console.log(`[rechargeInit] Razorpay order created: ${order.id}`);
+
+            // Store with Razorpay's order ID so verify can look it up
+            await PaymentDetails.create({
+                orderId: order.id,
+                paymentId: 'PENDING_GENERATION',
+                status: 'PENDING',
+                amount: numAmount,
+                currency: 'INR',
+                userId,
+                contentId: null, // wallet recharge
+            });
+
+            const customerEmail = user?.email || (user?.contact?.includes('@') ? user.contact : `${userId}@watchinit.com`);
+            const customerPhone = (!user?.contact?.includes('@') && user?.contact) ? user.contact : '9876543210';
+
+            return res.json({
+                gateway: 'razorpay',
+                order_id: order.id,
+                amount: order.amount,
+                currency: order.currency,
+                key_id: process.env.RAZORPAY_KEY_ID,
+                customer_name: user?.channelName || user?.userName || 'User',
+                customer_email: customerEmail,
+                customer_phone: customerPhone,
+            });
+        }
+
+        // ─── CASHFREE BRANCH (default) ──────────────────────────────────────────
+        console.log(`[rechargeInit] Using Cashfree for user ${userId}`);
         const orderId = `RECHARGE_${Date.now()}_${userId.toString().slice(-6)}`;
 
         // Create pending initiation record (auto-expires in 24h if never completed)
         await createPendingRechargeRecord(userId, numAmount, orderId);
 
-        // Get user details for Cashfree
-        const User = mongoose.model('User');
-        const user = await User.findById(userId).select('userName contact').lean();
+        const customerEmail = user?.email || (user?.contact?.includes('@') ? user.contact : `${userId}@watchinit.com`);
+        const customerPhone = (!user?.contact?.includes('@') && user?.contact) ? user.contact : '9876543210';
 
         const orderRequest = {
             order_id: orderId,
@@ -191,8 +247,8 @@ export const rechargeInit = async (req, res) => {
             customer_details: {
                 customer_id: userId.toString(),
                 customer_name: user?.userName || 'User',
-                customer_email: user?.contact?.includes('@') ? user.contact : `${userId}@watchinit.com`,
-                customer_phone: (!user?.contact?.includes('@') && user?.contact) ? user.contact : '9876543210',
+                customer_email: customerEmail,
+                customer_phone: customerPhone,
             },
             order_meta: {
                 return_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment/result?order_id=${orderId}`,
@@ -206,16 +262,17 @@ export const rechargeInit = async (req, res) => {
         // Create a pending record in DB so payment-verify never sees null
         await PaymentDetails.create({
             orderId,
-            paymentId: "PENDING_GENERATION",
-            status: "PENDING",
+            paymentId: 'PENDING_GENERATION',
+            status: 'PENDING',
             amount: numAmount,
-            currency: "INR",
-            userId: userId
+            currency: 'INR',
+            userId,
         });
 
         const response = await cashfree.PGCreateOrder(orderRequest);
 
-        res.json({
+        return res.json({
+            gateway: 'cashfree',
             success: true,
             orderId,
             paymentSessionId: response.data?.payment_session_id,

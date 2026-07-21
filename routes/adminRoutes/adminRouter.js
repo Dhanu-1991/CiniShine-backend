@@ -28,6 +28,9 @@ import {
     getKycList, getWalletsList, getSecondaryWalletsList
 } from '../../controllers/admin-controllers/adminWalletController.js';
 import {
+    getPayoutReport, runMonthEndPayout
+} from '../../controllers/wallet-controllers/payoutJobController.js';
+import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
 
@@ -104,6 +107,10 @@ adminRouter.get('/requests', listRequests);
 adminRouter.get('/kyc', getKycList);
 adminRouter.get('/wallets/primary', getWalletsList);
 adminRouter.get('/wallets/secondary', getSecondaryWalletsList);
+
+// ─── Payout routes ───────────────────────────────────────────────────────────
+adminRouter.get('/payouts/:month', getPayoutReport);
+adminRouter.post('/payouts/run', runMonthEndPayout);
 
 // ─── SuperAdmin-only routes ──────────────────────────────────────────────────
 adminRouter.post('/approve-signup', requireSuperAdmin, auditLog('signup_approved', 'admin'), approveSignup);

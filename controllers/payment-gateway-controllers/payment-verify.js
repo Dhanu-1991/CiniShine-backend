@@ -4,7 +4,6 @@ import PaymentDetails from "../../models/payment.details.model.js";
 import axios from "axios";
 import mongoose from "mongoose";
 import { fulfillWalletRecharge, fulfillPpvPurchase } from "../../utils/paymentFulfillmentService.js";
-const PLATFORM_CUT_PERCENT = 30;
 
 const paymentVerify = async (req, res) => {
   const { orderId } = req.body;
