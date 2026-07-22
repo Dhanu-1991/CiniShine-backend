@@ -24,7 +24,7 @@ const payPerViewAccess = async (req, res, next) => {
             return next();
         }
 
-        const content = await Content.findById(contentId).select('visibility userId price trailerContentId');
+        const content = await Content.findById(contentId).select('visibility userId price trailerContentId spoilerContentId spoilerText');
         if (!content) {
             return res.status(404).json({ error: 'Content not found' });
         }
@@ -44,7 +44,9 @@ const payPerViewAccess = async (req, res, next) => {
                 ppvRequired: true,
                 price: content.price,
                 contentId: content._id,
-                trailerContentId: content.trailerContentId || null,
+                trailerContentId: content.trailerContentId || content.spoilerContentId || null,
+                spoilerContentId: content.spoilerContentId || content.trailerContentId || null,
+                spoilerText: content.spoilerText || null,
             });
         }
 

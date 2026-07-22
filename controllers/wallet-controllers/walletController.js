@@ -99,6 +99,8 @@ export const getMyWallets = async (req, res) => {
             submittedAt: kycDetails.submittedAt,
             lastEditedAt: kycDetails.lastEditedAt,
             rejectionReason: kycDetails.rejectionReason,
+            isGstHolder: kycDetails.isGstHolder || false,
+            gstNumber: kycDetails.gstNumber || null,
         } : null;
 
         res.json({ wallets });
@@ -346,7 +348,7 @@ export const submitKyc = async (req, res) => {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-        const { bankAccountNumber, bankName, ifscCode, accountHolderName, kycDocumentType } = req.body;
+        const { bankAccountNumber, bankName, ifscCode, accountHolderName, kycDocumentType, isGstHolder, gstNumber } = req.body;
 
         // Validate required fields
         if (!bankAccountNumber || !bankName || !ifscCode || !accountHolderName) {
@@ -355,23 +357,47 @@ export const submitKyc = async (req, res) => {
         if (!kycDocumentType || !['passbook', 'cancelled_cheque'].includes(kycDocumentType)) {
             return res.status(400).json({ error: 'Document type must be "passbook" or "cancelled_cheque"' });
         }
-        if (!req.file) {
-            return res.status(400).json({ error: 'KYC document (passbook or cancelled cheque image) is required' });
+
+        const kycDocFile = req.files?.['kycDocument']?.[0] || req.file;
+        const gstCertFile = req.files?.['gstCertificate']?.[0];
+
+        if (!kycDocFile) {
+            return res.status(400).json({ error: 'KYC document (passbook or cancelled cheque image/PDF) is required' });
         }
 
-        // Upload document to S3 with encryption at rest
-        const fileExtension = req.file.originalname?.split('.').pop()?.toLowerCase() || 'jpg';
-        const kycDocumentKey = `kyc-documents/${userId}/${uuidv4()}.${fileExtension}`;
+        const isGst = isGstHolder === 'true' || isGstHolder === true;
+        if (isGst && !gstNumber?.trim()) {
+            return res.status(400).json({ error: 'GST Number is required when registered as a GST holder' });
+        }
 
         const kycBucket = process.env.S3_BUCKET;
+
+        // Upload primary KYC document to S3
+        const docExt = kycDocFile.originalname?.split('.').pop()?.toLowerCase() || 'jpg';
+        const kycDocumentKey = `kyc-documents/${userId}/${uuidv4()}.${docExt}`;
 
         await s3Client.send(new PutObjectCommand({
             Bucket: kycBucket,
             Key: kycDocumentKey,
-            Body: req.file.buffer,
-            ContentType: req.file.mimetype,
+            Body: kycDocFile.buffer,
+            ContentType: kycDocFile.mimetype,
             ServerSideEncryption: 'AES256',
         }));
+
+        // Upload GST certificate to S3 if provided
+        let gstCertificateKey = null;
+        if (isGst && gstCertFile) {
+            const gstExt = gstCertFile.originalname?.split('.').pop()?.toLowerCase() || 'jpg';
+            gstCertificateKey = `gst-certificates/${userId}/${uuidv4()}.${gstExt}`;
+
+            await s3Client.send(new PutObjectCommand({
+                Bucket: kycBucket,
+                Key: gstCertificateKey,
+                Body: gstCertFile.buffer,
+                ContentType: gstCertFile.mimetype,
+                ServerSideEncryption: 'AES256',
+            }));
+        }
 
         // Encrypt bank details
         const encryptedFields = encryptBankDetails({ bankAccountNumber, bankName, ifscCode, accountHolderName });
@@ -384,6 +410,9 @@ export const submitKyc = async (req, res) => {
             ...encryptedFields,
             kycDocumentKey,
             kycDocumentType,
+            isGstHolder: isGst,
+            gstNumber: isGst ? gstNumber.trim().toUpperCase() : null,
+            gstCertificateKey: isGst ? (gstCertificateKey || existingKyc?.gstCertificateKey || null) : null,
             kycStatus: 'pending',
             submittedAt: new Date(),
         };

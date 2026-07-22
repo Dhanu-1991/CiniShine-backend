@@ -24,7 +24,11 @@ export const getKycList = async (req, res) => {
 
         const query = {};
         if (status && status !== 'all') {
-            query.kycStatus = status;
+            if (status === 'gst_applicants' || status === 'gst_holders') {
+                query.isGstHolder = true;
+            } else {
+                query.kycStatus = status;
+            }
         }
 
         const kycList = await KycDetails.find(query)
@@ -51,12 +55,24 @@ export const getKycList = async (req, res) => {
                 presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 }); // 15 mins
             }
 
+            let gstCertUrl = null;
+            if (kyc.gstCertificateKey) {
+                const command = new GetObjectCommand({
+                    Bucket: process.env.S3_BUCKET,
+                    Key: kyc.gstCertificateKey
+                });
+                gstCertUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 }); // 15 mins
+            }
+
             return {
                 _id: kyc._id,
                 user: kyc.userId,
                 bankDetails: decryptedBank,
                 kycDocumentUrl: presignedUrl,
                 kycDocumentType: kyc.kycDocumentType,
+                isGstHolder: kyc.isGstHolder || false,
+                gstNumber: kyc.gstNumber || null,
+                gstCertificateUrl: gstCertUrl,
                 kycStatus: kyc.kycStatus,
                 submittedAt: kyc.submittedAt,
                 createdAt: kyc.createdAt

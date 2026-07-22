@@ -177,8 +177,8 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
  * @returns {{ purchase, buyerTxn, creatorTxn, creatorAmount, platformAmount }}
  */
 export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, amount) {
-    const creatorAmount = Math.round(amount * (100 - PLATFORM_CUT_PERCENT) / 100);
-    const platformAmount = amount - creatorAmount;
+    const creatorAmount = Number((amount * (100 - PLATFORM_CUT_PERCENT) / 100).toFixed(2));
+    const platformAmount = Number((amount - creatorAmount).toFixed(2));
 
     const session = await mongoose.startSession();
     try {

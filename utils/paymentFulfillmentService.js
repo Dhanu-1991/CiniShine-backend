@@ -111,7 +111,7 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
       const content = await Content.findById(contentId).select('userId').lean();
       if (content?.userId) {
         const creatorId = content.userId.toString();
-        const creatorAmount = Math.round(amount * (100 - PLATFORM_CUT_PERCENT) / 100);
+        const creatorAmount = Number((amount * (100 - PLATFORM_CUT_PERCENT) / 100).toFixed(2));
         let creatorWallet = await SecondaryWallet.findOne({ userId: creatorId });
         if (!creatorWallet) {
           creatorWallet = await ensureSecondaryWallet(creatorId);

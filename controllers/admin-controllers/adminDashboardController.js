@@ -531,6 +531,11 @@ export const listUsers = async (req, res) => {
             filter.channelBanned = true;
         } else if (channelStatus === 'active') {
             filter.channelBanned = { $ne: true };
+        } else if (channelStatus === 'gst_applicants' || channelStatus === 'gst_holders') {
+            const KycDetails = mongoose.model('KycDetails');
+            const gstKycs = await KycDetails.find({ isGstHolder: true }).select('userId').lean();
+            const gstUserIds = gstKycs.map(k => k.userId);
+            filter._id = { $in: gstUserIds };
         }
 
         // Fetch all filtered users first so sorting happens globally (not just inside a single page).
@@ -552,8 +557,9 @@ export const listUsers = async (req, res) => {
         }
 
         const userIds = users.map((user) => user._id);
+        const KycDetailsModel = mongoose.model('KycDetails');
 
-        const [fanAgg, contentAgg] = await Promise.all([
+        const [fanAgg, contentAgg, kycDocs] = await Promise.all([
             User.aggregate([
                 { $match: { subscriptions: { $in: userIds } } },
                 { $unwind: '$subscriptions' },
@@ -574,8 +580,11 @@ export const listUsers = async (req, res) => {
                         totalWatchTime: { $sum: { $ifNull: ['$totalWatchTime', 0] } }
                     }
                 }
-            ])
+            ]),
+            KycDetailsModel.find({ userId: { $in: userIds } }).select('userId isGstHolder gstNumber').lean()
         ]);
+
+        const kycMap = new Map(kycDocs.map(k => [k.userId.toString(), k]));
 
         const fanMap = new Map(
             fanAgg.map((entry) => [entry._id.toString(), entry.fanCount || 0])
@@ -617,6 +626,8 @@ export const listUsers = async (req, res) => {
                 removedContentCount: contentStats.removedContentCount,
                 totalWatchTime: contentStats.totalWatchTime,
                 totalWatchCount: 0,
+                isGstHolder: kycMap.get(key)?.isGstHolder || false,
+                gstNumber: kycMap.get(key)?.gstNumber || null,
             };
         });
 

@@ -41,6 +41,11 @@ const kycDetailsSchema = new mongoose.Schema({
         default: null,
     },
 
+    // GST fields
+    isGstHolder: { type: Boolean, default: false },
+    gstNumber: { type: String, default: null, uppercase: true, trim: true },
+    gstCertificateKey: { type: String, default: null },
+
     // Verification status
     kycStatus: {
         type: String,
