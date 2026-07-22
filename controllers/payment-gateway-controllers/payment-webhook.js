@@ -23,7 +23,7 @@ const flattenObject = (obj, parentKey = "", result = {}) => {
 
 export const handleCashfreeWebhook = async (req, res) => {
   try {
-    const secret = process.env.CASHFREE_WEBHOOK_SECRET;
+    const secret = process.env.CASHFREE_WEBHOOK_SECRET || process.env.CF_CLIENT_SECRET;
     const receivedSignature =
       req.headers["x-webhook-signature"] || req.headers["x-cf-signature"];
     const version = req.headers["x-webhook-version"] || "";
