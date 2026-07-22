@@ -16,6 +16,19 @@ const enquirySchema = new mongoose.Schema({
     ref: "User",
     default: null,
   },
+  status: {
+    type: String,
+    enum: ["unresolved", "resolved"],
+    default: "unresolved",
+  },
+  adminReply: {
+    type: String,
+    default: null,
+  },
+  repliedAt: {
+    type: Date,
+    default: null,
+  },
 }, { timestamps: true });
 
 const Enquiry = mongoose.model("Enquiry", enquirySchema);

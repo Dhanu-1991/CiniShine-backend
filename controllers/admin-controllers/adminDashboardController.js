@@ -6,11 +6,13 @@ import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
 import ContentArchive from '../../models/contentArchive.model.js';
 import User from '../../models/user.model.js';
+import KycDetails from '../../models/kycDetails.model.js';
 import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import ContentWatchtime from '../../models/contentWatchtime.model.js';
 import { getCfUrl } from '../../config/cloudfront.js';
+import { sendCustomEmail } from '../../services/adminEmailService.js';
 
 /**
  * GET /admin/dashboard
@@ -374,12 +376,27 @@ export const listFeedbacks = async (req, res) => {
  */
 export const listEnquiries = async (req, res) => {
     try {
-        const { page = 1, limit = 20 } = req.query;
+        const { page = 1, limit = 20, status, sort = 'recent', search } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
+        const filter = {};
+        if (status && status !== 'all') {
+            filter.status = status;
+        }
+
+        if (search && search.trim()) {
+            const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            filter.$or = [
+                { email: regex },
+                { message: regex }
+            ];
+        }
+
+        const sortOption = sort === 'oldest' ? { createdAt: 1 } : { createdAt: -1 };
+
         const [enquiries, total] = await Promise.all([
-            Enquiry.find().sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)),
-            Enquiry.countDocuments()
+            Enquiry.find(filter).sort(sortOption).skip(skip).limit(parseInt(limit)),
+            Enquiry.countDocuments(filter)
         ]);
 
         return res.status(200).json({
@@ -390,6 +407,74 @@ export const listEnquiries = async (req, res) => {
     } catch (error) {
         console.error('List enquiries error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/enquiries/:id/reply
+ * Send email response to an enquiry and mark as resolved.
+ */
+export const replyToEnquiry = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { subject, message } = req.body;
+
+        if (!message || !message.trim()) {
+            return res.status(400).json({ success: false, message: 'Reply message is required' });
+        }
+
+        const enquiry = await Enquiry.findById(id);
+        if (!enquiry) {
+            return res.status(404).json({ success: false, message: 'Enquiry not found' });
+        }
+
+        const adminName = req.admin?.name || 'WatchInIt Support';
+        const emailSubject = subject || 'Response to your enquiry — WatchInIt';
+
+        // Send email via email service
+        await sendCustomEmail(enquiry.email, emailSubject, message.trim(), 'User', adminName);
+
+        enquiry.status = 'resolved';
+        enquiry.adminReply = message.trim();
+        enquiry.repliedAt = new Date();
+        await enquiry.save();
+
+        return res.status(200).json({
+            success: true,
+            message: `Email sent to ${enquiry.email} and enquiry marked as resolved`,
+            enquiry
+        });
+    } catch (error) {
+        console.error('Reply enquiry error:', error);
+        return res.status(500).json({ success: false, message: error.message || 'Failed to send reply' });
+    }
+};
+
+/**
+ * PATCH /admin/enquiries/:id/status
+ * Toggle or set enquiry status (resolved / unresolved).
+ */
+export const toggleEnquiryStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        const enquiry = await Enquiry.findById(id);
+        if (!enquiry) {
+            return res.status(404).json({ success: false, message: 'Enquiry not found' });
+        }
+
+        enquiry.status = status || (enquiry.status === 'resolved' ? 'unresolved' : 'resolved');
+        await enquiry.save();
+
+        return res.status(200).json({
+            success: true,
+            message: `Enquiry marked as ${enquiry.status}`,
+            enquiry
+        });
+    } catch (error) {
+        console.error('Toggle enquiry status error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to update enquiry status' });
     }
 };
 
@@ -532,7 +617,6 @@ export const listUsers = async (req, res) => {
         } else if (channelStatus === 'active') {
             filter.channelBanned = { $ne: true };
         } else if (channelStatus === 'gst_applicants' || channelStatus === 'gst_holders') {
-            const KycDetails = mongoose.model('KycDetails');
             const gstKycs = await KycDetails.find({ isGstHolder: true }).select('userId').lean();
             const gstUserIds = gstKycs.map(k => k.userId);
             filter._id = { $in: gstUserIds };
@@ -557,7 +641,6 @@ export const listUsers = async (req, res) => {
         }
 
         const userIds = users.map((user) => user._id);
-        const KycDetailsModel = mongoose.model('KycDetails');
 
         const [fanAgg, contentAgg, kycDocs] = await Promise.all([
             User.aggregate([
@@ -581,7 +664,7 @@ export const listUsers = async (req, res) => {
                     }
                 }
             ]),
-            KycDetailsModel.find({ userId: { $in: userIds } }).select('userId isGstHolder gstNumber').lean()
+            KycDetails.find({ userId: { $in: userIds } }).select('userId isGstHolder gstNumber').lean()
         ]);
 
         const kycMap = new Map(kycDocs.map(k => [k.userId.toString(), k]));

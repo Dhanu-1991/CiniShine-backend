@@ -14,6 +14,7 @@ import {
 } from '../../controllers/admin-controllers/adminContentController.js';
 import {
     getDashboard, listReports, resolveReport, listFeedbacks, listEnquiries,
+    replyToEnquiry, toggleEnquiryStatus,
     listAuditLogs, listNotifications, markNotificationRead, listUsers, adminSendEmailHandler
 } from '../../controllers/admin-controllers/adminDashboardController.js';
 import { getAnalytics } from '../../controllers/admin-controllers/adminAnalyticsController.js';
@@ -67,6 +68,8 @@ adminRouter.get('/reports', listReports);
 adminRouter.post('/reports/:id/resolve', auditLog('report_review', 'report'), resolveReport);
 adminRouter.get('/feedbacks', listFeedbacks);
 adminRouter.get('/enquiries', listEnquiries);
+adminRouter.post('/enquiries/:id/reply', auditLog('enquiry_reply', 'enquiry'), replyToEnquiry);
+adminRouter.patch('/enquiries/:id/status', auditLog('enquiry_status_change', 'enquiry'), toggleEnquiryStatus);
 
 // Content management
 adminRouter.get('/content/:id', getContentDetails);

@@ -390,7 +390,12 @@ export const listArchive = async (req, res) => {
         }
 
         if (search) {
-            filter['content_snapshot.title'] = new RegExp(search, 'i');
+            const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            filter.$or = [
+                { 'content_snapshot.title': regex },
+                { reason: regex },
+                { content_id: regex }
+            ];
         }
 
         const [archives, total] = await Promise.all([
@@ -530,28 +535,26 @@ export const getCreatorAnalytics = async (req, res) => {
 export const searchCreators = async (req, res) => {
     try {
         const { q, page = 1, limit = 20 } = req.query;
-        if (!q || q.trim().length < 2) {
-            return res.status(400).json({ success: false, message: 'Search query must be at least 2 characters' });
-        }
-
         const skip = (parseInt(page) - 1) * parseInt(limit);
-        const query = q.trim();
+        const query = q ? q.trim() : '';
 
-        let filter;
-        // If it's a valid ObjectId, search by ID
-        if (mongoose.Types.ObjectId.isValid(query)) {
-            filter = { _id: query };
-        } else {
-            const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-            filter = {
-                $or: [
-                    { userName: regex },
-                    { contact: regex },
-                    { channelHandle: regex },
-                    { channelName: regex },
-                    { fullName: regex }
-                ]
-            };
+        let filter = {};
+        if (query) {
+            if (mongoose.Types.ObjectId.isValid(query)) {
+                filter = { _id: query };
+            } else {
+                const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+                filter = {
+                    $or: [
+                        { userName: regex },
+                        { contact: regex },
+                        { email: regex },
+                        { channelHandle: regex },
+                        { channelName: regex },
+                        { fullName: regex }
+                    ]
+                };
+            }
         }
 
         const [users, total] = await Promise.all([
