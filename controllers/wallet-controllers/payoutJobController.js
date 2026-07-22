@@ -52,12 +52,14 @@ export const runMonthEndPayout = async (req, res) => {
         const results = { processed: 0, skipped: 0, failed: 0, skippedNoKyc: 0, errors: [] };
 
         for (const wallet of wallets) {
-            // Log wallets without submitted KYC but process them anyway for testing purposes
             const kyc = kycByUser.get(wallet.userId.toString());
-            let kycNote = '';
-            if (!kyc) {
-                results.skippedNoKyc++; // We still count them, but don't skip
-                kycNote = ' [Missing KYC - Processed for Testing]';
+            
+            // Skip processing payout if KYC is missing, not submitted, or rejected
+            if (!kyc || kyc.kycStatus === 'rejected') {
+                results.skippedNoKyc++;
+                results.skipped++;
+                console.log(`⏩ Skipping payout for wallet ${wallet._id} (User ${wallet.userId}): KYC missing or rejected`);
+                continue;
             }
 
             const session = await mongoose.startSession();
@@ -110,15 +112,10 @@ export const runMonthEndPayout = async (req, res) => {
                         'ifscCodeEncrypted', 'ifscCodeIv', 'ifscCodeTag',
                         'accountHolderNameEncrypted', 'accountHolderNameIv', 'accountHolderNameTag',
                     ];
-                    if (kyc) {
-                        bankFields.forEach(f => { bankSnapshot[f] = kyc[f]; });
-                    } else {
-                        // Dummy data to bypass required validation when missing KYC for testing
-                        bankFields.forEach(f => { bankSnapshot[f] = 'dummy'; });
-                    }
+                    bankFields.forEach(f => { bankSnapshot[f] = kyc[f]; });
 
                     // Decrypt bank name for the payout record (plain text field)
-                    const bankName = kyc ? (decryptBankDetails(kyc).bankName || '') : 'Unknown Bank';
+                    const bankName = decryptBankDetails(kyc).bankName || '';
 
                     await Payout.create([{
                         walletId: freshWallet._id,
@@ -131,7 +128,6 @@ export const runMonthEndPayout = async (req, res) => {
                         status: 'pending_settlement',
                         payoutMonth,
                         scheduledFor: new Date(),
-                        notes: kycNote ? kycNote : undefined
                     }], { session });
 
                     results.processed++;
