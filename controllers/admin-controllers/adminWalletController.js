@@ -6,10 +6,11 @@ import PrimaryWallet from '../../models/primaryWallet.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 // Setup S3 Client using env vars
 const s3Client = new S3Client({
-    region: process.env.AWS_REGION || 'ap-south-1',
+    region: process.env.AWS_REGION || 'us-east-1',
     credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
@@ -48,20 +49,12 @@ export const getKycList = async (req, res) => {
 
             let presignedUrl = null;
             if (kyc.kycDocumentKey) {
-                const command = new GetObjectCommand({
-                    Bucket: process.env.S3_BUCKET,
-                    Key: kyc.kycDocumentKey
-                });
-                presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 }); // 15 mins
+                presignedUrl = getCfUrl(kyc.kycDocumentKey);
             }
 
             let gstCertUrl = null;
             if (kyc.gstCertificateKey) {
-                const command = new GetObjectCommand({
-                    Bucket: process.env.S3_BUCKET,
-                    Key: kyc.gstCertificateKey
-                });
-                gstCertUrl = await getSignedUrl(s3Client, command, { expiresIn: 900 }); // 15 mins
+                gstCertUrl = getCfUrl(kyc.gstCertificateKey);
             }
 
             return {

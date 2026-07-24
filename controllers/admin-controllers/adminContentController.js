@@ -1195,6 +1195,11 @@ export const listPpvContent = async (req, res) => {
                     title: 1,
                     description: 1,
                     thumbnailUrl: 1,
+                    thumbnailKey: 1,
+                    imageKey: 1,
+                    processedKey: 1,
+                    hlsMasterKey: 1,
+                    originalKey: 1,
                     videoUrl: 1,
                     duration: 1,
                     viewsCount: { $ifNull: ['$viewsCount', 0] },
@@ -1254,8 +1259,23 @@ export const listPpvContent = async (req, res) => {
         });
 
         const aggregateResult = await Content.aggregate(pipeline);
-        const items = aggregateResult[0]?.data || [];
+        const rawItems = aggregateResult[0]?.data || [];
         const total = aggregateResult[0]?.totalCount[0]?.count || 0;
+
+        const items = rawItems.map((item) => {
+            const mediaKey = item.processedKey || item.originalKey;
+            const thumbKey = item.thumbnailKey || item.imageKey || item.thumbnailUrl;
+            return {
+                ...item,
+                thumbnailUrl: getCfUrl(thumbKey),
+                videoUrl: mediaKey ? getCfUrl(mediaKey) : null,
+                hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
+                creator: item.creator ? {
+                    ...item.creator,
+                    channelPicture: getCfUrl(item.creator.channelPicture)
+                } : null
+            };
+        });
 
         // Summary metrics across all PPV content
         const summaryAgg = await Content.aggregate([
