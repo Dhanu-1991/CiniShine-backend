@@ -433,20 +433,18 @@ export const getContentDetails = async (req, res) => {
         }
 
         const contentObj = await Content.findById(id).populate('userId', 'userName contact channelName channelHandle profilePicture channelPicture subscriberCount').lean();
-        if (!contentObj) {
-            return res.status(404).json({ success: false, message: 'Content not found' });
-        }
-
-        const mediaKey = contentObj.processedKey || contentObj.originalKey;
-        const thumbKey = contentObj.thumbnailKey || contentObj.imageKey || contentObj.thumbnailUrl;
 
         const views = Number(contentObj.viewsCount || contentObj.views || 0);
         const watchSec = Number(contentObj.watchTime || contentObj.totalWatchTime || 0);
         const durSec = Number(contentObj.duration || 0);
 
+        const rawComp = contentObj.completionRate;
+        const furthestSec = Number(contentObj.furthestPlayheadSeconds || 0);
         let completionRate = 0;
-        if (views > 0 && durSec > 0) {
-            completionRate = Math.min(100, Math.round((watchSec / (views * durSec)) * 100));
+        if (rawComp !== null && rawComp !== undefined) {
+            completionRate = Math.min(100, Math.round(rawComp));
+        } else if (durSec > 0 && furthestSec > 0) {
+            completionRate = Math.min(100, Math.round((furthestSec / durSec) * 100));
         }
 
         const creator = contentObj.userId ? {
@@ -1234,6 +1232,8 @@ export const listPpvContent = async (req, res) => {
                     originalKey: 1,
                     videoUrl: 1,
                     duration: 1,
+                    completionRate: 1,
+                    furthestPlayheadSeconds: 1,
                     viewsCount: { $ifNull: ['$viewsCount', { $ifNull: ['$views', 0] }] },
                     watchTime: { $ifNull: ['$watchTime', { $ifNull: ['$totalWatchTime', 0] }] },
                     likeCount: { $ifNull: ['$likeCount', 0] },
@@ -1290,9 +1290,13 @@ export const listPpvContent = async (req, res) => {
             const watchSec = Number(item.watchTime || 0);
             const durSec = Number(item.duration || 0);
 
+            const rawComp = item.completionRate;
+            const furthestSec = Number(item.furthestPlayheadSeconds || 0);
             let completionRate = 0;
-            if (views > 0 && durSec > 0) {
-                completionRate = Math.min(100, Math.round((watchSec / (views * durSec)) * 100));
+            if (rawComp !== null && rawComp !== undefined) {
+                completionRate = Math.min(100, Math.round(rawComp));
+            } else if (durSec > 0 && furthestSec > 0) {
+                completionRate = Math.min(100, Math.round((furthestSec / durSec) * 100));
             }
 
             return {

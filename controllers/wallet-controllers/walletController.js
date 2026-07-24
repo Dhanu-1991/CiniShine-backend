@@ -16,6 +16,7 @@ import PrimaryWallet from '../../models/primaryWallet.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import KycDetails from '../../models/kycDetails.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
+import Purchase from '../../models/purchase.model.js';
 import {
     ensurePrimaryWallet,
     ensureSecondaryWallet,

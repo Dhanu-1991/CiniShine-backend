@@ -319,7 +319,7 @@ export const getContentAnalytics = async (req, res) => {
                         viewCount: { $ifNull: ['$content.views', 0] },
                         authenticatedViews: { $ifNull: ['$content.authenticatedViews', 0] },
                         anonymousViews: { $ifNull: ['$content.anonymousViews', 0] },
-                        avgCompletion: { $round: ['$avgCompletion', 0] },
+                        avgCompletion: { $ifNull: ['$content.completionRate', { $round: ['$avgCompletion', 0] }] },
                     },
                 },
             ]),
