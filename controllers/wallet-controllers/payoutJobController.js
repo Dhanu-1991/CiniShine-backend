@@ -542,7 +542,7 @@ export const completePayoutSettlement = async (req, res) => {
         const { payoutId } = req.params;
         const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle contact email');
         if (!payout) return res.status(404).json({ error: 'Payout record not found' });
-        if (payout.status === 'completed') {
+        if (payout.status === 'completed' && !req.body.forceResend) {
             return res.status(400).json({ error: 'Payout settlement is already marked as completed' });
         }
 
