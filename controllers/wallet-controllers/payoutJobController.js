@@ -312,6 +312,11 @@ export const runSingleCreatorPayout = async (req, res) => {
             return res.status(400).json({ error: "userId is required" });
         }
 
+        const pendingPayout = await Payout.findOne({ userId, status: 'pending_settlement' });
+        if (pendingPayout) {
+            return res.status(400).json({ error: "Cannot initiate payout while a previous settlement is pending for this creator" });
+        }
+
         const wallet = await SecondaryWallet.findOne({ userId });
         if (!wallet || wallet.balance <= 0) {
             return res.status(400).json({ error: "Creator has no withdrawable secondary wallet balance" });
@@ -475,7 +480,7 @@ export const getDailyPayoutStats = async (req, res) => {
             if (t._id === 'ppv_purchase_debit') walletPPV = t.total;
         });
 
-        const purchases = await Purchase.aggregate([
+        const purchaseTaxAgg = await Purchase.aggregate([
             {
                 $match: {
                     purchasedAt: { $gte: startOfDay, $lte: endOfDay },
@@ -485,11 +490,19 @@ export const getDailyPayoutStats = async (req, res) => {
             {
                 $group: {
                     _id: null,
-                    total: { $sum: '$amount' }
+                    totalSelling: { $sum: '$amount' },
+                    totalBase: { $sum: { $ifNull: ['$basePrice', { $divide: ['$amount', 1.18] }] } },
+                    totalGst: { $sum: { $ifNull: ['$gstAmount', { $subtract: ['$amount', { $divide: ['$amount', 1.18] }] }] } },
+                    totalCommission: { $sum: { $ifNull: ['$platformCommission', { $multiply: ['$amount', 0.32] }] } },
+                    totalGstCommission: { $sum: { $ifNull: ['$gstOnCommission', { $multiply: ['$amount', 0.0576] }] } },
+                    totalTds: { $sum: { $ifNull: ['$tdsAmount', { $multiply: [{ $divide: ['$amount', 1.18] }, 0.001] }] } },
+                    totalTcs: { $sum: { $ifNull: ['$tcsAmount', { $multiply: [{ $divide: ['$amount', 1.18] }, 0.01] }] } },
                 }
             }
         ]);
-        const gatewayPPV = purchases.length > 0 ? purchases[0].total : 0;
+
+        const tax = purchaseTaxAgg[0] || {};
+        const gatewayPPV = tax.totalSelling || 0;
 
         const w1 = await PrimaryWallet.aggregate([{ $group: { _id: null, total: { $sum: '$balance' } } }]);
         const totalW1Balance = w1.length > 0 ? w1[0].total : 0;
@@ -504,10 +517,110 @@ export const getDailyPayoutStats = async (req, res) => {
             walletPPV,
             gatewayPPV,
             totalW1Balance,
-            totalW2Balance
+            totalW2Balance,
+            totalGrossCollected: Number((tax.totalSelling || 0).toFixed(2)),
+            totalBasePrice: Number((tax.totalBase || 0).toFixed(2)),
+            totalGstCollected: Number((tax.totalGst || 0).toFixed(2)),
+            totalPlatformCommission: Number((tax.totalCommission || 0).toFixed(2)),
+            totalGstOnCommission: Number((tax.totalGstCommission || 0).toFixed(2)),
+            totalTdsDeducted: Number((tax.totalTds || 0).toFixed(2)),
+            totalTcsDeducted: Number((tax.totalTcs || 0).toFixed(2)),
         });
     } catch (error) {
         console.error('❌ Error getting daily payout stats:', error);
         return res.status(500).json({ error: 'Failed to fetch daily payout stats' });
+    }
+};
+
+/**
+ * POST /admin/payouts/:payoutId/complete — Mark settlement completed and send invoice email
+ */
+export const completePayoutSettlement = async (req, res) => {
+    try {
+        const { payoutId } = req.params;
+        const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName email');
+        if (!payout) return res.status(404).json({ error: 'Payout record not found' });
+        if (payout.status === 'completed') {
+            return res.status(400).json({ error: 'Payout settlement is already marked as completed' });
+        }
+
+        payout.status = 'completed';
+        payout.completedAt = new Date();
+        await payout.save();
+
+        if (payout.userId?.email) {
+            sendAdminEmail('payoutCompleted', payout.userId.email, {
+                creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+                netAmount: payout.netAmount,
+                grossAmount: payout.grossAmount,
+                payoutMonth: payout.payoutMonth,
+                totalSellingPrice: payout.totalSellingPrice || payout.grossAmount,
+                totalBasePrice: payout.totalBasePrice || 0,
+                totalGstCollected: payout.totalGstCollected || 0,
+                totalPlatformCommission: payout.totalPlatformCommission || 0,
+                totalGstOnCommission: payout.totalGstOnCommission || 0,
+                totalTdsDeducted: payout.totalTdsDeducted || 0,
+                totalTcsDeducted: payout.totalTcsDeducted || 0,
+            }).catch(e => console.error('Completed payout email error:', e));
+        }
+
+        return res.json({ success: true, message: 'Payout marked as completed and settlement invoice email sent', payout });
+    } catch (err) {
+        console.error('Error completing payout settlement:', err);
+        return res.status(500).json({ error: 'Failed to complete payout settlement' });
+    }
+};
+
+/**
+ * POST /admin/payouts/complete-bulk — Mark all pending settlements as completed and send invoice emails
+ */
+export const completeBulkPayoutSettlement = async (req, res) => {
+    try {
+        const { month, payoutIds } = req.body;
+        let query = { status: 'pending_settlement' };
+
+        if (payoutIds && Array.isArray(payoutIds) && payoutIds.length > 0) {
+            query._id = { $in: payoutIds };
+        } else if (month) {
+            query.payoutMonth = { $regex: new RegExp(`^${month}`) };
+        }
+
+        const pendingPayouts = await Payout.find(query).populate('userId', 'userName channelName email');
+        if (pendingPayouts.length === 0) {
+            return res.json({ success: true, message: 'No pending payout settlements found to complete', completedCount: 0 });
+        }
+
+        let completedCount = 0;
+        for (const payout of pendingPayouts) {
+            payout.status = 'completed';
+            payout.completedAt = new Date();
+            await payout.save();
+            completedCount++;
+
+            if (payout.userId?.email) {
+                sendAdminEmail('payoutCompleted', payout.userId.email, {
+                    creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+                    netAmount: payout.netAmount,
+                    grossAmount: payout.grossAmount,
+                    payoutMonth: payout.payoutMonth,
+                    totalSellingPrice: payout.totalSellingPrice || payout.grossAmount,
+                    totalBasePrice: payout.totalBasePrice || 0,
+                    totalGstCollected: payout.totalGstCollected || 0,
+                    totalPlatformCommission: payout.totalPlatformCommission || 0,
+                    totalGstOnCommission: payout.totalGstOnCommission || 0,
+                    totalTdsDeducted: payout.totalTdsDeducted || 0,
+                    totalTcsDeducted: payout.totalTcsDeducted || 0,
+                }).catch(e => console.error(`Bulk completed email error for ${payout._id}:`, e));
+            }
+        }
+
+        return res.json({
+            success: true,
+            message: `Successfully completed ${completedCount} payout settlement(s) and sent invoice emails`,
+            completedCount
+        });
+    } catch (err) {
+        console.error('Error completing bulk payout settlement:', err);
+        return res.status(500).json({ error: 'Failed to complete bulk payout settlement' });
     }
 };

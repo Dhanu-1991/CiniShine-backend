@@ -103,20 +103,6 @@ export const getMixedFeed = async (req, res) => {
         const parsedPage = parseInt(page, 10);
         const pageNum = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
         const isFirstPage = pageNum === 1;
-        const maxPages = 10;
-
-        if (pageNum > maxPages) {
-            return res.json({
-                shorts: [], videos: [], audio: [], posts: [], sections: [],
-                isFirstPage: false,
-                pagination: {
-                    currentPage: pageNum, hasNextPage: false,
-                    hasMoreShorts: false, hasMoreAudio: false,
-                    hasMoreVideos: false, hasMorePosts: false,
-                    totals: { shorts: 0, audio: 0, videos: 0, posts: 0 }
-                }
-            });
-        }
 
         const toSafeLimit = (value, fallback) => {
             const parsed = parseInt(value, 10);
@@ -258,7 +244,10 @@ export const getMixedFeed = async (req, res) => {
             });
         }
 
-        const hasNextPage = pageNum < maxPages && (videosPagination.hasNextPage || false);
+        const hasNextPage = (videosPagination.hasNextPage || false) ||
+            (shortsResult.pagination?.hasNextPage || false) ||
+            (audioResult.pagination?.hasNextPage || false) ||
+            (postsResult.pagination?.hasNextPage || false);
 
         res.json({
             shorts: processedShorts,

@@ -334,7 +334,7 @@ export class WatchHistoryRecommendationEngine {
         candidates = await Content.find({
             contentType,
             status: 'completed',
-            visibility: 'public',
+            visibility: { $in: ['public', 'pay_per_view'] },
             _id: { $nin: Array.from(excludeIdSet) }
         })
             .populate('userId', 'userName channelName channelHandle channelPicture')
@@ -413,8 +413,9 @@ export class WatchHistoryRecommendationEngine {
         // ── Score-band shuffle for YouTube-like controlled randomness ──
         scoredContent = this.scoreBandShuffle(scoredContent);
 
-        // Paginate
-        const startIdx = (pageNum - 1) * limitNum;
+        // Paginate: if excludeIds were provided, candidates already excludes seen items (slice from top)
+        const useExcludeIds = excludeIdSet.size > 0;
+        const startIdx = useExcludeIds ? 0 : (pageNum - 1) * limitNum;
         const paginatedContent = scoredContent.slice(startIdx, startIdx + limitNum);
 
         // Batch comment counts for only paginated results (avoid N+1 queries).

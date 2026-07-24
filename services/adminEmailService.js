@@ -194,6 +194,43 @@ const templates = {
             </div>`,
         text: `Hi ${creatorName}, your payout of ₹${netAmount} for ${payoutMonth} has been initiated and will be credited within 24 hours.`
     }),
+
+    payoutCompleted: ({ creatorName, netAmount, grossAmount, payoutMonth, totalSellingPrice, totalBasePrice, totalGstCollected, totalPlatformCommission, totalGstOnCommission, totalTdsDeducted, totalTcsDeducted }) => ({
+        subject: `[${PLATFORM_NAME}] Settlement Completed & Tax Invoice: ₹${netAmount}`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #111827; color: #e5e7eb; border-radius: 16px; overflow: hidden; border: 1px solid #374151;">
+                <div style="background: linear-gradient(135deg, #10b981 0%, #047857 100%); padding: 28px 36px;">
+                    <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800;">${PLATFORM_NAME} OFFICIAL SETTLEMENT INVOICE</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #34d399; margin-top: 0;">Bank Transfer Completed Successfully</h2>
+                    <p>Dear <strong>${creatorName}</strong>,</p>
+                    <p>We are pleased to inform you that your payout settlement for <strong>${payoutMonth}</strong> has been successfully processed and transferred to your bank account.</p>
+                    
+                    <div style="background: #1f2937; border: 1px solid #374151; padding: 20px; border-radius: 12px; margin: 20px 0;">
+                        <h3 style="color: #fbbf24; margin-top: 0; border-bottom: 1px solid #374151; padding-bottom: 8px;">Detailed Revenue & Tax Settlement Breakup</h3>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #d1d5db;">
+                            <tr><td style="padding: 6px 0;">Gross Sales (GST Incl.):</td><td style="text-align: right; font-weight: bold; color: white;">₹${Number(totalSellingPrice || grossAmount).toFixed(2)}</td></tr>
+                            <tr><td style="padding: 6px 0; color: #9ca3af;">Base Price (excl. GST):</td><td style="text-align: right;">₹${Number(totalBasePrice || 0).toFixed(2)}</td></tr>
+                            <tr><td style="padding: 6px 0; color: #9ca3af;">GST Collected on Base Price (18%):</td><td style="text-align: right;">₹${Number(totalGstCollected || 0).toFixed(2)}</td></tr>
+                            <tr><td style="padding: 6px 0; color: #c084fc;">Platform Commission (32%):</td><td style="text-align: right; color: #c084fc;">−₹${Number(totalPlatformCommission || 0).toFixed(2)}</td></tr>
+                            <tr><td style="padding: 6px 0; color: #c084fc;">GST on Commission (18%):</td><td style="text-align: right; color: #c084fc;">−₹${Number(totalGstOnCommission || 0).toFixed(2)}</td></tr>
+                            <tr><td style="padding: 6px 0; color: #f87171;">TDS Deducted (0.1%):</td><td style="text-align: right; color: #f87171;">−₹${Number(totalTdsDeducted || 0).toFixed(2)}</td></tr>
+                            <tr><td style="padding: 6px 0; color: #f87171;">TCS Deducted (1%):</td><td style="text-align: right; color: #f87171;">−₹${Number(totalTcsDeducted || 0).toFixed(2)}</td></tr>
+                            <tr style="border-top: 2px solid #374151; font-weight: bold; font-size: 16px;"><td style="padding: 12px 0; color: #34d399;">Net Amount Transferred:</td><td style="text-align: right; color: #34d399;">₹${Number(netAmount).toFixed(2)}</td></tr>
+                        </table>
+                    </div>
+                    
+                    <p style="color: #9ca3af; font-size: 13px; line-height: 1.6;">
+                        Note: GST collected from buyers is subject to creator self-filing. TDS and TCS credits will reflect in your Form 26AS / AIS on the Income Tax Portal.
+                    </p>
+                    <p style="color: #6b7280; font-size: 12px; margin-top: 28px; border-top: 1px solid #374151; padding-top: 16px;">
+                        This is an official automated financial settlement document from ${PLATFORM_NAME} Technologies Private Limited.
+                    </p>
+                </div>
+            </div>`,
+        text: `Dear ${creatorName}, your payout of ₹${netAmount} for ${payoutMonth} has been completed. Gross Sales: ₹${totalSellingPrice || grossAmount}. Net Transferred: ₹${netAmount}.`
+    }),
 };
 
 // Pre-built quick templates for admin UI

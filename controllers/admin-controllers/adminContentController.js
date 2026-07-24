@@ -11,6 +11,8 @@ import CommunityMember from '../../models/communityMember.model.js';
 import Comment from '../../models/comment.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
+import SecondaryWallet from '../../models/secondaryWallet.model.js';
+import Payout from '../../models/payout.model.js';
 import { getCfUrl } from '../../config/cloudfront.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
@@ -597,14 +599,16 @@ export const getCreatorProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
 
-        const [subscriberCount, contentCount, communities] = await Promise.all([
+        const [subscriberCount, contentCount, communities, wallet, pendingPayout] = await Promise.all([
             creator.subscriberCountOverride !== null && creator.subscriberCountOverride !== undefined
                 ? Promise.resolve(creator.subscriberCountOverride)
                 : User.countDocuments({ subscriptions: id }),
             Content.countDocuments({ userId: id, status: { $in: ['completed', 'removed'] } }),
             CommunityMember.find({ userId: id, status: 'ACTIVE' })
                 .populate('communityId', 'name slug type avatarUrl')
-                .lean()
+                .lean(),
+            SecondaryWallet.findOne({ userId: id }).lean(),
+            Payout.findOne({ userId: id, status: 'pending_settlement' }).lean(),
         ]);
 
         // Transform profile picture through CloudFront
@@ -617,7 +621,18 @@ export const getCreatorProfile = async (req, res) => {
             creator: creatorObj,
             subscriberCount,
             contentCount,
-            communities: communities.map(cm => cm.communityId).filter(Boolean)
+            communities: communities.map(cm => cm.communityId).filter(Boolean),
+            payoutStatus: {
+                hasPending: Boolean(pendingPayout),
+                pendingPayout: pendingPayout ? {
+                    _id: pendingPayout._id,
+                    netAmount: pendingPayout.netAmount,
+                    grossAmount: pendingPayout.grossAmount,
+                    payoutMonth: pendingPayout.payoutMonth,
+                    createdAt: pendingPayout.createdAt,
+                } : null,
+                withdrawableBalance: wallet ? wallet.balance : 0,
+            }
         });
     } catch (error) {
         console.error('Creator profile error:', error);

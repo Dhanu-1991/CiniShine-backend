@@ -43,14 +43,24 @@ export const getMyContent = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const query = { userId };
-        if (type && ['video', 'short', 'audio', 'post'].includes(type)) {
+        if (type === 'ppv') {
+            query.visibility = 'pay_per_view';
+        } else if (type && ['video', 'short', 'audio', 'post'].includes(type)) {
             query.contentType = type;
         }
+
         if (search) {
             query.title = { $regex: search, $options: 'i' };
         }
 
-        const sortBy = sort === 'popular' ? { views: -1, likeCount: -1 } : { createdAt: -1 };
+        let sortBy = { createdAt: -1 };
+        if (sort === 'popular') {
+            sortBy = { views: -1, likeCount: -1 };
+        } else if (sort === 'oldest') {
+            sortBy = { createdAt: 1 };
+        } else if (sort === 'ppv') {
+            query.visibility = 'pay_per_view';
+        }
 
         const [contents, total] = await Promise.all([
             Content.find(query).sort(sortBy).skip(skip).limit(parseInt(limit)).lean(),
