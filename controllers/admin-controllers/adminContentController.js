@@ -1104,3 +1104,174 @@ export const updateCreatorStats = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
+
+/**
+ * GET /admin/ppv/list
+ * Admin PPV management page with views, watch time, completion rate %, revenue, unlock count, creator fan count & filters.
+ */
+export const listPpvContent = async (req, res) => {
+    try {
+        const { search, sort = 'popular', page = 1, limit = 20 } = req.query;
+        const pageNum = Math.max(1, parseInt(page, 10));
+        const limitNum = Math.max(1, parseInt(limit, 10));
+
+        const match = { isPayPerView: true };
+
+        // Search filter (video title/description or creator)
+        if (search) {
+            const regex = new RegExp(search.trim(), 'i');
+            const creatorMatches = await User.find({
+                $or: [{ channelName: regex }, { userName: regex }, { channelHandle: regex }]
+            }).select('_id').lean();
+            const creatorIds = creatorMatches.map(c => c._id);
+
+            match.$or = [
+                { title: regex },
+                { description: regex },
+                { tags: regex },
+                { userId: { $in: creatorIds } }
+            ];
+        }
+
+        // Aggregate PPV content with Purchase revenue and Creator details
+        const pipeline = [
+            { $match: match },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'userId',
+                    foreignField: '_id',
+                    as: 'creator'
+                }
+            },
+            { $unwind: { path: '$creator', preserveNullAndEmptyArrays: true } },
+            {
+                $lookup: {
+                    from: 'purchases',
+                    let: { contentId: '$_id' },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ['$contentId', '$$contentId'] },
+                                        { $in: ['$status', ['active', 'expired']] }
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            $group: {
+                                _id: null,
+                                totalRevenue: { $sum: '$amount' },
+                                totalUnlocks: { $sum: 1 }
+                            }
+                        }
+                    ],
+                    as: 'purchaseStats'
+                }
+            },
+            { $unwind: { path: '$purchaseStats', preserveNullAndEmptyArrays: true } },
+            {
+                $project: {
+                    _id: 1,
+                    title: 1,
+                    description: 1,
+                    thumbnailUrl: 1,
+                    videoUrl: 1,
+                    duration: 1,
+                    viewsCount: { $ifNull: ['$viewsCount', 0] },
+                    watchTime: { $ifNull: ['$watchTime', 0] },
+                    likeCount: { $ifNull: ['$likeCount', 0] },
+                    ppvPrice: 1,
+                    rentalPrice: 1,
+                    rentalValidityDays: 1,
+                    createdAt: 1,
+                    visibility: 1,
+                    status: 1,
+                    contentType: 1,
+                    creator: {
+                        _id: '$creator._id',
+                        channelName: '$creator.channelName',
+                        userName: '$creator.userName',
+                        channelHandle: '$creator.channelHandle',
+                        channelPicture: '$creator.channelPicture',
+                        subscriberCount: { $ifNull: ['$creator.subscriberCount', 0] }
+                    },
+                    totalRevenue: { $ifNull: ['$purchaseStats.totalRevenue', 0] },
+                    totalUnlocks: { $ifNull: ['$purchaseStats.totalUnlocks', 0] },
+                    completionRate: {
+                        $cond: [
+                            { $and: [{ $gt: ['$viewsCount', 0] }, { $gt: ['$duration', 0] }] },
+                            {
+                                $multiply: [
+                                    { $divide: ['$watchTime', { $multiply: ['$viewsCount', '$duration'] }] },
+                                    100
+                                ]
+                            },
+                            0
+                        ]
+                    }
+                }
+            }
+        ];
+
+        // Sort options
+        const sortStage = {};
+        if (sort === 'newest') sortStage.createdAt = -1;
+        else if (sort === 'oldest') sortStage.createdAt = 1;
+        else if (sort === 'watchTime') sortStage.watchTime = -1;
+        else if (sort === 'completionRate') sortStage.completionRate = -1;
+        else if (sort === 'fans') sortStage['creator.subscriberCount'] = -1;
+        else if (sort === 'revenue') sortStage.totalRevenue = -1;
+        else sortStage.viewsCount = -1;
+
+        pipeline.push({ $sort: sortStage });
+
+        // Facet for pagination
+        pipeline.push({
+            $facet: {
+                data: [{ $skip: (pageNum - 1) * limitNum }, { $limit: limitNum }],
+                totalCount: [{ $count: 'count' }]
+            }
+        });
+
+        const aggregateResult = await Content.aggregate(pipeline);
+        const items = aggregateResult[0]?.data || [];
+        const total = aggregateResult[0]?.totalCount[0]?.count || 0;
+
+        // Summary metrics across all PPV content
+        const summaryAgg = await Content.aggregate([
+            { $match: { isPayPerView: true } },
+            {
+                $group: {
+                    _id: null,
+                    totalPpvCount: { $sum: 1 },
+                    totalViews: { $sum: '$viewsCount' },
+                    totalWatchTime: { $sum: '$watchTime' }
+                }
+            }
+        ]);
+
+        const summary = summaryAgg[0] || { totalPpvCount: 0, totalViews: 0, totalWatchTime: 0 };
+
+        return res.status(200).json({
+            success: true,
+            ppvItems: items,
+            summary: {
+                totalPpvCount: summary.totalPpvCount,
+                totalViews: summary.totalViews,
+                totalWatchTime: summary.totalWatchTime
+            },
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                pages: Math.ceil(total / limitNum)
+            }
+        });
+    } catch (error) {
+        console.error('List PPV content error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};

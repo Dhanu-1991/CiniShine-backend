@@ -766,7 +766,8 @@ export const listUsers = async (req, res) => {
  */
 export const adminSendEmailHandler = async (req, res) => {
     try {
-        const { creatorId, template, subject, body, reason } = req.body;
+        const creatorId = req.body.creatorId || req.body.userId;
+        const { template, subject, body, reason } = req.body;
 
         if (!creatorId) {
             return res.status(400).json({ success: false, message: 'creatorId is required' });

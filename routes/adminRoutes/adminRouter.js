@@ -10,7 +10,7 @@ import {
     hideContent, removeContent, restoreContent, deleteContent,
     listArchive, getContentDetails, getCreatorAnalytics, searchCreators,
     getCreatorProfile, getCreatorStudio, banChannel, unbanChannel, requestBanChannel,
-    updateContentStats, updateCreatorStats
+    updateContentStats, updateCreatorStats, listPpvContent
 } from '../../controllers/admin-controllers/adminContentController.js';
 import {
     getDashboard, listReports, resolveReport, listFeedbacks, listEnquiries,
@@ -72,7 +72,8 @@ adminRouter.get('/enquiries', listEnquiries);
 adminRouter.post('/enquiries/:id/reply', auditLog('enquiry_reply', 'enquiry'), replyToEnquiry);
 adminRouter.patch('/enquiries/:id/status', auditLog('enquiry_status_change', 'enquiry'), toggleEnquiryStatus);
 
-// Content management
+// Content management & PPV
+adminRouter.get('/ppv/list', listPpvContent);
 adminRouter.get('/content/:id', getContentDetails);
 adminRouter.post('/content/:id/hide', auditLog('content_hide', 'content'), hideContent);
 adminRouter.post('/content/:id/remove', auditLog('content_remove', 'content'), removeContent);

@@ -56,7 +56,12 @@ export const getMyContent = async (req, res) => {
 
         const query = { userId: targetUserId };
         if (type === 'ppv') {
-            query.visibility = 'pay_per_view';
+            query.$or = [
+                { isPayPerView: true },
+                { visibility: 'pay_per_view' },
+                { ppvPrice: { $gt: 0 } },
+                { rentalPrice: { $gt: 0 } }
+            ];
         } else if (type && ['video', 'short', 'audio', 'post'].includes(type)) {
             query.contentType = type;
         }
@@ -71,7 +76,12 @@ export const getMyContent = async (req, res) => {
         } else if (sort === 'oldest') {
             sortBy = { createdAt: 1 };
         } else if (sort === 'ppv') {
-            query.visibility = 'pay_per_view';
+            query.$or = [
+                { isPayPerView: true },
+                { visibility: 'pay_per_view' },
+                { ppvPrice: { $gt: 0 } },
+                { rentalPrice: { $gt: 0 } }
+            ];
         }
 
         const [contents, total] = await Promise.all([
@@ -104,6 +114,11 @@ export const getMyContent = async (req, res) => {
                 totalWatchTime: item.totalWatchTime || 0,
                 status: item.status,
                 visibility: item.visibility,
+                isPayPerView: Boolean(item.isPayPerView || item.visibility === 'pay_per_view' || (item.ppvPrice > 0)),
+                ppvPrice: item.ppvPrice || item.price || item.rentalPrice || 0,
+                rentalPrice: item.rentalPrice || 0,
+                rentalValidityDays: item.rentalValidityDays || 30,
+                price: item.price || item.ppvPrice || 0,
                 commentsEnabled: item.commentsEnabled,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
