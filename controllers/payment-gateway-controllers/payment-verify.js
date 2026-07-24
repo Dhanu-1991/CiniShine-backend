@@ -72,9 +72,18 @@ const paymentVerify = async (req, res) => {
     
     console.log("Verification result:", response);
 
+    let paymentDetailsObj = response ? (response.toObject ? response.toObject() : { ...response }) : null;
+    if (paymentDetailsObj && paymentDetailsObj.contentId) {
+      const Content = mongoose.model("Content");
+      const contentDoc = await Content.findById(paymentDetailsObj.contentId).select("contentType").lean();
+      if (contentDoc) {
+        paymentDetailsObj.contentType = contentDoc.contentType;
+      }
+    }
+
     res.status(200).json({
       order_status: response?.status || "UNKNOWN",
-      paymentDetails: response
+      paymentDetails: paymentDetailsObj
     });
 
   } catch (error) {

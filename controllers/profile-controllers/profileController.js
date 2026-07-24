@@ -588,7 +588,19 @@ export const getContentAnalytics = async (req, res) => {
                     Purchase.countDocuments({ contentId: id, status: 'active' }),
                     Purchase.aggregate([
                         { $match: { contentId: new mongoose.Types.ObjectId(id), status: { $in: ['active', 'expired'] } } },
-                        { $group: { _id: null, total: { $sum: { $multiply: ['$amount', (100 - PLATFORM_CUT_PERCENT) / 100] } } } }
+                        {
+                            $group: {
+                                _id: null,
+                                totalSelling: { $sum: '$amount' },
+                                totalBase: { $sum: { $ifNull: ['$basePrice', { $divide: ['$amount', 1.18] }] } },
+                                totalGst: { $sum: { $ifNull: ['$gstAmount', { $subtract: ['$amount', { $divide: ['$amount', 1.18] }] }] } },
+                                totalComm: { $sum: { $ifNull: ['$platformCommission', { $multiply: ['$amount', 0.32] }] } },
+                                totalGstComm: { $sum: { $ifNull: ['$gstOnCommission', { $multiply: ['$amount', 0.0576] }] } },
+                                totalTds: { $sum: { $ifNull: ['$tdsAmount', { $multiply: [{ $divide: ['$amount', 1.18] }, 0.001] }] } },
+                                totalTcs: { $sum: { $ifNull: ['$tcsAmount', { $multiply: [{ $divide: ['$amount', 1.18] }, 0.01] }] } },
+                                totalPayout: { $sum: { $ifNull: ['$creatorPayout', { $multiply: ['$amount', 0.61308] }] } }
+                            }
+                        }
                     ]),
                     Purchase.find({ contentId: id, status: { $in: ['active', 'expired'] } })
                         .sort({ purchasedAt: -1 })
@@ -596,9 +608,20 @@ export const getContentAnalytics = async (req, res) => {
                         .populate('buyerId', 'userName channelName profilePicture')
                         .lean()
                 ]);
+                const agg = revenueAgg[0] || {};
                 return {
                     totalPurchases: purchaseCount,
-                    totalRevenue: parseFloat((revenueAgg[0]?.total || 0).toFixed(2)),
+                    totalRevenue: parseFloat((agg.totalSelling || 0).toFixed(2)),
+                    taxBreakdown: {
+                        totalSellingPrice: parseFloat((agg.totalSelling || 0).toFixed(2)),
+                        totalBasePrice: parseFloat((agg.totalBase || 0).toFixed(2)),
+                        totalGstCollected: parseFloat((agg.totalGst || 0).toFixed(2)),
+                        totalPlatformCommission: parseFloat((agg.totalComm || 0).toFixed(2)),
+                        totalGstOnCommission: parseFloat((agg.totalGstComm || 0).toFixed(2)),
+                        totalTdsDeducted: parseFloat((agg.totalTds || 0).toFixed(2)),
+                        totalTcsDeducted: parseFloat((agg.totalTcs || 0).toFixed(2)),
+                        totalCreatorPayout: parseFloat((agg.totalPayout || 0).toFixed(2)),
+                    },
                     recentPurchases: recentPurchases.map(p => ({
                         buyerName: 'Anonymous Viewer',
                         buyerPicture: null,

@@ -32,7 +32,7 @@ import {
     getDailyLedger, getLiveTransfers
 } from '../../controllers/admin-controllers/adminLedgerController.js';
 import {
-    getPayoutReport, runMonthEndPayout, getDailyPayoutStats
+    getPayoutReport, runMonthEndPayout, getDailyPayoutStats, runSingleCreatorPayout
 } from '../../controllers/wallet-controllers/payoutJobController.js';
 import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
@@ -137,5 +137,6 @@ adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);
 adminRouter.patch('/creator/:id/stats', requireSuperAdmin, updateCreatorStats);
 adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
 adminRouter.post('/analytics/aggregate', requireSuperAdmin, runAggregation);
+adminRouter.post('/payouts/run-single', requireSuperAdmin, auditLog('single_payout', 'payout'), runSingleCreatorPayout);
 
 export default adminRouter;

@@ -28,6 +28,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import Content from '../../models/content.model.js';
 import Purchase from '../../models/purchase.model.js';
+import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import PaymentDetails from '../../models/payment.details.model.js';
 import { Cashfree, CFEnvironment } from 'cashfree-pg';
 import Razorpay from 'razorpay';
@@ -153,6 +154,10 @@ export const getWalletTransactions = async (req, res) => {
         if (walletType === 'secondary') {
             for (const txn of transactions) {
                 delete txn.relatedBuyerId;
+                if (txn.type === 'ppv_earning_credit' && !txn.taxBreakdown && txn.amount) {
+                    const approxSelling = Math.round((txn.amount / 0.61308) * 100) / 100;
+                    txn.taxBreakdown = calculateTaxBreakdown(approxSelling);
+                }
             }
         }
 

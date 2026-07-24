@@ -201,6 +201,7 @@ export const getLiveTransfers = async (req, res) => {
                     contact: t.buyer.contact
                 } : null,
                 buyerId: t.buyer?._id?.toString() || null,
+                taxBreakdown: t.taxBreakdown || null,
             })),
             pagination: {
                 page: parseInt(page),

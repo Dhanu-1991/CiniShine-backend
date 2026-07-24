@@ -6,6 +6,22 @@ export const checkAccess = async (req, res) => {
     const { contentId } = req.params;
     const userId = req.user.id;
 
+    const content = await Content.findById(contentId).select('userId contentType visibility');
+    if (!content) {
+      return res.status(404).json({ error: "Content not found" });
+    }
+
+    // Creator always has full access
+    const isCreator = content.userId?.toString() === userId;
+    if (isCreator) {
+      return res.status(200).json({
+        success: true,
+        hasAccess: true,
+        isCreator: true,
+        contentType: content.contentType
+      });
+    }
+
     const purchase = await Purchase.findOne({
       contentId,
       buyerId: userId,
@@ -18,6 +34,7 @@ export const checkAccess = async (req, res) => {
       return res.status(200).json({
         success: true,
         hasAccess: true,
+        contentType: content.contentType,
         purchase,
         expiresIn
       });
@@ -25,7 +42,8 @@ export const checkAccess = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      hasAccess: false
+      hasAccess: false,
+      contentType: content.contentType
     });
   } catch (error) {
     console.error("Error checking purchase access:", error);
@@ -65,12 +83,29 @@ export const getContentRevenue = async (req, res) => {
     }
 
     const purchases = await Purchase.find({ contentId, status: 'active' });
-    const totalRevenue = purchases.reduce((sum, p) => sum + p.amount, 0);
+    const totalSellingPrice = purchases.reduce((sum, p) => sum + p.amount, 0);
+    const totalBasePrice = purchases.reduce((sum, p) => sum + (p.basePrice || (p.amount / 1.18)), 0);
+    const totalGstCollected = purchases.reduce((sum, p) => sum + (p.gstAmount || (p.amount - p.amount / 1.18)), 0);
+    const totalPlatformCommission = purchases.reduce((sum, p) => sum + (p.platformCommission || (p.amount * 0.32)), 0);
+    const totalGstOnCommission = purchases.reduce((sum, p) => sum + (p.gstOnCommission || (p.amount * 0.32 * 0.18)), 0);
+    const totalTdsDeducted = purchases.reduce((sum, p) => sum + (p.tdsAmount || ((p.amount / 1.18) * 0.001)), 0);
+    const totalTcsDeducted = purchases.reduce((sum, p) => sum + (p.tcsAmount || ((p.amount / 1.18) * 0.01)), 0);
+    const totalCreatorPayout = purchases.reduce((sum, p) => sum + (p.creatorPayout || (p.amount - (p.amount * 0.32) - (p.amount * 0.32 * 0.18) - ((p.amount / 1.18) * 0.001) - ((p.amount / 1.18) * 0.01))), 0);
 
     res.status(200).json({
       success: true,
       totalPurchases: purchases.length,
-      totalRevenue,
+      totalRevenue: Number(totalSellingPrice.toFixed(2)),
+      taxBreakdown: {
+        totalSellingPrice: Number(totalSellingPrice.toFixed(2)),
+        totalBasePrice: Number(totalBasePrice.toFixed(2)),
+        totalGstCollected: Number(totalGstCollected.toFixed(2)),
+        totalPlatformCommission: Number(totalPlatformCommission.toFixed(2)),
+        totalGstOnCommission: Number(totalGstOnCommission.toFixed(2)),
+        totalTdsDeducted: Number(totalTdsDeducted.toFixed(2)),
+        totalTcsDeducted: Number(totalTcsDeducted.toFixed(2)),
+        totalCreatorPayout: Number(totalCreatorPayout.toFixed(2)),
+      },
       purchases
     });
   } catch (error) {

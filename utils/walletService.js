@@ -20,6 +20,7 @@ import SecondaryWallet from '../models/secondaryWallet.model.js';
 import WalletTransaction from '../models/walletTransaction.model.js';
 import WalletTransferLog from '../models/walletTransferLog.model.js';
 import Purchase from '../models/purchase.model.js';
+import { calculateTaxBreakdown } from './taxCalculator.js';
 
 /** Platform cut percentage for PPV purchases */
 const PLATFORM_CUT_PERCENT = 32;
@@ -177,7 +178,8 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
  * @returns {{ purchase, buyerTxn, creatorTxn, creatorAmount, platformAmount }}
  */
 export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, amount) {
-    const creatorAmount = Number((amount * (100 - PLATFORM_CUT_PERCENT) / 100).toFixed(2));
+    const tax = calculateTaxBreakdown(amount);
+    const creatorAmount = tax.creatorPayout;
     const platformAmount = Number((amount - creatorAmount).toFixed(2));
 
     const session = await mongoose.startSession();
@@ -203,7 +205,7 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
             const orderId = `WALLET_PPV_${Date.now()}_${buyerUserId.toString().slice(-6)}`;
             const purchaseIdempotencyKey = `ppv_purchase_${contentId}_${buyerUserId}_${orderId}`;
 
-            // Create Purchase record
+            // Create Purchase record with full tax breakdown
             const [purchase] = await Purchase.create([{
                 contentId,
                 buyerId: buyerUserId,
@@ -211,6 +213,13 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
                 paymentId: `wallet_${orderId}`,
                 amount,
                 currency: 'INR',
+                basePrice: tax.basePrice,
+                gstAmount: tax.gstAmount,
+                platformCommission: tax.platformCommission,
+                gstOnCommission: tax.gstOnCommission,
+                tdsAmount: tax.tdsAmount,
+                tcsAmount: tax.tcsAmount,
+                creatorPayout: tax.creatorPayout,
                 status: 'active',
                 expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000), // 48 hours
             }], { session });
@@ -222,11 +231,12 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
                     relatedContentId: contentId,
                     relatedPurchaseId: purchase._id,
                     relatedOrderId: orderId,
+                    taxBreakdown: tax,
                 },
                 `${purchaseIdempotencyKey}_debit`, session
             );
 
-            // Credit creator (68% only)
+            // Credit creator (net payout after deductions)
             const creatorTxn = await creditWallet(
                 creatorWallet._id, 'secondary', creatorAmount, 'ppv_earning_credit',
                 {
@@ -234,11 +244,12 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
                     relatedPurchaseId: purchase._id,
                     relatedOrderId: orderId,
                     relatedBuyerId: buyerUserId,
+                    taxBreakdown: tax,
                 },
                 `${purchaseIdempotencyKey}_credit`, session
             );
 
-            result = { purchase, buyerTxn, creatorTxn, creatorAmount, platformAmount };
+            result = { purchase, buyerTxn, creatorTxn, creatorAmount, platformAmount, taxBreakdown: tax };
         });
         return result;
     } finally {

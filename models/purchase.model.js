@@ -7,6 +7,14 @@ const purchaseSchema = new mongoose.Schema({
   paymentId: { type: String, default: null },
   amount: { type: Number, required: true },
   currency: { type: String, default: 'INR' },
+  // Tax breakdown fields
+  basePrice: { type: Number, default: null },
+  gstAmount: { type: Number, default: null },
+  platformCommission: { type: Number, default: null },
+  gstOnCommission: { type: Number, default: null },
+  tdsAmount: { type: Number, default: null },
+  tcsAmount: { type: Number, default: null },
+  creatorPayout: { type: Number, default: null },
   purchasedAt: { type: Date, default: Date.now },
   expiresAt: { type: Date, required: true },
   status: { type: String, enum: ['pending', 'active', 'expired', 'refunded'], default: 'pending' }

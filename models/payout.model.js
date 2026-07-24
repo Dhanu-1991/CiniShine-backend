@@ -4,8 +4,17 @@ const payoutSchema = new mongoose.Schema({
     walletId: { type: mongoose.Schema.Types.ObjectId, ref: 'Wallet', required: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     grossAmount: { type: Number, required: true },
-    feeAmount: { type: Number, required: true },   // 1% maintenance fee
+    feeAmount: { type: Number, required: true },   // maintenance fee
     netAmount: { type: Number, required: true },     // grossAmount - feeAmount
+
+    // Tax & Commission aggregates for payout period
+    totalSellingPrice: { type: Number, default: 0 },
+    totalBasePrice: { type: Number, default: 0 },
+    totalGstCollected: { type: Number, default: 0 },
+    totalPlatformCommission: { type: Number, default: 0 },
+    totalGstOnCommission: { type: Number, default: 0 },
+    totalTdsDeducted: { type: Number, default: 0 },
+    totalTcsDeducted: { type: Number, default: 0 },
 
     // Encrypted snapshot of bank details at time of payout
     bankAccountNumberEncrypted: { type: String, required: true },

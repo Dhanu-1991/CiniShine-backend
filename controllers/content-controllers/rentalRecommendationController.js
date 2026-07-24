@@ -58,13 +58,14 @@ export const getRentalRecommendations = async (req, res) => {
             }
         }
 
-        // 5. Query Content model for PPV items (video and audio only)
+        // 5. Query Content model for PPV items (video and audio only), excluding user's own content
         const candidates = await Content.find({
             price: { $gt: 0 },
             status: 'completed',
             visibility: 'pay_per_view',
             contentType: { $in: ['video', 'audio'] },
-            _id: { $nin: purchasedIds }
+            _id: { $nin: purchasedIds },
+            userId: { $ne: new mongoose.Types.ObjectId(userId) }
         });
 
         // 6. Score each result

@@ -60,6 +60,8 @@ export async function fulfillWalletRecharge({ orderId, paymentId, amount, curren
   }
 }
 
+import { calculateTaxBreakdown } from './taxCalculator.js';
+
 /**
  * Fulfills a PPV Purchase.
  * Handles creating the Purchase record, updating PaymentDetails, and crediting the creator.
@@ -71,6 +73,8 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
     return existingPayment;
   }
 
+  const tax = calculateTaxBreakdown(amount);
+
   // 1. Create Purchase & Update PaymentDetails
   const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
   const purchase = await Purchase.create({
@@ -80,6 +84,13 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
     paymentId,
     amount,
     currency,
+    basePrice: tax.basePrice,
+    gstAmount: tax.gstAmount,
+    platformCommission: tax.platformCommission,
+    gstOnCommission: tax.gstOnCommission,
+    tdsAmount: tax.tdsAmount,
+    tcsAmount: tax.tcsAmount,
+    creatorPayout: tax.creatorPayout,
     status: 'active',
     expiresAt
   });
@@ -111,7 +122,7 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
       const content = await Content.findById(contentId).select('userId').lean();
       if (content?.userId) {
         const creatorId = content.userId.toString();
-        const creatorAmount = Number((amount * (100 - PLATFORM_CUT_PERCENT) / 100).toFixed(2));
+        const creatorAmount = tax.creatorPayout;
         let creatorWallet = await SecondaryWallet.findOne({ userId: creatorId });
         if (!creatorWallet) {
           creatorWallet = await ensureSecondaryWallet(creatorId);
@@ -127,6 +138,7 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
                 relatedPurchaseId: purchase._id,
                 relatedOrderId: orderId,
                 relatedBuyerId: userId,
+                taxBreakdown: tax,
               },
               `ppv_earning_${orderId}`, session
             );

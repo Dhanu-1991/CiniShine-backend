@@ -14,7 +14,9 @@ import KycDetails from '../../models/kycDetails.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
 import Payout from '../../models/payout.model.js';
 import Purchase from '../../models/purchase.model.js';
+import User from '../../models/user.model.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
+import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -117,12 +119,42 @@ export const runMonthEndPayout = async (req, res) => {
                     // Decrypt bank name for the payout record (plain text field)
                     const bankName = decryptBankDetails(kyc).bankName || '';
 
+                    // Calculate tax aggregates from creator's earning transactions
+                    const earningTxns = await WalletTransaction.find({
+                        walletId: freshWallet._id,
+                        type: 'ppv_earning_credit',
+                        status: 'completed',
+                    }).session(session).lean();
+
+                    let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
+                    let totalPlatformCommission = 0, totalGstOnCommission = 0;
+                    let totalTdsDeducted = 0, totalTcsDeducted = 0;
+
+                    for (const tx of earningTxns) {
+                        if (tx.taxBreakdown) {
+                            totalSellingPrice += tx.taxBreakdown.sellingPrice || 0;
+                            totalBasePrice += tx.taxBreakdown.basePrice || 0;
+                            totalGstCollected += tx.taxBreakdown.gstAmount || 0;
+                            totalPlatformCommission += tx.taxBreakdown.platformCommission || 0;
+                            totalGstOnCommission += tx.taxBreakdown.gstOnCommission || 0;
+                            totalTdsDeducted += tx.taxBreakdown.tdsAmount || 0;
+                            totalTcsDeducted += tx.taxBreakdown.tcsAmount || 0;
+                        }
+                    }
+
                     await Payout.create([{
                         walletId: freshWallet._id,
                         userId: freshWallet.userId,
                         grossAmount,
                         feeAmount,
                         netAmount,
+                        totalSellingPrice: Number(totalSellingPrice.toFixed(2)),
+                        totalBasePrice: Number(totalBasePrice.toFixed(2)),
+                        totalGstCollected: Number(totalGstCollected.toFixed(2)),
+                        totalPlatformCommission: Number(totalPlatformCommission.toFixed(2)),
+                        totalGstOnCommission: Number(totalGstOnCommission.toFixed(2)),
+                        totalTdsDeducted: Number(totalTdsDeducted.toFixed(2)),
+                        totalTcsDeducted: Number(totalTcsDeducted.toFixed(2)),
                         ...bankSnapshot,
                         bankName: bankName,
                         status: 'pending_settlement',
@@ -131,6 +163,17 @@ export const runMonthEndPayout = async (req, res) => {
                     }], { session });
 
                     results.processed++;
+
+                    // Send email notification to creator
+                    const user = await User.findById(freshWallet.userId).select('email userName channelName').lean();
+                    if (user?.email) {
+                        sendAdminEmail('payoutInitiated', user.email, {
+                            creatorName: user.channelName || user.userName || 'Creator',
+                            netAmount,
+                            grossAmount,
+                            payoutMonth
+                        }).catch(e => console.error('Payout email error:', e));
+                    }
                 });
             } catch (err) {
                 results.failed++;
@@ -201,6 +244,13 @@ export const getPayoutReport = async (req, res) => {
                 grossAmount: payout.grossAmount,
                 feeAmount: payout.feeAmount,
                 netAmount: payout.netAmount,
+                totalSellingPrice: payout.totalSellingPrice || 0,
+                totalBasePrice: payout.totalBasePrice || 0,
+                totalGstCollected: payout.totalGstCollected || 0,
+                totalPlatformCommission: payout.totalPlatformCommission || 0,
+                totalGstOnCommission: payout.totalGstOnCommission || 0,
+                totalTdsDeducted: payout.totalTdsDeducted || 0,
+                totalTcsDeducted: payout.totalTcsDeducted || 0,
                 bankDetails: {
                     accountNumber: bankDetails.bankAccountNumber,
                     bankName: payout.bankName || bankDetails.bankName,
@@ -221,6 +271,13 @@ export const getPayoutReport = async (req, res) => {
         const totalGross = payouts.reduce((sum, p) => sum + p.grossAmount, 0);
         const totalFees = payouts.reduce((sum, p) => sum + p.feeAmount, 0);
         const totalNet = payouts.reduce((sum, p) => sum + p.netAmount, 0);
+        const totalSellingPrice = payouts.reduce((sum, p) => sum + (p.totalSellingPrice || 0), 0);
+        const totalBasePrice = payouts.reduce((sum, p) => sum + (p.totalBasePrice || 0), 0);
+        const totalGstCollected = payouts.reduce((sum, p) => sum + (p.totalGstCollected || 0), 0);
+        const totalPlatformCommission = payouts.reduce((sum, p) => sum + (p.totalPlatformCommission || 0), 0);
+        const totalGstOnCommission = payouts.reduce((sum, p) => sum + (p.totalGstOnCommission || 0), 0);
+        const totalTdsDeducted = payouts.reduce((sum, p) => sum + (p.totalTdsDeducted || 0), 0);
+        const totalTcsDeducted = payouts.reduce((sum, p) => sum + (p.totalTcsDeducted || 0), 0);
 
         res.json({
             payoutMonth: month,
@@ -229,12 +286,149 @@ export const getPayoutReport = async (req, res) => {
                 totalGross: Math.round(totalGross * 100) / 100,
                 totalFees: Math.round(totalFees * 100) / 100,
                 totalNet: Math.round(totalNet * 100) / 100,
+                totalSellingPrice: Math.round(totalSellingPrice * 100) / 100,
+                totalBasePrice: Math.round(totalBasePrice * 100) / 100,
+                totalGstCollected: Math.round(totalGstCollected * 100) / 100,
+                totalPlatformCommission: Math.round(totalPlatformCommission * 100) / 100,
+                totalGstOnCommission: Math.round(totalGstOnCommission * 100) / 100,
+                totalTdsDeducted: Math.round(totalTdsDeducted * 100) / 100,
+                totalTcsDeducted: Math.round(totalTcsDeducted * 100) / 100,
             },
             payouts: enrichedPayouts,
         });
     } catch (error) {
         console.error('❌ Error fetching payout report:', error);
         res.status(500).json({ error: 'Failed to fetch payout report' });
+    }
+};
+
+/**
+ * POST /admin/payouts/run-single — SuperAdmin manual payout for a single creator
+ */
+export const runSingleCreatorPayout = async (req, res) => {
+    try {
+        const { userId } = req.body;
+        if (!userId) {
+            return res.status(400).json({ error: "userId is required" });
+        }
+
+        const wallet = await SecondaryWallet.findOne({ userId });
+        if (!wallet || wallet.balance <= 0) {
+            return res.status(400).json({ error: "Creator has no withdrawable secondary wallet balance" });
+        }
+
+        const kyc = await KycDetails.findOne({ userId });
+        if (!kyc || kyc.kycStatus === 'rejected') {
+            return res.status(400).json({ error: "Creator KYC missing or rejected" });
+        }
+
+        const now = new Date();
+        const payoutMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_MANUAL_${Date.now()}`;
+
+        const session = await mongoose.startSession();
+        let createdPayout;
+        try {
+            await session.withTransaction(async () => {
+                const freshWallet = await SecondaryWallet.findById(wallet._id).session(session);
+                if (!freshWallet || freshWallet.balance <= 0) {
+                    throw new Error("Wallet balance is zero");
+                }
+
+                const grossAmount = freshWallet.balance;
+                const feeAmount = Math.round(grossAmount * MAINTENANCE_FEE_PERCENT * 100) / 100;
+                const netAmount = Math.round((grossAmount - feeAmount) * 100) / 100;
+
+                await SecondaryWallet.findOneAndUpdate(
+                    { _id: freshWallet._id },
+                    { $set: { balance: 0 } },
+                    { session }
+                );
+
+                const idempotencyKey = `payout_${wallet._id}_${payoutMonth}`;
+                await WalletTransaction.create([{
+                    walletId: freshWallet._id,
+                    walletType: 'secondary',
+                    type: 'payout',
+                    amount: grossAmount,
+                    balanceAfter: 0,
+                    status: 'completed',
+                    idempotencyKey,
+                }], { session });
+
+                const bankSnapshot = {};
+                const bankFields = [
+                    'bankAccountNumberEncrypted', 'bankAccountIv', 'bankAccountTag',
+                    'ifscCodeEncrypted', 'ifscCodeIv', 'ifscCodeTag',
+                    'accountHolderNameEncrypted', 'accountHolderNameIv', 'accountHolderNameTag',
+                ];
+                bankFields.forEach(f => { bankSnapshot[f] = kyc[f]; });
+                const bankName = decryptBankDetails(kyc).bankName || '';
+
+                const earningTxns = await WalletTransaction.find({
+                    walletId: freshWallet._id,
+                    type: 'ppv_earning_credit',
+                    status: 'completed',
+                }).session(session).lean();
+
+                let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
+                let totalPlatformCommission = 0, totalGstOnCommission = 0;
+                let totalTdsDeducted = 0, totalTcsDeducted = 0;
+
+                for (const tx of earningTxns) {
+                    if (tx.taxBreakdown) {
+                        totalSellingPrice += tx.taxBreakdown.sellingPrice || 0;
+                        totalBasePrice += tx.taxBreakdown.basePrice || 0;
+                        totalGstCollected += tx.taxBreakdown.gstAmount || 0;
+                        totalPlatformCommission += tx.taxBreakdown.platformCommission || 0;
+                        totalGstOnCommission += tx.taxBreakdown.gstOnCommission || 0;
+                        totalTdsDeducted += tx.taxBreakdown.tdsAmount || 0;
+                        totalTcsDeducted += tx.taxBreakdown.tcsAmount || 0;
+                    }
+                }
+
+                [createdPayout] = await Payout.create([{
+                    walletId: freshWallet._id,
+                    userId: freshWallet.userId,
+                    grossAmount,
+                    feeAmount,
+                    netAmount,
+                    totalSellingPrice: Number(totalSellingPrice.toFixed(2)),
+                    totalBasePrice: Number(totalBasePrice.toFixed(2)),
+                    totalGstCollected: Number(totalGstCollected.toFixed(2)),
+                    totalPlatformCommission: Number(totalPlatformCommission.toFixed(2)),
+                    totalGstOnCommission: Number(totalGstOnCommission.toFixed(2)),
+                    totalTdsDeducted: Number(totalTdsDeducted.toFixed(2)),
+                    totalTcsDeducted: Number(totalTcsDeducted.toFixed(2)),
+                    ...bankSnapshot,
+                    bankName: bankName,
+                    status: 'pending_settlement',
+                    payoutMonth,
+                    scheduledFor: new Date(),
+                }], { session });
+            });
+
+            // Send notification email to creator
+            const user = await User.findById(userId).select('email userName channelName').lean();
+            if (user?.email) {
+                sendAdminEmail('payoutInitiated', user.email, {
+                    creatorName: user.channelName || user.userName || 'Creator',
+                    netAmount: createdPayout.netAmount,
+                    grossAmount: createdPayout.grossAmount,
+                    payoutMonth
+                }).catch(e => console.error('Single payout email error:', e));
+            }
+
+            res.json({
+                success: true,
+                message: "Single creator payout executed successfully",
+                payout: createdPayout
+            });
+        } finally {
+            await session.endSession();
+        }
+    } catch (error) {
+        console.error('❌ Error executing single creator payout:', error);
+        res.status(500).json({ error: error.message || 'Failed to execute payout' });
     }
 };
 

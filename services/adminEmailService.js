@@ -172,6 +172,28 @@ const templates = {
             </div>`,
         text: `Hi ${creatorName}, ${body}`
     }),
+
+    payoutInitiated: ({ creatorName, netAmount, grossAmount, payoutMonth, adminName }) => ({
+        subject: `[${PLATFORM_NAME}] Payout Initiated: ₹${netAmount}`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #34d399; margin-top: 0;">Payout Initiated</h2>
+                    <p>Hi <strong>${creatorName}</strong>,</p>
+                    <p>Your payout for <strong>${payoutMonth}</strong> has been initiated!</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #10b981; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #e0e0e0;"><strong>Amount to be Credited:</strong> ₹${netAmount}</p>
+                        <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Gross Balance Cleared: ₹${grossAmount}</p>
+                    </div>
+                    <p>Your amount will be credited to your bank account within 24 hours.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME} team${adminName ? ` (${adminName})` : ''}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${creatorName}, your payout of ₹${netAmount} for ${payoutMonth} has been initiated and will be credited within 24 hours.`
+    }),
 };
 
 // Pre-built quick templates for admin UI
