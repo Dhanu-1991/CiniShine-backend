@@ -1202,11 +1202,12 @@ export const listPpvContent = async (req, res) => {
                     originalKey: 1,
                     videoUrl: 1,
                     duration: 1,
-                    viewsCount: { $ifNull: ['$viewsCount', 0] },
-                    watchTime: { $ifNull: ['$watchTime', 0] },
+                    viewsCount: { $ifNull: ['$viewsCount', { $ifNull: ['$views', 0] }] },
+                    watchTime: { $ifNull: ['$watchTime', { $ifNull: ['$totalWatchTime', 0] }] },
                     likeCount: { $ifNull: ['$likeCount', 0] },
                     ppvPrice: 1,
                     rentalPrice: 1,
+                    price: 1,
                     rentalValidityDays: 1,
                     createdAt: 1,
                     visibility: 1,
@@ -1221,19 +1222,7 @@ export const listPpvContent = async (req, res) => {
                         subscriberCount: { $ifNull: ['$creator.subscriberCount', 0] }
                     },
                     totalRevenue: { $ifNull: ['$purchaseStats.totalRevenue', 0] },
-                    totalUnlocks: { $ifNull: ['$purchaseStats.totalUnlocks', 0] },
-                    completionRate: {
-                        $cond: [
-                            { $and: [{ $gt: ['$viewsCount', 0] }, { $gt: ['$duration', 0] }] },
-                            {
-                                $multiply: [
-                                    { $divide: ['$watchTime', { $multiply: ['$viewsCount', '$duration'] }] },
-                                    100
-                                ]
-                            },
-                            0
-                        ]
-                    }
+                    totalUnlocks: { $ifNull: ['$purchaseStats.totalUnlocks', 0] }
                 }
             }
         ];
@@ -1243,7 +1232,6 @@ export const listPpvContent = async (req, res) => {
         if (sort === 'newest') sortStage.createdAt = -1;
         else if (sort === 'oldest') sortStage.createdAt = 1;
         else if (sort === 'watchTime') sortStage.watchTime = -1;
-        else if (sort === 'completionRate') sortStage.completionRate = -1;
         else if (sort === 'fans') sortStage['creator.subscriberCount'] = -1;
         else if (sort === 'revenue') sortStage.totalRevenue = -1;
         else sortStage.viewsCount = -1;
@@ -1265,8 +1253,22 @@ export const listPpvContent = async (req, res) => {
         const items = rawItems.map((item) => {
             const mediaKey = item.processedKey || item.originalKey;
             const thumbKey = item.thumbnailKey || item.imageKey || item.thumbnailUrl;
+
+            const views = Number(item.viewsCount || 0);
+            const watchSec = Number(item.watchTime || 0);
+            const durSec = Number(item.duration || 0);
+
+            let completionRate = 0;
+            if (views > 0 && durSec > 0) {
+                completionRate = Math.min(100, Math.round((watchSec / (views * durSec)) * 100));
+            }
+
             return {
                 ...item,
+                viewsCount: views,
+                watchTime: watchSec,
+                completionRate,
+                ppvPrice: item.ppvPrice || item.price || item.rentalPrice || 0,
                 thumbnailUrl: getCfUrl(thumbKey),
                 videoUrl: mediaKey ? getCfUrl(mediaKey) : null,
                 hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
@@ -1277,6 +1279,10 @@ export const listPpvContent = async (req, res) => {
             };
         });
 
+        if (sort === 'completionRate') {
+            items.sort((a, b) => b.completionRate - a.completionRate);
+        }
+
         // Summary metrics across all PPV content
         const summaryAgg = await Content.aggregate([
             { $match: ppvMatchCondition },
@@ -1284,8 +1290,8 @@ export const listPpvContent = async (req, res) => {
                 $group: {
                     _id: null,
                     totalPpvCount: { $sum: 1 },
-                    totalViews: { $sum: '$viewsCount' },
-                    totalWatchTime: { $sum: '$watchTime' }
+                    totalViews: { $sum: { $ifNull: ['$viewsCount', { $ifNull: ['$views', 0] }] } },
+                    totalWatchTime: { $sum: { $ifNull: ['$watchTime', { $ifNull: ['$totalWatchTime', 0] }] } }
                 }
             }
         ]);
@@ -1307,8 +1313,8 @@ export const listPpvContent = async (req, res) => {
                 pages: Math.ceil(total / limitNum)
             }
         });
-    } catch (error) {
-        console.error('List PPV content error:', error);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
+    } catch (err) {
+        console.error('Error fetching PPV content for admin:', err);
+        return res.status(500).json({ success: false, message: err.message || 'Server error fetching PPV content' });
     }
 };
