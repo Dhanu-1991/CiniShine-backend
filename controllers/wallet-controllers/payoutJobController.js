@@ -43,11 +43,11 @@ export const runMonthEndPayout = async (req, res) => {
         // Find all secondary wallets with balance > 0
         const wallets = await SecondaryWallet.find({ balance: { $gt: 0 } }).lean();
 
-        // Get KYC details for all wallet owners
+        // Get KYC details for all wallet owners (MUST be verified)
         const userIds = wallets.map(w => w.userId);
         const kycDocs = await KycDetails.find({
             userId: { $in: userIds },
-            kycStatus: { $in: ['submitted', 'pending', 'verified'] },
+            kycStatus: 'verified',
         }).lean();
         const kycByUser = new Map(kycDocs.map(k => [k.userId.toString(), k]));
 
@@ -56,11 +56,11 @@ export const runMonthEndPayout = async (req, res) => {
         for (const wallet of wallets) {
             const kyc = kycByUser.get(wallet.userId.toString());
             
-            // Skip processing payout if KYC is missing, not submitted, or rejected
-            if (!kyc || kyc.kycStatus === 'rejected') {
+            // Skip processing payout if KYC is missing, pending, or not verified
+            if (!kyc || kyc.kycStatus !== 'verified') {
                 results.skippedNoKyc++;
                 results.skipped++;
-                console.log(`⏩ Skipping payout for wallet ${wallet._id} (User ${wallet.userId}): KYC missing or rejected`);
+                console.log(`⏩ Skipping payout for wallet ${wallet._id} (User ${wallet.userId}): KYC is not verified`);
                 continue;
             }
 
@@ -323,8 +323,8 @@ export const runSingleCreatorPayout = async (req, res) => {
         }
 
         const kyc = await KycDetails.findOne({ userId });
-        if (!kyc || kyc.kycStatus === 'rejected') {
-            return res.status(400).json({ error: "Creator KYC missing or rejected" });
+        if (!kyc || kyc.kycStatus !== 'verified') {
+            return res.status(400).json({ error: "Creator KYC is not verified. Payouts can only be initiated for KYC-verified creators." });
         }
 
         const now = new Date();
