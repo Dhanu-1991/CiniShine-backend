@@ -1115,7 +1115,17 @@ export const listPpvContent = async (req, res) => {
         const pageNum = Math.max(1, parseInt(page, 10));
         const limitNum = Math.max(1, parseInt(limit, 10));
 
-        const match = { isPayPerView: true };
+        const ppvMatchCondition = {
+            $or: [
+                { isPayPerView: true },
+                { visibility: 'pay_per_view' },
+                { ppvPrice: { $gt: 0 } },
+                { rentalPrice: { $gt: 0 } },
+                { price: { $gt: 0 } }
+            ]
+        };
+
+        let match = { ...ppvMatchCondition };
 
         // Search filter (video title/description or creator)
         if (search) {
@@ -1125,12 +1135,19 @@ export const listPpvContent = async (req, res) => {
             }).select('_id').lean();
             const creatorIds = creatorMatches.map(c => c._id);
 
-            match.$or = [
-                { title: regex },
-                { description: regex },
-                { tags: regex },
-                { userId: { $in: creatorIds } }
-            ];
+            match = {
+                $and: [
+                    ppvMatchCondition,
+                    {
+                        $or: [
+                            { title: regex },
+                            { description: regex },
+                            { tags: regex },
+                            { userId: { $in: creatorIds } }
+                        ]
+                    }
+                ]
+            };
         }
 
         // Aggregate PPV content with Purchase revenue and Creator details
@@ -1242,7 +1259,7 @@ export const listPpvContent = async (req, res) => {
 
         // Summary metrics across all PPV content
         const summaryAgg = await Content.aggregate([
-            { $match: { isPayPerView: true } },
+            { $match: ppvMatchCondition },
             {
                 $group: {
                     _id: null,

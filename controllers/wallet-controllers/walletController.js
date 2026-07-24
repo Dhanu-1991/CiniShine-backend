@@ -353,9 +353,16 @@ export const sendKycOtp = async (req, res) => {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-        const user = await User.findById(userId).select('email userName').lean();
-        if (!user || !user.email) {
+        const user = await User.findById(userId).select('email contact userName').lean();
+        const resolvedEmail = user?.email || (user?.contact && user.contact.includes('@') ? user.contact : null) || (req.body.email && req.body.email.includes('@') ? req.body.email.trim() : null);
+
+        if (!user || !resolvedEmail) {
             return res.status(400).json({ error: 'Registered user email not found' });
+        }
+
+        // Persist resolved email to user record if missing
+        if (!user.email && resolvedEmail) {
+            await User.findByIdAndUpdate(userId, { email: resolvedEmail });
         }
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -364,11 +371,11 @@ export const sendKycOtp = async (req, res) => {
             expiresAt: Date.now() + 10 * 60 * 1000,
         });
 
-        await sendOtpToEmail(user.email, otp);
+        await sendOtpToEmail(resolvedEmail, otp);
         return res.json({
             success: true,
-            message: `Verification OTP code sent to ${user.email}`,
-            email: user.email,
+            message: `Verification OTP code sent to ${resolvedEmail}`,
+            email: resolvedEmail,
         });
     } catch (err) {
         console.error('Error sending KYC OTP:', err);
