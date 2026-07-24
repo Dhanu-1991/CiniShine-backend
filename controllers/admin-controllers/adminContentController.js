@@ -432,17 +432,49 @@ export const getContentDetails = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid content ID' });
         }
 
-        const content = await Content.findById(id).populate('userId', 'userName contact channelName channelHandle profilePicture');
-        if (!content) {
+        const contentObj = await Content.findById(id).populate('userId', 'userName contact channelName channelHandle profilePicture channelPicture subscriberCount').lean();
+        if (!contentObj) {
             return res.status(404).json({ success: false, message: 'Content not found' });
         }
 
-        // Check if archived
+        const mediaKey = contentObj.processedKey || contentObj.originalKey;
+        const thumbKey = contentObj.thumbnailKey || contentObj.imageKey || contentObj.thumbnailUrl;
+
+        const views = Number(contentObj.viewsCount || contentObj.views || 0);
+        const watchSec = Number(contentObj.watchTime || contentObj.totalWatchTime || 0);
+        const durSec = Number(contentObj.duration || 0);
+
+        let completionRate = 0;
+        if (views > 0 && durSec > 0) {
+            completionRate = Math.min(100, Math.round((watchSec / (views * durSec)) * 100));
+        }
+
+        const creator = contentObj.userId ? {
+            _id: contentObj.userId._id,
+            userName: contentObj.userId.userName,
+            channelName: contentObj.userId.channelName,
+            channelHandle: contentObj.userId.channelHandle,
+            subscriberCount: contentObj.userId.subscriberCount || 0,
+            channelPicture: getCfUrl(contentObj.userId.channelPicture || contentObj.userId.profilePicture)
+        } : null;
+
+        const enrichedContent = {
+            ...contentObj,
+            viewsCount: views,
+            watchTime: watchSec,
+            completionRate,
+            ppvPrice: contentObj.ppvPrice || contentObj.price || contentObj.rentalPrice || 0,
+            thumbnailUrl: getCfUrl(thumbKey),
+            videoUrl: mediaKey ? getCfUrl(mediaKey) : null,
+            hlsMasterUrl: contentObj.hlsMasterKey ? getCfHlsMasterUrl(contentObj.hlsMasterKey) : null,
+            creator
+        };
+
         const archive = await ContentArchive.findOne({ content_id: id, permanently_deleted: false, restored_at: null });
 
         return res.status(200).json({
             success: true,
-            content,
+            content: enrichedContent,
             isArchived: !!archive,
             archive: archive || null
         });
