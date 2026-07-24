@@ -433,6 +433,12 @@ export const getContentDetails = async (req, res) => {
         }
 
         const contentObj = await Content.findById(id).populate('userId', 'userName contact channelName channelHandle profilePicture channelPicture subscriberCount').lean();
+        if (!contentObj) {
+            return res.status(404).json({ success: false, message: 'Content not found' });
+        }
+
+        const mediaKey = contentObj.processedKey || contentObj.originalKey || contentObj.videoKey || contentObj.mediaKey || contentObj.key;
+        const thumbKey = contentObj.thumbnailKey || contentObj.imageKey || contentObj.thumbnailUrl || contentObj.thumbnail;
 
         const views = Number(contentObj.viewsCount || contentObj.views || 0);
         const watchSec = Number(contentObj.watchTime || contentObj.totalWatchTime || 0);
