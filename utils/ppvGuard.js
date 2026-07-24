@@ -10,14 +10,37 @@
  */
 
 import Purchase from '../models/purchase.model.js';
+import Admin from '../models/admin.model.js';
+import User from '../models/user.model.js';
+
+/**
+ * Check if a userId belongs to an Admin or SuperAdmin
+ */
+export async function isAdminUser(userId) {
+    if (!userId) return false;
+    try {
+        const adminDoc = await Admin.findById(userId).lean();
+        if (adminDoc && (adminDoc.role === 'admin' || adminDoc.role === 'superadmin')) {
+            return true;
+        }
+        const userDoc = await User.findById(userId).select('role roles isAdmin').lean();
+        if (userDoc && (userDoc.role === 'admin' || userDoc.role === 'superadmin' || userDoc.isAdmin || userDoc.roles?.includes('Admin'))) {
+            return true;
+        }
+    } catch (e) {
+        /* silent catch */
+    }
+    return false;
+}
 
 /**
  * Check whether a user has active PPV access for a given content document.
  *
  * Returns `true` (access granted) if any of the following hold:
  *   1. Content is not pay_per_view (public, unlisted, private, etc.)
- *   2. The requesting user is the content creator
- *   3. The user has an active, non-expired Purchase record for this content
+ *   2. The requesting user is an Admin or SuperAdmin
+ *   3. The requesting user is the content creator
+ *   4. The user has an active, non-expired Purchase record for this content
  *
  * Returns `false` (access denied) otherwise.
  *
@@ -34,6 +57,11 @@ export async function hasPpvAccess(content, userId) {
     // Anonymous users can never access PPV content
     if (!userId) {
         return false;
+    }
+
+    // Admin / SuperAdmin bypass — full access to all PPV content
+    if (await isAdminUser(userId)) {
+        return true;
     }
 
     // Creator always has access to their own content
@@ -95,6 +123,11 @@ export async function batchCheckPpvAccess(items, userId) {
 
     // If no user, no access to any PPV item
     if (!userId) return new Set();
+
+    // Admin / SuperAdmin bypass — full access to all PPV items
+    if (await isAdminUser(userId)) {
+        return new Set(ppvItems.map(item => item._id.toString()));
+    }
 
     // Creator always has access to their own content
     const accessSet = new Set();

@@ -27,7 +27,8 @@ import { encryptBankDetails } from '../../utils/encryption.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import Content from '../../models/content.model.js';
-import Purchase from '../../models/purchase.model.js';
+import User from '../../models/user.model.js';
+import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
 import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import PaymentDetails from '../../models/payment.details.model.js';
 import { Cashfree, CFEnvironment } from 'cashfree-pg';
@@ -342,16 +343,85 @@ export const transferToWalletOne = async (req, res) => {
     }
 };
 
+const kycOtpStore = new Map();
+
+/**
+ * POST /wallets/kyc/send-otp — Send 6-digit verification OTP to user email
+ */
+export const sendKycOtp = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        const user = await User.findById(userId).select('email userName').lean();
+        if (!user || !user.email) {
+            return res.status(400).json({ error: 'Registered user email not found' });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        kycOtpStore.set(userId, {
+            otp,
+            expiresAt: Date.now() + 10 * 60 * 1000,
+        });
+
+        await sendOtpToEmail(user.email, otp);
+        return res.json({
+            success: true,
+            message: `Verification OTP code sent to ${user.email}`,
+            email: user.email,
+        });
+    } catch (err) {
+        console.error('Error sending KYC OTP:', err);
+        return res.status(500).json({ error: 'Failed to send verification OTP email' });
+    }
+};
+
+/**
+ * POST /wallets/kyc/verify-otp — Verify entered 6-digit OTP code
+ */
+export const verifyKycOtp = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        const { otp } = req.body;
+        if (!otp || String(otp).trim().length !== 6) {
+            return res.status(400).json({ error: 'Valid 6-digit OTP code is required' });
+        }
+
+        const stored = kycOtpStore.get(userId);
+        if (!stored || stored.expiresAt < Date.now()) {
+            return res.status(400).json({ error: 'OTP has expired or is invalid. Please request a new OTP.' });
+        }
+
+        if (stored.otp !== String(otp).trim()) {
+            return res.status(400).json({ error: 'Invalid OTP code. Please check your email.' });
+        }
+
+        // Grant 15-minute window for KYC submission
+        kycOtpStore.set(`verified_${userId}`, Date.now() + 15 * 60 * 1000);
+        kycOtpStore.delete(userId);
+
+        return res.json({ success: true, message: 'OTP verified successfully!' });
+    } catch (err) {
+        console.error('Error verifying KYC OTP:', err);
+        return res.status(500).json({ error: 'Failed to verify OTP' });
+    }
+};
+
 /**
  * POST /wallets/kyc — Submit or edit KYC details.
- *
- * DESIGN DECISION: Editing KYC after initial submission resets kycStatus
- * to 'pending' so admin can re-verify. This is flagged explicitly here.
  */
 export const submitKyc = async (req, res) => {
     try {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        // Enforce OTP Verification check
+        const verifiedUntil = kycOtpStore.get(`verified_${userId}`);
+        if (!verifiedUntil || verifiedUntil < Date.now()) {
+            return res.status(400).json({ error: 'Email OTP verification is required before submitting KYC details' });
+        }
 
         const { bankAccountNumber, bankName, ifscCode, accountHolderName, kycDocumentType, isGstHolder, gstNumber } = req.body;
 

@@ -34,8 +34,8 @@ const payPerViewAccess = async (req, res, next) => {
             return next();
         }
 
-        // Use the shared access check (creator check + purchase lookup)
-        const userId = req.user?.id || null;
+        // Use the shared access check (admin check + creator check + purchase lookup)
+        const userId = req.user?.id || req.admin?._id?.toString() || null;
         const hasAccess = await hasPpvAccess(content, userId);
 
         if (!hasAccess) {

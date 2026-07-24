@@ -538,7 +538,7 @@ export const getDailyPayoutStats = async (req, res) => {
 export const completePayoutSettlement = async (req, res) => {
     try {
         const { payoutId } = req.params;
-        const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName email');
+        const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle email');
         if (!payout) return res.status(404).json({ error: 'Payout record not found' });
         if (payout.status === 'completed') {
             return res.status(400).json({ error: 'Payout settlement is already marked as completed' });
@@ -549,8 +549,23 @@ export const completePayoutSettlement = async (req, res) => {
         await payout.save();
 
         if (payout.userId?.email) {
+            const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
+            let bankDetails = {};
+            if (kyc) {
+                const dec = decryptBankDetails(kyc);
+                bankDetails = {
+                    accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
+                    bankName: dec.bankName || payout.bankName || '',
+                    accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                    ifscCode: dec.ifscCode || '',
+                };
+            }
+
             sendAdminEmail('payoutCompleted', payout.userId.email, {
                 creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+                userName: payout.userId.userName || '',
+                userHandle: payout.userId.channelHandle || '',
+                gstin: kyc?.gstNumber || '',
                 netAmount: payout.netAmount,
                 grossAmount: payout.grossAmount,
                 payoutMonth: payout.payoutMonth,
@@ -561,6 +576,7 @@ export const completePayoutSettlement = async (req, res) => {
                 totalGstOnCommission: payout.totalGstOnCommission || 0,
                 totalTdsDeducted: payout.totalTdsDeducted || 0,
                 totalTcsDeducted: payout.totalTcsDeducted || 0,
+                bankDetails,
             }).catch(e => console.error('Completed payout email error:', e));
         }
 
@@ -585,7 +601,7 @@ export const completeBulkPayoutSettlement = async (req, res) => {
             query.payoutMonth = { $regex: new RegExp(`^${month}`) };
         }
 
-        const pendingPayouts = await Payout.find(query).populate('userId', 'userName channelName email');
+        const pendingPayouts = await Payout.find(query).populate('userId', 'userName channelName channelHandle email');
         if (pendingPayouts.length === 0) {
             return res.json({ success: true, message: 'No pending payout settlements found to complete', completedCount: 0 });
         }
@@ -598,8 +614,23 @@ export const completeBulkPayoutSettlement = async (req, res) => {
             completedCount++;
 
             if (payout.userId?.email) {
+                const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
+                let bankDetails = {};
+                if (kyc) {
+                    const dec = decryptBankDetails(kyc);
+                    bankDetails = {
+                        accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
+                        bankName: dec.bankName || payout.bankName || '',
+                        accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                        ifscCode: dec.ifscCode || '',
+                    };
+                }
+
                 sendAdminEmail('payoutCompleted', payout.userId.email, {
                     creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+                    userName: payout.userId.userName || '',
+                    userHandle: payout.userId.channelHandle || '',
+                    gstin: kyc?.gstNumber || '',
                     netAmount: payout.netAmount,
                     grossAmount: payout.grossAmount,
                     payoutMonth: payout.payoutMonth,
@@ -610,6 +641,7 @@ export const completeBulkPayoutSettlement = async (req, res) => {
                     totalGstOnCommission: payout.totalGstOnCommission || 0,
                     totalTdsDeducted: payout.totalTdsDeducted || 0,
                     totalTcsDeducted: payout.totalTcsDeducted || 0,
+                    bankDetails,
                 }).catch(e => console.error(`Bulk completed email error for ${payout._id}:`, e));
             }
         }

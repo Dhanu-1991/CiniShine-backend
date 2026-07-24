@@ -7,10 +7,13 @@ import {
     rechargeInit,
     transferToWalletOne,
     submitKyc,
+    sendKycOtp,
+    verifyKycOtp,
     purchasePpvWithWallet,
 } from '../../controllers/wallet-controllers/walletController.js';
 import { handleRechargeWebhook } from '../../controllers/wallet-controllers/rechargeWebhookController.js';
 import { runMonthEndPayout, getPayoutReport } from '../../controllers/wallet-controllers/payoutJobController.js';
+import { getCreatorEarnings } from '../../controllers/wallet-controllers/earningsController.js';
 
 import { adminTokenVerifier } from '../../middlewares/admin.middleware.js';
 
@@ -26,11 +29,15 @@ const kycUpload = multer({
     limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-// ── User wallet endpoints ──
+// ── User & Creator wallet endpoints ──
 walletRouter.get('/wallets', universalTokenVerifier, getMyWallets);
+walletRouter.get('/wallets/earnings', universalTokenVerifier, getCreatorEarnings);
+walletRouter.get('/wallets/earnings/:creatorId', universalTokenVerifier, getCreatorEarnings);
 walletRouter.get('/wallets/:walletId/transactions', universalTokenVerifier, getWalletTransactions);
 walletRouter.post('/wallets/recharge', universalTokenVerifier, rechargeInit);
 walletRouter.post('/wallets/transfer', universalTokenVerifier, transferToWalletOne);
+walletRouter.post('/wallets/kyc/send-otp', universalTokenVerifier, sendKycOtp);
+walletRouter.post('/wallets/kyc/verify-otp', universalTokenVerifier, verifyKycOtp);
 walletRouter.post('/wallets/kyc', universalTokenVerifier, kycUpload.fields([
     { name: 'kycDocument', maxCount: 1 },
     { name: 'gstCertificate', maxCount: 1 }

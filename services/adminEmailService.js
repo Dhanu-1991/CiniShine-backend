@@ -12,6 +12,7 @@
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { Resend } from "resend";
 import dotenv from "dotenv";
+import { generateSettlementPdf } from '../utils/pdfGenerator.js';
 
 dotenv.config();
 
@@ -20,12 +21,15 @@ const FROM_ADDRESS = process.env.EMAIL_USER || "no-reply@example.com";
 const PLATFORM_NAME = process.env.PLATFORM_NAME || "Watchinit";
 
 const ses = new SESClient({ region: REGION });
-const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const getResendClient = () => {
+    const key = process.env.RESEND_API_KEY;
+    return key ? new Resend(key) : null;
+};
 
 // ─── EMAIL TEMPLATES ──────────────────────────────────────────────────────
 
 const templates = {
-    contentRemoved: ({ creatorName, contentTitle, contentType, reason, adminName }) => ({
+    contentRemoved: ({ creatorName, contentTitle, contentType, reason }) => ({
         subject: `[${PLATFORM_NAME}] Your ${contentType || 'content'} has been removed`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -41,13 +45,13 @@ const templates = {
                         <p style="margin: 8px 0 0; color: #e0e0e0;">${reason}</p>
                     </div>` : ''}
                     <p>If you believe this action was taken in error, please contact our support team.</p>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME} moderation team${adminName ? ` (via ${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, your ${contentType || 'content'} "${contentTitle}" has been removed from ${PLATFORM_NAME}. ${reason ? `Reason: ${reason}` : ''}`
     }),
 
-    channelBanned: ({ creatorName, reason, adminName }) => ({
+    channelBanned: ({ creatorName, reason }) => ({
         subject: `[${PLATFORM_NAME}] Your channel has been suspended`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -68,13 +72,13 @@ const templates = {
                         <p style="margin: 8px 0 0; color: #e0e0e0;">${reason}</p>
                     </div>` : ''}
                     <p>If you believe this was an error, please reach out to our support team with your account details.</p>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME} moderation team${adminName ? ` (via ${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, your channel on ${PLATFORM_NAME} has been suspended. ${reason ? `Reason: ${reason}` : ''} Contact support if you believe this is an error.`
     }),
 
-    channelUnbanned: ({ creatorName, adminName }) => ({
+    channelUnbanned: ({ creatorName }) => ({
         subject: `[${PLATFORM_NAME}] Your channel has been reinstated`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -91,13 +95,13 @@ const templates = {
                         <li>Interact with your audience</li>
                     </ul>
                     <p>Thank you for your patience and we look forward to seeing your content.</p>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME}${adminName ? ` (via ${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, your channel on ${PLATFORM_NAME} has been reinstated. You can now upload and interact again.`
     }),
 
-    warning: ({ creatorName, warningMessage, adminName }) => ({
+    warning: ({ creatorName, warningMessage }) => ({
         subject: `[${PLATFORM_NAME}] Important notice about your account`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -111,13 +115,13 @@ const templates = {
                         <p style="margin: 0; color: #e0e0e0;">${warningMessage}</p>
                     </div>
                     <p>Please review our community guidelines and ensure your content complies with our policies.</p>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">From ${PLATFORM_NAME} moderation team${adminName ? ` (${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">From Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, ${warningMessage}`
     }),
 
-    kycApproved: ({ creatorName, adminName }) => ({
+    kycApproved: ({ creatorName }) => ({
         subject: `[${PLATFORM_NAME}] KYC Verification Successful`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -129,13 +133,13 @@ const templates = {
                     <p>Hi <strong>${creatorName}</strong>,</p>
                     <p>Great news! Your KYC details have been successfully verified by our team. Your wallet is now fully approved for payouts and monetization features.</p>
                     <p>Thank you for submitting your details!</p>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME}${adminName ? ` (via ${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, your KYC details have been successfully verified! Your wallet is now fully approved.`
     }),
 
-    kycRejected: ({ creatorName, rejectionReason, adminName }) => ({
+    kycRejected: ({ creatorName, rejectionReason }) => ({
         subject: `[${PLATFORM_NAME}] Action Required: KYC Verification Failed`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -151,13 +155,13 @@ const templates = {
                         <p style="margin: 8px 0 0; color: #e0e0e0;">${rejectionReason}</p>
                     </div>
                     <p>Please log in to your dashboard and update your KYC details to ensure uninterrupted monetization and payouts.</p>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME} moderation team${adminName ? ` (via ${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, your KYC verification failed. Reason: ${rejectionReason}. Please log in and update your details.`
     }),
 
-    custom: ({ creatorName, subject: customSubject, body, adminName }) => ({
+    custom: ({ creatorName, subject: customSubject, body }) => ({
         subject: customSubject || `[${PLATFORM_NAME}] Message from the team`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -167,13 +171,13 @@ const templates = {
                 <div style="padding: 32px;">
                     <p>Hi <strong>${creatorName}</strong>,</p>
                     <div style="line-height: 1.6;">${body.replace(/\n/g, '<br>')}</div>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">From ${PLATFORM_NAME} team${adminName ? ` (${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">From Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, ${body}`
     }),
 
-    payoutInitiated: ({ creatorName, netAmount, grossAmount, payoutMonth, adminName }) => ({
+    payoutInitiated: ({ creatorName, netAmount, grossAmount, payoutMonth }) => ({
         subject: `[${PLATFORM_NAME}] Payout Initiated: ₹${netAmount}`,
         html: `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
@@ -189,47 +193,36 @@ const templates = {
                         <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Gross Balance Cleared: ₹${grossAmount}</p>
                     </div>
                     <p>Your amount will be credited to your bank account within 24 hours.</p>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from ${PLATFORM_NAME} team${adminName ? ` (${adminName})` : ''}.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
         text: `Hi ${creatorName}, your payout of ₹${netAmount} for ${payoutMonth} has been initiated and will be credited within 24 hours.`
     }),
 
-    payoutCompleted: ({ creatorName, netAmount, grossAmount, payoutMonth, totalSellingPrice, totalBasePrice, totalGstCollected, totalPlatformCommission, totalGstOnCommission, totalTdsDeducted, totalTcsDeducted }) => ({
-        subject: `[${PLATFORM_NAME}] Settlement Completed & Tax Invoice: ₹${netAmount}`,
+    payoutCompleted: ({ creatorName, userName, payoutMonth }) => ({
+        subject: `[${PLATFORM_NAME}] Payout Settlement Processed: ${payoutMonth}`,
         html: `
-            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 650px; margin: 0 auto; background: #111827; color: #e5e7eb; border-radius: 16px; overflow: hidden; border: 1px solid #374151;">
-                <div style="background: linear-gradient(135deg, #10b981 0%, #047857 100%); padding: 28px 36px;">
-                    <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800;">${PLATFORM_NAME} OFFICIAL SETTLEMENT INVOICE</h1>
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #111827; color: #e5e7eb; border-radius: 16px; overflow: hidden; border: 1px solid #374151;">
+                <div style="background: linear-gradient(135deg, #10b981 0%, #047857 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px; font-weight: 800;">${PLATFORM_NAME} OFFICIAL SETTLEMENT</h1>
                 </div>
                 <div style="padding: 32px;">
-                    <h2 style="color: #34d399; margin-top: 0;">Bank Transfer Completed Successfully</h2>
-                    <p>Dear <strong>${creatorName}</strong>,</p>
-                    <p>We are pleased to inform you that your payout settlement for <strong>${payoutMonth}</strong> has been successfully processed and transferred to your bank account.</p>
-                    
-                    <div style="background: #1f2937; border: 1px solid #374151; padding: 20px; border-radius: 12px; margin: 20px 0;">
-                        <h3 style="color: #fbbf24; margin-top: 0; border-bottom: 1px solid #374151; padding-bottom: 8px;">Detailed Revenue & Tax Settlement Breakup</h3>
-                        <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #d1d5db;">
-                            <tr><td style="padding: 6px 0;">Gross Sales (GST Incl.):</td><td style="text-align: right; font-weight: bold; color: white;">₹${Number(totalSellingPrice || grossAmount).toFixed(2)}</td></tr>
-                            <tr><td style="padding: 6px 0; color: #9ca3af;">Base Price (excl. GST):</td><td style="text-align: right;">₹${Number(totalBasePrice || 0).toFixed(2)}</td></tr>
-                            <tr><td style="padding: 6px 0; color: #9ca3af;">GST Collected on Base Price (18%):</td><td style="text-align: right;">₹${Number(totalGstCollected || 0).toFixed(2)}</td></tr>
-                            <tr><td style="padding: 6px 0; color: #c084fc;">Platform Commission (32%):</td><td style="text-align: right; color: #c084fc;">−₹${Number(totalPlatformCommission || 0).toFixed(2)}</td></tr>
-                            <tr><td style="padding: 6px 0; color: #c084fc;">GST on Commission (18%):</td><td style="text-align: right; color: #c084fc;">−₹${Number(totalGstOnCommission || 0).toFixed(2)}</td></tr>
-                            <tr><td style="padding: 6px 0; color: #f87171;">TDS Deducted (0.1%):</td><td style="text-align: right; color: #f87171;">−₹${Number(totalTdsDeducted || 0).toFixed(2)}</td></tr>
-                            <tr><td style="padding: 6px 0; color: #f87171;">TCS Deducted (1%):</td><td style="text-align: right; color: #f87171;">−₹${Number(totalTcsDeducted || 0).toFixed(2)}</td></tr>
-                            <tr style="border-top: 2px solid #374151; font-weight: bold; font-size: 16px;"><td style="padding: 12px 0; color: #34d399;">Net Amount Transferred:</td><td style="text-align: right; color: #34d399;">₹${Number(netAmount).toFixed(2)}</td></tr>
-                        </table>
-                    </div>
-                    
-                    <p style="color: #9ca3af; font-size: 13px; line-height: 1.6;">
-                        Note: GST collected from buyers is subject to creator self-filing. TDS and TCS credits will reflect in your Form 26AS / AIS on the Income Tax Portal.
+                    <h2 style="color: #34d399; margin-top: 0;">Payout Settlement Processed</h2>
+                    <p style="font-size: 15px; color: #e5e7eb;">Dear <strong>${creatorName || userName || 'Creator'}</strong>,</p>
+                    <p style="font-size: 15px; color: #d1d5db; line-height: 1.6;">
+                        Your payouts for <strong>${payoutMonth}</strong> have been processed. Please find the details in the attached PDF invoice below.
                     </p>
-                    <p style="color: #6b7280; font-size: 12px; margin-top: 28px; border-top: 1px solid #374151; padding-top: 16px;">
-                        This is an official automated financial settlement document from ${PLATFORM_NAME} Technologies Private Limited.
+                    <div style="background: #1f2937; border: 1px solid #374151; padding: 14px 18px; border-radius: 10px; margin: 20px 0;">
+                        <p style="margin: 0; font-size: 13px; color: #34d399; font-weight: 600;">
+                            📎 Attached File: Tax_Invoice_${payoutMonth}.pdf
+                        </p>
+                    </div>
+                    <p style="color: #6b7280; font-size: 12px; margin-top: 24px; border-top: 1px solid #374151; padding-top: 16px;">
+                        This is an official automated notification from ${PLATFORM_NAME} Technologies Private Limited.
                     </p>
                 </div>
             </div>`,
-        text: `Dear ${creatorName}, your payout of ₹${netAmount} for ${payoutMonth} has been completed. Gross Sales: ₹${totalSellingPrice || grossAmount}. Net Transferred: ₹${netAmount}.`
+        text: `Dear ${creatorName || userName || 'Creator'}, your payouts for ${payoutMonth} have been processed. Please find the details in the attached PDF invoice below.`
     }),
 };
 
@@ -250,61 +243,81 @@ export const QUICK_TEMPLATES = [
  * @param {string} subject — email subject
  * @param {string} html — HTML email body
  * @param {string} [text] — plain text fallback
+ * @param {Array} [attachments] — array of attachment objects
  * @returns {Promise<boolean>} — true if sent successfully
  */
-async function sendEmail(to, subject, html, text) {
+async function sendEmail(to, subject, html, text, attachments = []) {
     if (!to) {
         console.error('[AdminEmail] No recipient email provided');
         return false;
     }
 
+    const defaultFrom = process.env.RESEND_FROM || (FROM_ADDRESS && !FROM_ADDRESS.includes('example.com') ? FROM_ADDRESS : 'Watchinit <onboarding@resend.dev>');
+    const resendClient = getResendClient();
+
     // Prefer Resend
     if (resendClient) {
         try {
-            const resp = await resendClient.emails.send({
-                from: process.env.RESEND_FROM || FROM_ADDRESS,
+            const options = {
+                from: defaultFrom,
                 to,
                 subject,
                 html,
                 ...(text ? { text } : {}),
-            });
+                ...(attachments && attachments.length > 0 ? { attachments } : {}),
+            };
+            const resp = await resendClient.emails.send(options);
+            console.log('[AdminEmail] Resend send response:', JSON.stringify(resp));
             const succeeded = Boolean(resp && (resp.id || resp.messageId || resp.data?.id));
             if (succeeded) {
                 console.log(`[AdminEmail] Sent via Resend to ${to}: "${subject}"`);
                 return true;
             }
-            console.error('[AdminEmail] Resend did not return an id:', resp);
         } catch (err) {
-            console.error('[AdminEmail] Resend error:', err.message);
-            if (err?.message?.includes('domain is not verified') || err?.message?.includes('validation_error')) {
-                return false;
+            console.error('[AdminEmail] Resend primary error:', err.message || err);
+            // If custom sender domain is not verified, attempt send using onboarding@resend.dev
+            if (defaultFrom !== 'Watchinit <onboarding@resend.dev>') {
+                try {
+                    const fallbackOptions = {
+                        from: 'Watchinit <onboarding@resend.dev>',
+                        to,
+                        subject,
+                        html,
+                        ...(text ? { text } : {}),
+                        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+                    };
+                    const fbResp = await resendClient.emails.send(fallbackOptions);
+                    console.log('[AdminEmail] Resend fallback send response:', JSON.stringify(fbResp));
+                    const succeeded = Boolean(fbResp && (fbResp.id || fbResp.messageId || fbResp.data?.id));
+                    if (succeeded) {
+                        console.log(`[AdminEmail] Sent via Resend fallback to ${to}: "${subject}"`);
+                        return true;
+                    }
+                } catch (fallbackErr) {
+                    console.error('[AdminEmail] Resend fallback error:', fallbackErr.message || fallbackErr);
+                }
             }
-            // Fall through to SES
         }
     }
 
-    // Fallback to SES
+    // SES Fallback
     try {
-        const params = {
+        const command = new SendEmailCommand({
+            Source: FROM_ADDRESS,
             Destination: { ToAddresses: [to] },
             Message: {
+                Subject: { Data: subject, Charset: "UTF-8" },
                 Body: {
-                    Html: { Charset: "UTF-8", Data: html },
-                    ...(text ? { Text: { Charset: "UTF-8", Data: text } } : {}),
+                    Html: { Data: html, Charset: "UTF-8" },
+                    ...(text ? { Text: { Data: text, Charset: "UTF-8" } } : {}),
                 },
-                Subject: { Charset: "UTF-8", Data: subject },
             },
-            Source: FROM_ADDRESS,
-        };
-        const response = await ses.send(new SendEmailCommand(params));
-        if (response?.MessageId) {
-            console.log(`[AdminEmail] Sent via SES to ${to}: "${subject}"`);
-            return true;
-        }
-        console.error('[AdminEmail] SES no MessageId');
-        return false;
-    } catch (error) {
-        console.error('[AdminEmail] SES error:', error.message);
+        });
+        await ses.send(command);
+        console.log(`[AdminEmail] Sent via SES to ${to}: "${subject}"`);
+        return true;
+    } catch (err) {
+        console.error(`[AdminEmail] Failed to send email to ${to}:`, err.message || err);
         return false;
     }
 }
@@ -313,7 +326,7 @@ async function sendEmail(to, subject, html, text) {
 
 /**
  * Send a templated email to a creator.
- * @param {string} templateName — one of: contentRemoved, channelBanned, channelUnbanned, warning, custom
+ * @param {string} templateName — one of: contentRemoved, channelBanned, channelUnbanned, warning, custom, payoutInitiated, payoutCompleted
  * @param {string} recipientEmail — creator's email address
  * @param {Object} data — template data (creatorName, reason, contentTitle, etc.)
  * @returns {Promise<boolean>}
@@ -326,7 +339,44 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
     }
 
     const { subject, html, text } = templateFn(data);
-    return sendEmail(recipientEmail, subject, html, text);
+    let attachments = [];
+
+    // If sending completed payout settlement email, generate PDF, upload to AWS S3, and attach!
+    if (templateName === 'payoutCompleted') {
+        try {
+            const pdfBuffer = await generateSettlementPdf(data);
+            
+            // Save generated PDF to AWS S3 before dispatch
+            const s3Bucket = process.env.S3_BUCKET;
+            if (s3Bucket) {
+                try {
+                    const s3Key = `settlement-invoices/${data.payoutMonth || 'general'}/${data.userId || data.creatorId || 'creator'}_Tax_Invoice_${Date.now()}.pdf`;
+                    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+                    const { S3Client } = await import('@aws-sdk/client-s3');
+                    const s3Client = new S3Client({ region: REGION });
+                    await s3Client.send(new PutObjectCommand({
+                        Bucket: s3Bucket,
+                        Key: s3Key,
+                        Body: pdfBuffer,
+                        ContentType: 'application/pdf',
+                        ServerSideEncryption: 'AES256',
+                    }));
+                    console.log(`[AdminEmail] Saved generated PDF invoice to AWS S3: s3://${s3Bucket}/${s3Key}`);
+                } catch (s3Err) {
+                    console.error('[AdminEmail] AWS S3 PDF save warning:', s3Err.message || s3Err);
+                }
+            }
+
+            attachments.push({
+                filename: `Tax_Invoice_${data.payoutMonth || 'Settlement'}.pdf`,
+                content: pdfBuffer,
+            });
+        } catch (pdfErr) {
+            console.error('[AdminEmail] PDF generation error:', pdfErr);
+        }
+    }
+
+    return sendEmail(recipientEmail, subject, html, text, attachments);
 }
 
 /**

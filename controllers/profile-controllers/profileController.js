@@ -18,6 +18,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import ContentView from '../../models/contentView.model.js';
 import Purchase from '../../models/purchase.model.js';
+import { isAdminUser } from '../../utils/ppvGuard.js';
 import { PLATFORM_CUT_PERCENT } from '../../utils/paymentFulfillmentService.js';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
@@ -32,17 +33,28 @@ const s3Client = new S3Client({
 
 /**
  * Get creator's own content with engagement stats
- * Query: type (video|short|audio|post), sort (popular|latest), page, limit, search
+ * Query: type (video|short|audio|post), sort (popular|latest), page, limit, search, creatorId
  */
 export const getMyContent = async (req, res) => {
     try {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
+        let targetUserId = userId;
+        const requestedCreatorId = req.query.creatorId;
+        if (requestedCreatorId && requestedCreatorId !== userId) {
+            const isAdmin = await isAdminUser(userId);
+            if (isAdmin) {
+                targetUserId = requestedCreatorId;
+            } else {
+                return res.status(403).json({ error: 'Permission denied to view creator studio' });
+            }
+        }
+
         const { type, sort = 'latest', page = 1, limit = 12, search } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const query = { userId };
+        const query = { userId: targetUserId };
         if (type === 'ppv') {
             query.visibility = 'pay_per_view';
         } else if (type && ['video', 'short', 'audio', 'post'].includes(type)) {
@@ -578,7 +590,8 @@ export const getContentAnalytics = async (req, res) => {
 
         const content = await Content.findById(id).lean();
         if (!content) return res.status(404).json({ error: 'Content not found' });
-        if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
+        const isAdmin = await isAdminUser(userId);
+        if (!isAdmin && content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
         const isPpv = content.visibility === 'pay_per_view';
 
