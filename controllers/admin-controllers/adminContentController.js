@@ -13,7 +13,7 @@ import VideoReaction from '../../models/videoReaction.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import Payout from '../../models/payout.model.js';
-import { getCfUrl } from '../../config/cloudfront.js';
+import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
