@@ -165,9 +165,10 @@ export const runMonthEndPayout = async (req, res) => {
                     results.processed++;
 
                     // Send email notification to creator
-                    const user = await User.findById(freshWallet.userId).select('email userName channelName').lean();
-                    if (user?.email) {
-                        sendAdminEmail('payoutInitiated', user.email, {
+                    const user = await User.findById(freshWallet.userId).select('contact email userName channelName').lean();
+                    const creatorEmail = user?.contact || user?.email;
+                    if (creatorEmail) {
+                        sendAdminEmail('payoutInitiated', creatorEmail, {
                             creatorName: user.channelName || user.userName || 'Creator',
                             netAmount,
                             grossAmount,
@@ -210,7 +211,7 @@ export const getPayoutReport = async (req, res) => {
         }
 
         const payouts = await Payout.find({ payoutMonth: month })
-            .populate('userId', 'userName channelName contact')
+            .populate('userId', 'userName channelName contact email')
             .sort({ createdAt: -1 })
             .lean();
 
@@ -413,9 +414,10 @@ export const runSingleCreatorPayout = async (req, res) => {
             });
 
             // Send notification email to creator
-            const user = await User.findById(userId).select('email userName channelName').lean();
-            if (user?.email) {
-                sendAdminEmail('payoutInitiated', user.email, {
+            const user = await User.findById(userId).select('contact email userName channelName').lean();
+            const creatorEmail = user?.contact || user?.email;
+            if (creatorEmail) {
+                sendAdminEmail('payoutInitiated', creatorEmail, {
                     creatorName: user.channelName || user.userName || 'Creator',
                     netAmount: createdPayout.netAmount,
                     grossAmount: createdPayout.grossAmount,
@@ -538,7 +540,7 @@ export const getDailyPayoutStats = async (req, res) => {
 export const completePayoutSettlement = async (req, res) => {
     try {
         const { payoutId } = req.params;
-        const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle email');
+        const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle contact email');
         if (!payout) return res.status(404).json({ error: 'Payout record not found' });
         if (payout.status === 'completed') {
             return res.status(400).json({ error: 'Payout settlement is already marked as completed' });
@@ -548,7 +550,8 @@ export const completePayoutSettlement = async (req, res) => {
         payout.completedAt = new Date();
         await payout.save();
 
-        if (payout.userId?.email) {
+        const creatorEmail = payout.userId?.contact || payout.userId?.email;
+        if (creatorEmail) {
             const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
             let bankDetails = {};
             if (kyc) {
@@ -601,7 +604,7 @@ export const completeBulkPayoutSettlement = async (req, res) => {
             query.payoutMonth = { $regex: new RegExp(`^${month}`) };
         }
 
-        const pendingPayouts = await Payout.find(query).populate('userId', 'userName channelName channelHandle email');
+        const pendingPayouts = await Payout.find(query).populate('userId', 'userName channelName channelHandle contact email');
         if (pendingPayouts.length === 0) {
             return res.json({ success: true, message: 'No pending payout settlements found to complete', completedCount: 0 });
         }
@@ -613,7 +616,8 @@ export const completeBulkPayoutSettlement = async (req, res) => {
             await payout.save();
             completedCount++;
 
-            if (payout.userId?.email) {
+            const creatorEmail = payout.userId?.contact || payout.userId?.email;
+            if (creatorEmail) {
                 const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
                 let bankDetails = {};
                 if (kyc) {
