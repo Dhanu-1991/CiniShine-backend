@@ -34,6 +34,7 @@ import {
 import {
     getPayoutReport, runMonthEndPayout, getDailyPayoutStats, runSingleCreatorPayout, completePayoutSettlement, completeBulkPayoutSettlement
 } from '../../controllers/wallet-controllers/payoutJobController.js';
+import { getCreatorEarnings } from '../../controllers/wallet-controllers/earningsController.js';
 import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
@@ -81,10 +82,11 @@ adminRouter.delete('/content/:id', deleteContent);
 // Archive
 adminRouter.get('/archive', listArchive);
 
-// Creator analytics & search
+// Creator analytics, earnings & search
 adminRouter.get('/creator/:id/analytics', getCreatorAnalytics);
 adminRouter.get('/creator/:id/profile', getCreatorProfile);
 adminRouter.get('/creator/:id/studio', getCreatorStudio);
+adminRouter.get('/creator/:creatorId/earnings', getCreatorEarnings);
 adminRouter.get('/search/creators', searchCreators);
 
 // Admin chat with creators

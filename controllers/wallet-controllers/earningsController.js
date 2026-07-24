@@ -10,15 +10,16 @@ import { isAdminUser } from '../../utils/ppvGuard.js';
  */
 export const getCreatorEarnings = async (req, res) => {
     try {
-        const userId = req.user?.id || req.admin?._id?.toString();
-        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+        const userId = req.user?.id || req.admin?._id?.toString() || req.admin?.id;
+        const isAdmin = Boolean(req.admin) || (userId ? await isAdminUser(userId) : false);
+
+        if (!userId && !isAdmin) return res.status(401).json({ error: 'Authentication required' });
 
         let targetCreatorId = userId;
         const paramCreatorId = req.params.creatorId || req.query.creatorId;
 
-        if (paramCreatorId && paramCreatorId !== userId) {
-            const isAdmin = await isAdminUser(userId);
-            if (isAdmin) {
+        if (paramCreatorId) {
+            if (isAdmin || paramCreatorId === userId) {
                 targetCreatorId = paramCreatorId;
             } else {
                 return res.status(403).json({ error: 'Permission denied' });
@@ -35,6 +36,19 @@ export const getCreatorEarnings = async (req, res) => {
 
         if (contentIds.length === 0) {
             const currentMonthStr = new Date().toISOString().substring(0, 7);
+            const emptyMonths = [];
+            const nowObj = new Date();
+            for (let i = 0; i < 12; i++) {
+                const pastDate = new Date(Date.UTC(nowObj.getUTCFullYear(), nowObj.getUTCMonth() - i, 1));
+                const yyyy = pastDate.getUTCFullYear();
+                const mm = String(pastDate.getUTCMonth() + 1).padStart(2, '0');
+                const mVal = `${yyyy}-${mm}`;
+                emptyMonths.push({
+                    value: mVal,
+                    label: pastDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+                });
+            }
+
             return res.json({
                 creatorId: targetCreatorId,
                 lifetime: {
@@ -58,10 +72,7 @@ export const getCreatorEarnings = async (req, res) => {
                     tdsDeducted: 0,
                     tcsDeducted: 0,
                 },
-                availableMonths: [{
-                    value: currentMonthStr,
-                    label: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-                }]
+                availableMonths: emptyMonths
             });
         }
 
@@ -142,6 +153,25 @@ export const getCreatorEarnings = async (req, res) => {
 
         const availableMonthStrings = new Set([currentMonthStr]);
         monthDates.forEach(m => { if (m._id) availableMonthStrings.add(m._id); });
+
+        // Dynamically populate all months of current year + past 12 consecutive months
+        const nowObj = new Date();
+        const currentYear = nowObj.getUTCFullYear();
+        const currentMonthIdx = nowObj.getUTCMonth();
+
+        // 1. All months of current year (Jan..Current)
+        for (let m = 0; m <= currentMonthIdx; m++) {
+            const mm = String(m + 1).padStart(2, '0');
+            availableMonthStrings.add(`${currentYear}-${mm}`);
+        }
+
+        // 2. Past 12 consecutive months
+        for (let i = 0; i < 12; i++) {
+            const pastDate = new Date(Date.UTC(currentYear, currentMonthIdx - i, 1));
+            const yyyy = pastDate.getUTCFullYear();
+            const mm = String(pastDate.getUTCMonth() + 1).padStart(2, '0');
+            availableMonthStrings.add(`${yyyy}-${mm}`);
+        }
 
         const availableMonths = Array.from(availableMonthStrings).sort().reverse().map(mVal => {
             const [y, m] = mVal.split('-');
