@@ -97,10 +97,10 @@ export const multipartInit = async (req, res) => {
             return res.status(400).json({ error: metadataError });
         }
 
-        // Validate file size (max 5GB)
-        const maxSize = 5 * 1024 * 1024 * 1024; // 5GB
+        // Validate file size (max 20GB)
+        const maxSize = 20 * 1024 * 1024 * 1024; // 20GB
         if (fileSize > maxSize) {
-            return res.status(400).json({ error: "File size exceeds 5GB limit" });
+            return res.status(400).json({ error: "File size exceeds 20GB limit" });
         }
 
         // Validate PPV price
@@ -153,6 +153,7 @@ export const multipartInit = async (req, res) => {
             commentsEnabled: commentsEnabled !== false,
             selectedRoles: selectedRoles || [],
             originalKey: key,
+            fileSize: fileSize,
             mimeType: fileType,
             userId,
             status: "uploading",
@@ -168,11 +169,17 @@ export const multipartInit = async (req, res) => {
         const multipartUpload = await s3Client.send(createCommand);
         const uploadId = multipartUpload.UploadId;
 
-        // Calculate number of parts
-        const partSize = Math.max(MIN_PART_SIZE, Math.ceil(fileSize / 100)); // At least 10MB, max 100 parts
+        // Calculate optimal part size (dynamic for up to 20GB)
+        let targetPartSize = MIN_PART_SIZE; // 10MB base
+        if (fileSize > 5 * 1024 * 1024 * 1024) {
+            targetPartSize = 32 * 1024 * 1024; // 32MB chunks for > 5GB
+        } else if (fileSize > 1 * 1024 * 1024 * 1024) {
+            targetPartSize = 20 * 1024 * 1024; // 20MB chunks for > 1GB
+        }
+        const partSize = Math.max(targetPartSize, Math.ceil(fileSize / 1000));
         const numParts = Math.ceil(fileSize / partSize);
 
-        // Generate presigned URLs for all parts in parallel
+        // Generate presigned URLs for all parts in parallel (valid for 4 hours)
         const urlPromises = [];
         for (let partNumber = 1; partNumber <= numParts; partNumber++) {
             const uploadPartCommand = new UploadPartCommand({
@@ -182,7 +189,7 @@ export const multipartInit = async (req, res) => {
                 PartNumber: partNumber,
             });
             urlPromises.push(
-                getSignedUrl(s3Client, uploadPartCommand, { expiresIn: 7200 }).then((url) => ({
+                getSignedUrl(s3Client, uploadPartCommand, { expiresIn: 14400 }).then((url) => ({
                     partNumber,
                     url,
                 }))
@@ -191,8 +198,9 @@ export const multipartInit = async (req, res) => {
 
         const presignedUrls = await Promise.all(urlPromises);
 
+        const fileSizeGB = (fileSize / (1024 * 1024 * 1024)).toFixed(2);
         console.log(
-            `📤 Multipart upload initialized: ${fileId}, parts: ${numParts}, partSize: ${(partSize / 1024 / 1024).toFixed(1)}MB`
+            `📤 [TRACKING] Multipart upload initialized: ID=${fileId}, User=${userId}, Size=${fileSize} bytes (${fileSizeGB} GB), parts=${numParts}, partSize=${(partSize / 1024 / 1024).toFixed(1)}MB`
         );
 
         res.json({
@@ -226,7 +234,7 @@ export const multipartComplete = async (req, res) => {
             return res.status(400).json({ error: "Invalid file ID" });
         }
 
-        const existingContent = await Content.findById(fileId).select("title description userId");
+        const existingContent = await Content.findById(fileId).select("title description userId fileSize createdAt");
         if (!existingContent) {
             return res.status(404).json({ error: "Content not found" });
         }
@@ -253,12 +261,18 @@ export const multipartComplete = async (req, res) => {
         // Determine status based on content type
         const isVideo = contentType === "video";
         const status = isVideo ? "processing" : "completed";
+        const now = new Date();
+        const uploadDurationSeconds = Math.max(1, Math.round((now - new Date(existingContent.createdAt)) / 1000));
+        const totalSize = fileSize || existingContent.fileSize || 0;
+        const totalGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
+        const avgSpeedMBps = totalSize > 0 ? (totalSize / (1024 * 1024) / uploadDurationSeconds).toFixed(2) : "0.00";
 
         // Update content document
         const updateData = {
             status,
-            "sizes.original": fileSize,
-            processingStart: new Date(),
+            fileSize: totalSize,
+            "sizes.original": totalSize,
+            processingStart: now,
         };
 
         if (title !== undefined || description !== undefined) {
@@ -308,7 +322,7 @@ export const multipartComplete = async (req, res) => {
                 console.error('Community linking error:', communityErr.message);
             }
         }
-        console.log(`✅ Multipart upload completed: ${fileId} (${sortedParts.length} parts)`);
+        console.log(`✅ [TRACKING] Multipart upload completed: ID=${fileId}, Parts=${sortedParts.length}, Size=${totalSize} bytes (${totalGB} GB), UploadDuration=${uploadDurationSeconds}s, AvgSpeed=${avgSpeedMBps} MB/s`);
 
         res.json({
             success: true,

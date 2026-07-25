@@ -91,7 +91,10 @@ export async function creditWallet(walletId, walletType, amount, type, meta, ide
 
     // Check idempotency — if this key already exists, return the existing transaction
     const existing = await WalletTransaction.findOne({ idempotencyKey }).session(session);
-    if (existing) return existing;
+    if (existing) {
+        console.log(`[CREDIT_WALLET] [IDEMPOTENT_SKIP] Key '${idempotencyKey}' already processed.`);
+        return existing;
+    }
 
     // Resolve the right model
     const WalletModel = walletType === 'secondary' ? SecondaryWallet : PrimaryWallet;
@@ -120,6 +123,7 @@ export async function creditWallet(walletId, walletType, amount, type, meta, ide
         idempotencyKey,
     }], { session });
 
+    console.log(`[CREDIT_WALLET] SUCCESS | Type: ${type} | Wallet: ${walletType} (${walletId}) | Amount: +₹${amount} | New Balance: ₹${wallet.balance} | TxnID: ${txn._id}`);
     return txn;
 }
 
@@ -132,7 +136,10 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
 
     // Check idempotency
     const existing = await WalletTransaction.findOne({ idempotencyKey }).session(session);
-    if (existing) return existing;
+    if (existing) {
+        console.log(`[DEBIT_WALLET] [IDEMPOTENT_SKIP] Key '${idempotencyKey}' already processed.`);
+        return existing;
+    }
 
     const WalletModel = walletType === 'secondary' ? SecondaryWallet : PrimaryWallet;
 
@@ -143,6 +150,7 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
         { new: true, session }
     );
     if (!wallet) {
+        console.error(`[DEBIT_WALLET] FAILED | Wallet ${walletId} (${walletType}) has insufficient balance for ₹${amount}`);
         throw new Error('Insufficient wallet balance');
     }
 
@@ -162,6 +170,7 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
         idempotencyKey,
     }], { session });
 
+    console.log(`[DEBIT_WALLET] SUCCESS | Type: ${type} | Wallet: ${walletType} (${walletId}) | Amount: -₹${amount} | New Balance: ₹${wallet.balance} | TxnID: ${txn._id}`);
     return txn;
 }
 
@@ -180,9 +189,14 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
  * @returns {{ purchase, buyerTxn, creatorTxn, creatorAmount, platformAmount }}
  */
 export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, amount) {
+    console.log(`\n=================== [PPV_PURCHASE_WALLET_INIT] ===================`);
+    console.log(`Buyer: ${buyerUserId} | Creator: ${creatorUserId} | Content: ${contentId} | Price: ₹${amount}`);
+
     const tax = calculateTaxBreakdown(amount);
     const creatorAmount = tax.creatorPayout;
     const platformAmount = Number((amount - creatorAmount).toFixed(2));
+
+    console.log(`[PPV_TAX_BREAKDOWN] Base: ₹${tax.basePrice} | GST: ₹${tax.gstAmount} | Platform Comm: ₹${tax.platformCommission} | GST on Comm: ₹${tax.gstOnCommission} | TDS: ₹${tax.tdsAmount} | TCS: ₹${tax.tcsAmount} | Creator Net Payout: ₹${creatorAmount}`);
 
     const session = await mongoose.startSession();
     try {
@@ -196,6 +210,7 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
             // Find or create creator's secondary wallet
             let creatorWallet = await SecondaryWallet.findOne({ userId: creatorUserId }).session(session);
             if (!creatorWallet) {
+                console.log(`[PPV_PURCHASE_WALLET] Creating Secondary Wallet for Creator ${creatorUserId}`);
                 [creatorWallet] = await SecondaryWallet.create([{
                     userId: creatorUserId,
                     balance: 0,
@@ -226,6 +241,8 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
                 expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000), // 48 hours
             }], { session });
 
+            console.log(`[PPV_PURCHASE_RECORD_CREATED] PurchaseID: ${purchase._id} | OrderID: ${orderId} | Status: active | ExpiresAt: ${purchase.expiresAt}`);
+
             // Debit buyer (full price)
             const buyerTxn = await debitWallet(
                 buyerWallet._id, 'primary', amount, 'ppv_purchase_debit',
@@ -253,7 +270,11 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
 
             result = { purchase, buyerTxn, creatorTxn, creatorAmount, platformAmount, taxBreakdown: tax };
         });
+        console.log(`=================== [PPV_PURCHASE_WALLET_SUCCESS] ===================\n`);
         return result;
+    } catch (err) {
+        console.error(`[PPV_PURCHASE_WALLET_ERROR] ${err.message}`);
+        throw err;
     } finally {
         await session.endSession();
     }
@@ -264,6 +285,9 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
  * Single atomic transaction.
  */
 export async function executeTransfer(userId, amount, idempotencyKey) {
+    console.log(`\n=================== [WALLET_TRANSFER_INIT] ===================`);
+    console.log(`User: ${userId} | Amount: ₹${amount} | IdempotencyKey: ${idempotencyKey}`);
+
     if (amount <= 0) throw new Error('Transfer amount must be positive');
 
     const session = await mongoose.startSession();
@@ -273,6 +297,7 @@ export async function executeTransfer(userId, amount, idempotencyKey) {
             // Check idempotency on transfer log
             const existingLog = await WalletTransferLog.findOne({ idempotencyKey }).session(session);
             if (existingLog) {
+                console.log(`[WALLET_TRANSFER] [IDEMPOTENT_SKIP] Transfer already processed.`);
                 result = { transferLog: existingLog, alreadyProcessed: true };
                 return;
             }
@@ -308,7 +333,12 @@ export async function executeTransfer(userId, amount, idempotencyKey) {
 
             result = { debitTxn, creditTxn, transferLog };
         });
+        console.log(`[WALLET_TRANSFER_SUCCESS] ₹${amount} transferred. Secondary Wallet Balance: ₹${result.debitTxn?.balanceAfter} | Primary Wallet Balance: ₹${result.creditTxn?.balanceAfter}`);
+        console.log(`=================== [WALLET_TRANSFER_END] ===================\n`);
         return result;
+    } catch (err) {
+        console.error(`[WALLET_TRANSFER_ERROR] ${err.message}`);
+        throw err;
     } finally {
         await session.endSession();
     }

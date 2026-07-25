@@ -202,7 +202,11 @@ export const rechargeInit = async (req, res) => {
         const { amount } = req.body;
         const numAmount = Number(amount);
 
+        console.log(`\n=================== [RECHARGE_INIT] ===================`);
+        console.log(`User: ${userId} | Requested Amount: ₹${numAmount}`);
+
         if (!numAmount || numAmount < 1) {
+            console.error(`[RECHARGE_INIT] Rejected: Minimum recharge amount is ₹1 (Got ₹${numAmount})`);
             return res.status(400).json({ error: 'Minimum recharge amount is ₹1' });
         }
 
@@ -214,7 +218,7 @@ export const rechargeInit = async (req, res) => {
 
         // ─── RAZORPAY BRANCH ────────────────────────────────────────────────────
         if (gateway === 'razorpay') {
-            console.log(`[rechargeInit] Using Razorpay for user ${userId}`);
+            console.log(`[RECHARGE_INIT] Gateway: RAZORPAY | User: ${userId}`);
             const rzp = getRazorpayInstance();
             const receiptId = `RECHARGE_${Date.now()}_${userId.toString().slice(-6)}`;
 
@@ -228,7 +232,7 @@ export const rechargeInit = async (req, res) => {
                 },
             });
 
-            console.log(`[rechargeInit] Razorpay order created: ${order.id}`);
+            console.log(`[RECHARGE_INIT] Razorpay Order Created: ${order.id} | Amount: ₹${numAmount}`);
 
             // Store with Razorpay's order ID so verify can look it up
             await PaymentDetails.create({
@@ -244,6 +248,7 @@ export const rechargeInit = async (req, res) => {
             const customerEmail = user?.email || (user?.contact?.includes('@') ? user.contact : `${userId}@watchinit.com`);
             const customerPhone = (!user?.contact?.includes('@') && user?.contact) ? user.contact : '9876543210';
 
+            console.log(`=================== [RECHARGE_INIT_SUCCESS] ===================\n`);
             return res.json({
                 gateway: 'razorpay',
                 order_id: order.id,
@@ -257,7 +262,7 @@ export const rechargeInit = async (req, res) => {
         }
 
         // ─── CASHFREE BRANCH (default) ──────────────────────────────────────────
-        console.log(`[rechargeInit] Using Cashfree for user ${userId}`);
+        console.log(`[RECHARGE_INIT] Gateway: CASHFREE | User: ${userId}`);
         const orderId = `RECHARGE_${Date.now()}_${userId.toString().slice(-6)}`;
 
         // Create pending initiation record (auto-expires in 24h if never completed)
@@ -296,6 +301,8 @@ export const rechargeInit = async (req, res) => {
         });
 
         const response = await cashfree.PGCreateOrder(orderRequest);
+        console.log(`[RECHARGE_INIT] Cashfree Order Created: ${orderId} | SessionID: ${response.data?.payment_session_id}`);
+        console.log(`=================== [RECHARGE_INIT_SUCCESS] ===================\n`);
 
         return res.json({
             gateway: 'cashfree',
@@ -305,7 +312,7 @@ export const rechargeInit = async (req, res) => {
             orderAmount: numAmount,
         });
     } catch (error) {
-        console.error('❌ Recharge initiation error:', error?.response?.data || error.message);
+        console.error('❌ [RECHARGE_INIT_ERROR]', error?.response?.data || error.message);
         const cfError = error?.response?.data?.message || error?.message || 'Unknown error';
         res.status(500).json({ error: `Failed to create recharge order: ${cfError}` });
     }
@@ -321,6 +328,8 @@ export const transferToWalletOne = async (req, res) => {
 
         const { amount, confirmTransfer } = req.body;
         const numAmount = Number(amount);
+
+        console.log(`[WALLET_TRANSFER_HTTP_REQ] User: ${userId} | Amount: ₹${numAmount} | Confirm: ${confirmTransfer}`);
 
         if (!numAmount || numAmount <= 0) {
             return res.status(400).json({ error: 'Transfer amount must be positive' });

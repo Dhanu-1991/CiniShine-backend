@@ -10,15 +10,10 @@ const razorpayVerify = async (req, res) => {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, orderId } = req.body;
 
     // ─── STATUS-CHECK MODE ─────────────────────────────────────────────────────
-    // Called from PaymentResultPage after redirect (just orderId, no signature).
-    // The Razorpay modal handler already verified + fulfilled before redirecting.
-    // We only need to read the DB record and return its current status.
     if (orderId && !razorpay_signature) {
-      console.log("Razorpay status check for orderId:", orderId);
+      console.log(`[RAZORPAY_STATUS_CHECK] OrderID: ${orderId}`);
       const paymentDetail = await PaymentDetails.findOne({ orderId });
       if (!paymentDetail) {
-        // Could be a Cashfree order being checked while gateway is Razorpay.
-        // Return NOT_FOUND with a neutral message — PaymentResultPage will retry.
         return res.status(200).json({ order_status: "UNKNOWN", paymentDetails: null });
       }
       return res.status(200).json({
@@ -28,8 +23,11 @@ const razorpayVerify = async (req, res) => {
     }
 
     // ─── FULL SIGNATURE VERIFY MODE ────────────────────────────────────────────
-    // Called from Razorpay modal handler with signature tokens.
+    console.log(`\n=================== [RAZORPAY_VERIFY_INIT] ===================`);
+    console.log(`Razorpay OrderID: ${razorpay_order_id} | PaymentID: ${razorpay_payment_id}`);
+
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      console.error(`[RAZORPAY_VERIFY] Missing required parameters`);
       return res.status(400).json({ error: "Missing required Razorpay parameters" });
     }
 
@@ -44,19 +42,22 @@ const razorpayVerify = async (req, res) => {
     const isAuthentic = expectedSignature === razorpay_signature;
 
     if (!isAuthentic) {
-      console.error("Razorpay signature mismatch for order:", razorpay_order_id);
+      console.error(`❌ [RAZORPAY_VERIFY] Signature mismatch for order: ${razorpay_order_id}`);
       return res.status(400).json({ error: "Invalid payment signature" });
     }
+
+    console.log(`✅ [RAZORPAY_VERIFY] Signature authentic for order: ${razorpay_order_id}`);
 
     // Signature valid — find pending record
     let paymentDetail = await PaymentDetails.findOne({ orderId: razorpay_order_id });
 
     if (!paymentDetail) {
+      console.error(`❌ [RAZORPAY_VERIFY] Order ${razorpay_order_id} not found in DB`);
       return res.status(404).json({ error: "Order not found in database" });
     }
 
     if (paymentDetail.status === "SUCCESS") {
-      // Already fulfilled (webhook fired before this call)
+      console.log(`[RAZORPAY_VERIFY] [IDEMPOTENT_SKIP] Order ${razorpay_order_id} already fulfilled.`);
       return res.json([{
         orderId: paymentDetail.orderId,
         status: paymentDetail.status,
@@ -72,7 +73,7 @@ const razorpayVerify = async (req, res) => {
 
     if (!contentId) {
       // Wallet Recharge
-      console.log(`Razorpay: fulfilling wallet recharge for order ${razorpay_order_id}`);
+      console.log(`[RAZORPAY_VERIFY] Fulfilling wallet recharge for Order: ${razorpay_order_id}`);
       paymentDetail = await fulfillWalletRecharge({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
@@ -82,7 +83,7 @@ const razorpayVerify = async (req, res) => {
       });
     } else {
       // PPV Purchase
-      console.log(`Razorpay: fulfilling PPV purchase for order ${razorpay_order_id}`);
+      console.log(`[RAZORPAY_VERIFY] Fulfilling PPV purchase for Order: ${razorpay_order_id}`);
       paymentDetail = await fulfillPpvPurchase({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
@@ -93,6 +94,7 @@ const razorpayVerify = async (req, res) => {
       });
     }
 
+    console.log(`=================== [RAZORPAY_VERIFY_SUCCESS] ===================\n`);
     return res.json([{
       orderId: paymentDetail.orderId,
       status: paymentDetail.status,
@@ -100,7 +102,7 @@ const razorpayVerify = async (req, res) => {
     }]);
 
   } catch (error) {
-    console.error("Razorpay verification error:", error);
+    console.error("❌ [RAZORPAY_VERIFY_ERROR]", error);
     res.status(500).json({ error: "Failed to verify Razorpay payment", details: error.message });
   }
 };

@@ -41,8 +41,12 @@ export const runMonthEndPayout = async (req, res) => {
         const now = new Date();
         const payoutMonth = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
+        console.log(`\n=================== [PAYOUT_JOB_BULK_INIT] ===================`);
+        console.log(`Month: ${payoutMonth}`);
+
         // Find all secondary wallets with balance > 0
         const wallets = await SecondaryWallet.find({ balance: { $gt: 0 } }).lean();
+        console.log(`Found ${wallets.length} secondary wallet(s) with balance > 0`);
 
         // Get KYC details for all wallet owners (MUST be verified)
         const userIds = wallets.map(w => w.userId);
@@ -61,12 +65,13 @@ export const runMonthEndPayout = async (req, res) => {
             if (!kyc || kyc.kycStatus !== 'verified') {
                 results.skippedNoKyc++;
                 results.skipped++;
-                console.log(`⏩ Skipping payout for wallet ${wallet._id} (User ${wallet.userId}): KYC is not verified`);
+                console.log(`⏩ [PAYOUT_BULK_SKIP] Wallet ${wallet._id} (User ${wallet.userId}): KYC is not verified`);
                 continue;
             }
 
             const session = await mongoose.startSession();
             try {
+                let createdPayout;
                 await session.withTransaction(async () => {
                     // Idempotency check
                     const existingPayout = await Payout.findOne({
@@ -75,6 +80,7 @@ export const runMonthEndPayout = async (req, res) => {
                     }).session(session);
                     if (existingPayout) {
                         results.skipped++;
+                        console.log(`⏩ [PAYOUT_BULK_SKIP] Wallet ${wallet._id}: Payout for ${payoutMonth} already exists.`);
                         return;
                     }
 
@@ -85,7 +91,7 @@ export const runMonthEndPayout = async (req, res) => {
                     }).session(session);
                     if (pendingSettlement) {
                         results.skipped++;
-                        console.log(`⏩ Skipping payout for wallet ${wallet._id}: previous settlement is still pending`);
+                        console.log(`⏩ [PAYOUT_BULK_SKIP] Wallet ${wallet._id}: previous settlement (${pendingSettlement._id}) is still pending`);
                         return;
                     }
 
@@ -151,6 +157,7 @@ export const runMonthEndPayout = async (req, res) => {
                     let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, rawNet = 0;
 
                     for (const tx of earningTxns) {
+                        let taxSource = 'STORED_LEDGER_BREAKDOWN';
                         let txBreakdown = tx.taxBreakdown;
                         if (!txBreakdown && tx.relatedPurchaseId) {
                             const purchase = await Purchase.findById(tx.relatedPurchaseId).session(session).lean();
@@ -165,13 +172,16 @@ export const runMonthEndPayout = async (req, res) => {
                                     tcsAmount: purchase.tcsAmount,
                                     creatorPayout: purchase.creatorPayout,
                                 };
+                                taxSource = 'PURCHASE_LOOKUP';
                             }
                         }
                         if (!txBreakdown && tx.amount > 0) {
                             const estSelling = Math.round(tx.amount / 0.612985);
                             txBreakdown = calculateTaxBreakdown(estSelling);
+                            taxSource = 'RATIO_FALLBACK';
                         }
                         if (txBreakdown) {
+                            console.log(`[PAYOUT_TAX_STRATEGY] TxnID: ${tx._id} | Amount: ₹${tx.amount} | TaxSource: ${taxSource} | SellingPrice: ₹${txBreakdown.sellingPrice}`);
                             rawSelling += txBreakdown.sellingPrice || 0;
                             rawBase += txBreakdown.basePrice || 0;
                             rawGst += txBreakdown.gstAmount || 0;
@@ -186,6 +196,7 @@ export const runMonthEndPayout = async (req, res) => {
                     let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
                     let totalPlatformCommission = 0, totalGstOnCommission = 0;
                     let totalTdsDeducted = 0, totalTcsDeducted = 0;
+                    let calcMethod = 'AGGREGATED_TRANSACTIONS';
 
                     if (rawNet > 0 && grossAmount > 0) {
                         const scale = grossAmount / rawNet;
@@ -197,6 +208,7 @@ export const runMonthEndPayout = async (req, res) => {
                         totalTdsDeducted = Number((rawTds * scale).toFixed(2));
                         totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
                     } else if (grossAmount > 0) {
+                        calcMethod = 'DIRECT_RATIO_SCALE';
                         const estSelling = Math.round(grossAmount / 0.612985);
                         const calc = calculateTaxBreakdown(estSelling);
                         totalSellingPrice = calc.sellingPrice;
@@ -208,7 +220,17 @@ export const runMonthEndPayout = async (req, res) => {
                         totalTcsDeducted = calc.tcsAmount;
                     }
 
-                    await Payout.create([{
+                    console.log(`[PAYOUT_CALC_METHOD] Wallet: ${freshWallet._id} | Gross: ₹${grossAmount} | Method: ${calcMethod} | RawNet: ₹${rawNet}`);
+
+                    // EMAIL GUARD: Check email address FIRST before finalizing
+                    const user = await User.findById(freshWallet.userId).select('contact email userName channelName').lean();
+                    const creatorEmail = user?.contact || user?.email;
+                    if (!creatorEmail || !creatorEmail.includes('@')) {
+                        console.error(`❌ [PAYOUT_EMAIL_GUARD] Creator ${freshWallet.userId} has no valid email address. Aborting payout to preserve wallet balance.`);
+                        throw new Error(`Creator email address is missing/invalid. Payout aborted to protect wallet balance.`);
+                    }
+
+                    [createdPayout] = await Payout.create([{
                         walletId: freshWallet._id,
                         userId: freshWallet.userId,
                         grossAmount,
@@ -228,30 +250,34 @@ export const runMonthEndPayout = async (req, res) => {
                         scheduledFor: new Date(),
                     }], { session });
 
-                    results.processed++;
-
-                    // Send email notification to creator
-                    const user = await User.findById(freshWallet.userId).select('contact email userName channelName').lean();
-                    const creatorEmail = user?.contact || user?.email;
-                    if (creatorEmail) {
-                        sendAdminEmail('payoutInitiated', creatorEmail, {
+                    // Send email INSIDE transaction scope — if mail fails, throw error so MongoDB transaction rolls back balance!
+                    try {
+                        await sendAdminEmail('payoutInitiated', creatorEmail, {
                             creatorName: user.channelName || user.userName || 'Creator',
                             netAmount,
                             grossAmount,
                             payoutMonth
-                        }).catch(e => console.error('Payout email error:', e));
+                        });
+                        console.log(`✅ [PAYOUT_EMAIL_GUARD] Payout initiation email sent successfully to ${creatorEmail}`);
+                    } catch (mailErr) {
+                        console.error(`❌ [PAYOUT_EMAIL_GUARD] Email sending failed to ${creatorEmail}:`, mailErr);
+                        throw new Error(`Payout initiation email failed to send to ${creatorEmail}: ${mailErr.message}. Rolling back payout and preserving wallet balance.`);
                     }
+
+                    results.processed++;
+                    console.log(`✅ [PAYOUT_BULK_SUCCESS] Created Payout ${createdPayout._id} | User: ${freshWallet.userId} | Gross: ₹${grossAmount} | Net: ₹${netAmount}`);
                 });
             } catch (err) {
                 results.failed++;
                 results.errors.push({ walletId: wallet._id.toString(), error: err.message });
-                console.error(`❌ Payout failed for wallet ${wallet._id}:`, err);
+                console.error(`❌ [PAYOUT_BULK_ERROR] Payout failed for wallet ${wallet._id}:`, err);
             } finally {
                 await session.endSession();
             }
         }
 
-        console.log(`✅ Payout job completed for ${payoutMonth}:`, results);
+        console.log(`✅ [PAYOUT_JOB_BULK_COMPLETE] Processed: ${results.processed} | Skipped: ${results.skipped} | Failed: ${results.failed}`);
+        console.log(`=================== [PAYOUT_JOB_BULK_END] ===================\n`);
         res.json({
             success: true,
             payoutMonth,
@@ -375,22 +401,28 @@ export const getPayoutReport = async (req, res) => {
 export const runSingleCreatorPayout = async (req, res) => {
     try {
         const { userId } = req.body;
+        console.log(`\n=================== [PAYOUT_JOB_SINGLE_INIT] ===================`);
+        console.log(`Target User ID: ${userId}`);
+
         if (!userId) {
             return res.status(400).json({ error: "userId is required" });
         }
 
         const pendingPayout = await Payout.findOne({ userId, status: 'pending_settlement' });
         if (pendingPayout) {
+            console.error(`[PAYOUT_SINGLE_REJECTED] Previous settlement (${pendingPayout._id}) is still pending for User ${userId}`);
             return res.status(400).json({ error: "Cannot initiate payout while a previous settlement is pending for this creator" });
         }
 
         const wallet = await SecondaryWallet.findOne({ userId });
         if (!wallet || wallet.balance <= 0) {
+            console.error(`[PAYOUT_SINGLE_REJECTED] Creator ${userId} has no withdrawable secondary wallet balance (Balance: ₹${wallet?.balance || 0})`);
             return res.status(400).json({ error: "Creator has no withdrawable secondary wallet balance" });
         }
 
         const kyc = await KycDetails.findOne({ userId });
         if (!kyc || kyc.kycStatus !== 'verified') {
+            console.error(`[PAYOUT_SINGLE_REJECTED] Creator ${userId} KYC is not verified (Status: ${kyc?.kycStatus || 'none'})`);
             return res.status(400).json({ error: "Creator KYC is not verified. Payouts can only be initiated for KYC-verified creators." });
         }
 
@@ -456,6 +488,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                 let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, rawNet = 0;
 
                 for (const tx of earningTxns) {
+                    let taxSource = 'STORED_LEDGER_BREAKDOWN';
                     let txBreakdown = tx.taxBreakdown;
                     if (!txBreakdown && tx.relatedPurchaseId) {
                         const purchase = await Purchase.findById(tx.relatedPurchaseId).session(session).lean();
@@ -470,13 +503,16 @@ export const runSingleCreatorPayout = async (req, res) => {
                                 tcsAmount: purchase.tcsAmount,
                                 creatorPayout: purchase.creatorPayout,
                             };
+                            taxSource = 'PURCHASE_LOOKUP';
                         }
                     }
                     if (!txBreakdown && tx.amount > 0) {
                         const estSelling = Math.round(tx.amount / 0.612985);
                         txBreakdown = calculateTaxBreakdown(estSelling);
+                        taxSource = 'RATIO_FALLBACK';
                     }
                     if (txBreakdown) {
+                        console.log(`[PAYOUT_TAX_STRATEGY] Single Payout | TxnID: ${tx._id} | Amount: ₹${tx.amount} | TaxSource: ${taxSource} | SellingPrice: ₹${txBreakdown.sellingPrice}`);
                         rawSelling += txBreakdown.sellingPrice || 0;
                         rawBase += txBreakdown.basePrice || 0;
                         rawGst += txBreakdown.gstAmount || 0;
@@ -491,6 +527,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                 let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
                 let totalPlatformCommission = 0, totalGstOnCommission = 0;
                 let totalTdsDeducted = 0, totalTcsDeducted = 0;
+                let calcMethod = 'AGGREGATED_TRANSACTIONS';
 
                 if (rawNet > 0 && grossAmount > 0) {
                     const scale = grossAmount / rawNet;
@@ -502,6 +539,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                     totalTdsDeducted = Number((rawTds * scale).toFixed(2));
                     totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
                 } else if (grossAmount > 0) {
+                    calcMethod = 'DIRECT_RATIO_SCALE';
                     const estSelling = Math.round(grossAmount / 0.612985);
                     const calc = calculateTaxBreakdown(estSelling);
                     totalSellingPrice = calc.sellingPrice;
@@ -511,6 +549,16 @@ export const runSingleCreatorPayout = async (req, res) => {
                     totalGstOnCommission = calc.gstOnCommission;
                     totalTdsDeducted = calc.tdsAmount;
                     totalTcsDeducted = calc.tcsAmount;
+                }
+
+                console.log(`[PAYOUT_CALC_METHOD] Single Payout | User: ${userId} | Gross: ₹${grossAmount} | Method: ${calcMethod} | RawNet: ₹${rawNet}`);
+
+                // EMAIL GUARD: Verify email BEFORE finalizing payout
+                const user = await User.findById(userId).select('contact email userName channelName').lean();
+                const creatorEmail = user?.contact || user?.email;
+                if (!creatorEmail || !creatorEmail.includes('@')) {
+                    console.error(`❌ [PAYOUT_EMAIL_GUARD] Creator ${userId} has no valid email address. Aborting single payout to protect wallet balance.`);
+                    throw new Error(`Creator email address is missing/invalid. Single payout aborted to protect wallet balance.`);
                 }
 
                 [createdPayout] = await Payout.create([{
@@ -532,6 +580,22 @@ export const runSingleCreatorPayout = async (req, res) => {
                     payoutMonth,
                     scheduledFor: new Date(),
                 }], { session });
+
+                // Send email INSIDE transaction scope — if mail fails, throw error so MongoDB transaction rolls back balance!
+                try {
+                    await sendAdminEmail('payoutInitiated', creatorEmail, {
+                        creatorName: user.channelName || user.userName || 'Creator',
+                        netAmount: createdPayout.netAmount,
+                        grossAmount: createdPayout.grossAmount,
+                        payoutMonth
+                    });
+                    console.log(`✅ [PAYOUT_EMAIL_GUARD] Single payout initiation email sent successfully to ${creatorEmail}`);
+                } catch (mailErr) {
+                    console.error(`❌ [PAYOUT_EMAIL_GUARD] Email sending failed to ${creatorEmail}:`, mailErr);
+                    throw new Error(`Payout initiation email failed to send to ${creatorEmail}: ${mailErr.message}. Rolling back payout and preserving wallet balance.`);
+                }
+
+                console.log(`✅ [PAYOUT_SINGLE_SUCCESS] Created Payout ${createdPayout._id} | User: ${userId} | Gross: ₹${grossAmount} | Net: ₹${netAmount}`);
             });
 
             // Send notification email to creator
@@ -546,6 +610,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                 }).catch(e => console.error('Single payout email error:', e));
             }
 
+            console.log(`=================== [PAYOUT_JOB_SINGLE_END] ===================\n`);
             res.json({
                 success: true,
                 message: "Single creator payout executed successfully",
@@ -661,31 +726,37 @@ export const getDailyPayoutStats = async (req, res) => {
 export const completePayoutSettlement = async (req, res) => {
     try {
         const { payoutId } = req.params;
+        console.log(`\n=================== [SETTLEMENT_COMPLETE_INIT] ===================`);
+        console.log(`Payout ID: ${payoutId}`);
+
         const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle contact email');
         if (!payout) return res.status(404).json({ error: 'Payout record not found' });
         if (payout.status === 'completed' && !req.body.forceResend) {
+            console.log(`[SETTLEMENT_COMPLETE] Payout ${payoutId} already completed.`);
             return res.status(400).json({ error: 'Payout settlement is already marked as completed' });
         }
 
-        payout.status = 'completed';
-        payout.completedAt = new Date();
-        await payout.save();
-
         const creatorEmail = payout.userId?.contact || payout.userId?.email;
-        if (creatorEmail) {
-            const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
-            let bankDetails = {};
-            if (kyc) {
-                const dec = decryptBankDetails(kyc);
-                bankDetails = {
-                    accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
-                    bankName: dec.bankName || payout.bankName || '',
-                    accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
-                    ifscCode: dec.ifscCode || '',
-                };
-            }
+        if (!creatorEmail || !creatorEmail.includes('@')) {
+            console.error(`❌ [SETTLEMENT_EMAIL_GUARD] Creator ${payout.userId?._id} has no valid email address. ABORTING settlement completion.`);
+            return res.status(400).json({ error: 'Settlement completion aborted: Creator email address is missing or invalid. Settlement remains pending_settlement.' });
+        }
 
-            sendAdminEmail('payoutCompleted', creatorEmail, {
+        const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
+        let bankDetails = {};
+        if (kyc) {
+            const dec = decryptBankDetails(kyc);
+            bankDetails = {
+                accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
+                bankName: dec.bankName || payout.bankName || '',
+                accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                ifscCode: dec.ifscCode || '',
+            };
+        }
+
+        // EMAIL GUARD: Send PDF Settlement Invoice FIRST. If mail fails, DO NOT mark completed!
+        try {
+            await sendAdminEmail('payoutCompleted', creatorEmail, {
                 creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                 userName: payout.userId.userName || '',
                 userHandle: payout.userId.channelHandle || '',
@@ -701,9 +772,22 @@ export const completePayoutSettlement = async (req, res) => {
                 totalTdsDeducted: payout.totalTdsDeducted || 0,
                 totalTcsDeducted: payout.totalTcsDeducted || 0,
                 bankDetails,
-            }).catch(e => console.error('Completed payout email error:', e));
+            });
+            console.log(`✅ [SETTLEMENT_EMAIL_GUARD] PDF Settlement Tax Invoice sent successfully to ${creatorEmail}`);
+        } catch (mailErr) {
+            console.error(`❌ [SETTLEMENT_EMAIL_GUARD] Failed to send email to ${creatorEmail}:`, mailErr);
+            return res.status(500).json({
+                error: `Settlement completion aborted: Failed to send invoice email to creator (${mailErr.message}). Settlement status remains pending_settlement.`
+            });
         }
 
+        // Status is updated ONLY AFTER email sending succeeds
+        payout.status = 'completed';
+        payout.completedAt = new Date();
+        await payout.save();
+
+        console.log(`✅ [SETTLEMENT_COMPLETE_SUCCESS] Payout ${payoutId} marked as completed for User ${payout.userId?._id} | Net Transferred: ₹${payout.netAmount}`);
+        console.log(`=================== [SETTLEMENT_COMPLETE_END] ===================\n`);
         return res.json({ success: true, message: 'Payout marked as completed and settlement invoice email sent', payout });
     } catch (err) {
         console.error('Error completing payout settlement:', err);
@@ -731,27 +815,32 @@ export const completeBulkPayoutSettlement = async (req, res) => {
         }
 
         let completedCount = 0;
+        let failedCount = 0;
+        const failedEmails = [];
+
         for (const payout of pendingPayouts) {
-            payout.status = 'completed';
-            payout.completedAt = new Date();
-            await payout.save();
-            completedCount++;
-
             const creatorEmail = payout.userId?.contact || payout.userId?.email;
-            if (creatorEmail) {
-                const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
-                let bankDetails = {};
-                if (kyc) {
-                    const dec = decryptBankDetails(kyc);
-                    bankDetails = {
-                        accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
-                        bankName: dec.bankName || payout.bankName || '',
-                        accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
-                        ifscCode: dec.ifscCode || '',
-                    };
-                }
+            if (!creatorEmail || !creatorEmail.includes('@')) {
+                console.error(`❌ [BULK_SETTLEMENT_EMAIL_GUARD] Creator ${payout.userId?._id} missing email. Skipping completion.`);
+                failedCount++;
+                failedEmails.push({ payoutId: payout._id, reason: 'Missing email' });
+                continue;
+            }
 
-                sendAdminEmail('payoutCompleted', creatorEmail, {
+            const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
+            let bankDetails = {};
+            if (kyc) {
+                const dec = decryptBankDetails(kyc);
+                bankDetails = {
+                    accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
+                    bankName: dec.bankName || payout.bankName || '',
+                    accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                    ifscCode: dec.ifscCode || '',
+                };
+            }
+
+            try {
+                await sendAdminEmail('payoutCompleted', creatorEmail, {
                     creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                     userName: payout.userId.userName || '',
                     userHandle: payout.userId.channelHandle || '',
@@ -767,17 +856,99 @@ export const completeBulkPayoutSettlement = async (req, res) => {
                     totalTdsDeducted: payout.totalTdsDeducted || 0,
                     totalTcsDeducted: payout.totalTcsDeducted || 0,
                     bankDetails,
-                }).catch(e => console.error(`Bulk completed email error for ${payout._id}:`, e));
+                });
+
+                // Update status ONLY AFTER email sending succeeds
+                payout.status = 'completed';
+                payout.completedAt = new Date();
+                await payout.save();
+                completedCount++;
+            } catch (mailErr) {
+                console.error(`❌ [BULK_SETTLEMENT_EMAIL_GUARD] Email failed for ${payout._id}:`, mailErr);
+                failedCount++;
+                failedEmails.push({ payoutId: payout._id, error: mailErr.message });
             }
         }
 
         return res.json({
             success: true,
-            message: `Successfully completed ${completedCount} payout settlement(s) and sent invoice emails`,
-            completedCount
+            message: `Successfully completed ${completedCount} payout settlement(s) with invoice emails sent. ${failedCount} failed.`,
+            completedCount,
+            failedCount,
+            failedEmails,
         });
-    } catch (err) {
-        console.error('Error completing bulk payout settlement:', err);
-        return res.status(500).json({ error: 'Failed to complete bulk payout settlement' });
+    } catch (error) {
+        console.error('❌ Error executing bulk settlement completion:', error);
+        res.status(500).json({ error: 'Failed to complete bulk payout settlement' });
+    }
+};
+
+/**
+ * POST /admin/payouts/:payoutId/resend-email
+ * Resends the settlement completed email with attached PDF invoice to creator.
+ */
+export const resendSettlementEmail = async (req, res) => {
+    try {
+        const payoutId = req.params.payoutId || req.params.id || req.body.payoutId;
+        console.log(`\n=================== [RESEND_SETTLEMENT_EMAIL_INIT] ===================`);
+        console.log(`Payout ID: ${payoutId}`);
+
+        if (!payoutId) {
+            return res.status(400).json({ error: 'payoutId is required' });
+        }
+
+        const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle contact email');
+        if (!payout) {
+            return res.status(404).json({ error: 'Payout record not found' });
+        }
+
+        const creatorEmail = payout.userId?.contact || payout.userId?.email;
+        if (!creatorEmail || !creatorEmail.includes('@')) {
+            console.error(`❌ [RESEND_EMAIL_GUARD] Creator ${payout.userId?._id} has no valid email address.`);
+            return res.status(400).json({ error: 'Creator does not have a valid email address on file.' });
+        }
+
+        const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
+        let bankDetails = {};
+        if (kyc) {
+            const dec = decryptBankDetails(kyc);
+            bankDetails = {
+                accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
+                bankName: dec.bankName || payout.bankName || '',
+                accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                ifscCode: dec.ifscCode || '',
+            };
+        }
+
+        console.log(`[RESEND_EMAIL_ATTEMPT] Sending PDF Settlement Invoice to ${creatorEmail}...`);
+        await sendAdminEmail('payoutCompleted', creatorEmail, {
+            creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+            userName: payout.userId.userName || '',
+            userHandle: payout.userId.channelHandle || '',
+            gstin: kyc?.gstNumber || '',
+            netAmount: payout.netAmount,
+            grossAmount: payout.grossAmount,
+            payoutMonth: payout.payoutMonth,
+            totalSellingPrice: payout.totalSellingPrice || payout.grossAmount,
+            totalBasePrice: payout.totalBasePrice || 0,
+            totalGstCollected: payout.totalGstCollected || 0,
+            totalPlatformCommission: payout.totalPlatformCommission || 0,
+            totalGstOnCommission: payout.totalGstOnCommission || 0,
+            totalTdsDeducted: payout.totalTdsDeducted || 0,
+            totalTcsDeducted: payout.totalTcsDeducted || 0,
+            bankDetails,
+        });
+
+        console.log(`✅ [RESEND_EMAIL_SUCCESS] PDF Settlement Invoice resent to ${creatorEmail} for Payout ${payoutId}`);
+        console.log(`=================== [RESEND_SETTLEMENT_EMAIL_END] ===================\n`);
+
+        return res.json({
+            success: true,
+            message: `Settlement PDF invoice email resent successfully to ${creatorEmail}`,
+            payoutId: payout._id
+        });
+    } catch (error) {
+        console.error('❌ [RESEND_EMAIL_ERROR] Failed to resend settlement email:', error);
+        return res.status(500).json({ error: `Failed to resend settlement email: ${error.message}` });
     }
 };

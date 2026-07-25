@@ -32,7 +32,7 @@ import {
     getDailyLedger, getLiveTransfers
 } from '../../controllers/admin-controllers/adminLedgerController.js';
 import {
-    getPayoutReport, runMonthEndPayout, getDailyPayoutStats, runSingleCreatorPayout, completePayoutSettlement, completeBulkPayoutSettlement
+    getPayoutReport, runMonthEndPayout, getDailyPayoutStats, runSingleCreatorPayout, completePayoutSettlement, completeBulkPayoutSettlement, resendSettlementEmail
 } from '../../controllers/wallet-controllers/payoutJobController.js';
 import { getCreatorEarnings } from '../../controllers/wallet-controllers/earningsController.js';
 import {
@@ -88,6 +88,7 @@ adminRouter.get('/creator/:id/analytics', getCreatorAnalytics);
 adminRouter.get('/creator/:id/profile', getCreatorProfile);
 adminRouter.get('/creator/:id/studio', getCreatorStudio);
 adminRouter.get('/creator/:creatorId/earnings', getCreatorEarnings);
+adminRouter.post('/creator/:id/resend-settlement-email', resendSettlementEmail);
 adminRouter.get('/search/creators', searchCreators);
 
 // Admin chat with creators
@@ -125,6 +126,7 @@ adminRouter.get('/payouts/:month', getPayoutReport);
 adminRouter.post('/payouts/run', runMonthEndPayout);
 adminRouter.post('/payouts/complete-bulk', completeBulkPayoutSettlement);
 adminRouter.post('/payouts/:payoutId/complete', completePayoutSettlement);
+adminRouter.post('/payouts/:payoutId/resend-email', resendSettlementEmail);
 
 // Ledger & Live Transfers
 adminRouter.get('/ledger/daily', getDailyLedger);

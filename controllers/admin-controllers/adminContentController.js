@@ -635,7 +635,7 @@ export const getCreatorProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
 
-        const [subscriberCount, contentCount, communities, wallet, pendingPayout] = await Promise.all([
+        const [subscriberCount, contentCount, communities, wallet, pendingPayout, allPayouts] = await Promise.all([
             creator.subscriberCountOverride !== null && creator.subscriberCountOverride !== undefined
                 ? Promise.resolve(creator.subscriberCountOverride)
                 : User.countDocuments({ subscriptions: id }),
@@ -645,6 +645,7 @@ export const getCreatorProfile = async (req, res) => {
                 .lean(),
             SecondaryWallet.findOne({ userId: id }).lean(),
             Payout.findOne({ userId: id, status: 'pending_settlement' }).lean(),
+            Payout.find({ userId: id }).sort({ createdAt: -1 }).lean(),
         ]);
 
         // Transform profile picture through CloudFront
@@ -668,6 +669,15 @@ export const getCreatorProfile = async (req, res) => {
                     createdAt: pendingPayout.createdAt,
                 } : null,
                 withdrawableBalance: wallet ? wallet.balance : 0,
+                allPayouts: (allPayouts || []).map(p => ({
+                    _id: p._id,
+                    netAmount: p.netAmount,
+                    grossAmount: p.grossAmount,
+                    payoutMonth: p.payoutMonth,
+                    status: p.status,
+                    createdAt: p.createdAt,
+                    completedAt: p.completedAt,
+                })),
             }
         });
     } catch (error) {

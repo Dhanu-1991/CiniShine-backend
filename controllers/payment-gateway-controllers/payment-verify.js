@@ -7,13 +7,14 @@ import { fulfillWalletRecharge, fulfillPpvPurchase } from "../../utils/paymentFu
 
 const paymentVerify = async (req, res) => {
   const { orderId } = req.body;
-  console.log("Payment verification called with orderId:", orderId);
+  console.log(`\n=================== [CASHFREE_VERIFY_INIT] ===================`);
+  console.log(`OrderID: ${orderId}`);
   try {
     let response = await PaymentDetails.findOne({ orderId });
     
     // Fallback: If not found in DB, or if still PENDING (webhook delayed), check Cashfree directly
     if ((!response || response.status === "PENDING") && orderId) {
-      console.log(`Order ${orderId} is missing or PENDING. Querying Cashfree directly...`);
+      console.log(`[CASHFREE_VERIFY] Order ${orderId} is missing or PENDING in DB. Querying Cashfree API directly...`);
       const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production' 
         ? 'https://api.cashfree.com/pg/orders' 
         : 'https://sandbox.cashfree.com/pg/orders';
@@ -29,7 +30,7 @@ const paymentVerify = async (req, res) => {
         
         const cfOrder = cfResponse.data;
         if (cfOrder.order_status === "PAID") {
-          console.log(`Cashfree confirms order ${orderId} is PAID. Fulfilling locally...`);
+          console.log(`[CASHFREE_VERIFY] Cashfree confirms Order ${orderId} is PAID. Fulfilling locally...`);
           
           const amount = cfOrder.order_amount;
           const currency = cfOrder.order_currency;
@@ -57,20 +58,18 @@ const paymentVerify = async (req, res) => {
             });
           }
         } else {
-          // If it's FAILED, ACTIVE, etc., just return that status directly to the frontend!
-          // We don't save it to the DB here (webhook will handle it if it arrives),
-          // but at least the frontend won't get stuck on UNKNOWN.
+          console.log(`[CASHFREE_VERIFY] Cashfree reports Order ${orderId} status: ${cfOrder.order_status}`);
           return res.status(200).json({
             order_status: cfOrder.order_status,
             paymentDetails: null
           });
         }
       } catch (cfErr) {
-        console.error("Cashfree API fetch error:", cfErr.response?.data || cfErr.message);
+        console.error("❌ [CASHFREE_VERIFY_API_ERROR]", cfErr.response?.data || cfErr.message);
       }
     }
     
-    console.log("Verification result:", response);
+    console.log(`[CASHFREE_VERIFY_RESULT] Order ${orderId} DB Status: ${response?.status || 'UNKNOWN'}`);
 
     let paymentDetailsObj = response ? (response.toObject ? response.toObject() : { ...response }) : null;
     if (paymentDetailsObj && paymentDetailsObj.contentId) {
@@ -81,13 +80,14 @@ const paymentVerify = async (req, res) => {
       }
     }
 
+    console.log(`=================== [CASHFREE_VERIFY_END] ===================\n`);
     res.status(200).json({
       order_status: response?.status || "UNKNOWN",
       paymentDetails: paymentDetailsObj
     });
 
   } catch (error) {
-    console.error("Error verifying payment:", error.response?.data || error.message);
+    console.error("❌ [CASHFREE_VERIFY_ERROR]", error.response?.data || error.message);
     res.status(500).json({ error: "Payment verification failed" });
   }
 };
