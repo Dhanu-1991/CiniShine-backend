@@ -835,6 +835,8 @@ export const completePayoutSettlement = async (req, res) => {
         // EMAIL GUARD: Send PDF Settlement Invoice FIRST. If mail fails, DO NOT mark completed!
         try {
             await sendAdminEmail('payoutCompleted', creatorEmail, {
+                payoutId: payout._id,
+                userId: payout.userId._id || payout.userId,
                 creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                 userName: payout.userId.userName || '',
                 userHandle: payout.userId.channelHandle || '',
@@ -919,6 +921,8 @@ export const completeBulkPayoutSettlement = async (req, res) => {
 
             try {
                 await sendAdminEmail('payoutCompleted', creatorEmail, {
+                    payoutId: payout._id,
+                    userId: payout.userId._id || payout.userId,
                     creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                     userName: payout.userId.userName || '',
                     userHandle: payout.userId.channelHandle || '',
@@ -1000,6 +1004,8 @@ export const resendSettlementEmail = async (req, res) => {
 
         console.log(`[RESEND_EMAIL_ATTEMPT] Sending PDF Settlement Invoice to ${creatorEmail}...`);
         await sendAdminEmail('payoutCompleted', creatorEmail, {
+            payoutId: payout._id,
+            userId: payout.userId._id || payout.userId,
             creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
             userName: payout.userId.userName || '',
             userHandle: payout.userId.channelHandle || '',
@@ -1046,20 +1052,75 @@ export const getCreatorInvoices = async (req, res) => {
         }
 
         const filter = { userId: id };
-        if (month) {
+        if (month && month !== 'all') {
             filter.payoutMonth = month;
         }
 
         const sortOrder = sort === 'asc' ? 1 : -1;
         const payouts = await Payout.find(filter).sort({ createdAt: sortOrder }).lean();
-        const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || 'https://cini-shine.s3.us-east-1.amazonaws.com';
+        const s3Bucket = process.env.S3_BUCKET;
+        const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || (s3Bucket ? `https://${s3Bucket}.s3.amazonaws.com` : 'https://cini-shine.s3.us-east-1.amazonaws.com');
 
-        const invoices = payouts.map(p => {
+        const invoices = [];
+        for (const p of payouts) {
+            let s3Key = p.invoiceS3Key;
             let pdfUrl = p.invoiceUrl;
-            if (!pdfUrl && p.invoiceS3Key) {
-                pdfUrl = `${cdnUrl}/${p.invoiceS3Key}`;
+
+            // Auto-heal missing S3 invoices on older payouts
+            if (!s3Key && s3Bucket) {
+                try {
+                    const kyc = await KycDetails.findOne({ userId: p.userId }).lean();
+                    let bankDetails = {};
+                    if (kyc) {
+                        const dec = decryptBankDetails(kyc);
+                        bankDetails = {
+                            accountHolderName: dec.accountHolderName || '',
+                            bankName: dec.bankName || p.bankName || '',
+                            accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                            ifscCode: dec.ifscCode || '',
+                        };
+                    }
+                    const user = await User.findById(p.userId).select('userName channelName channelHandle').lean();
+                    const pdfBuffer = await generateSettlementPdf({
+                        creatorName: user?.channelName || user?.userName || 'Creator',
+                        userName: user?.userName || '',
+                        userHandle: user?.channelHandle || '',
+                        gstin: kyc?.gstNumber || '',
+                        netAmount: p.netAmount,
+                        grossAmount: p.grossAmount,
+                        payoutMonth: p.payoutMonth,
+                        totalSellingPrice: p.totalSellingPrice || p.grossAmount,
+                        totalBasePrice: p.totalBasePrice || 0,
+                        totalGstCollected: p.totalGstCollected || 0,
+                        totalPlatformCommission: p.totalPlatformCommission || 0,
+                        totalGstOnCommission: p.totalGstOnCommission || 0,
+                        totalTdsDeducted: p.totalTdsDeducted || 0,
+                        totalTcsDeducted: p.totalTcsDeducted || 0,
+                        bankDetails,
+                    });
+
+                    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+                    s3Key = `settlement-invoices/${p.payoutMonth || 'general'}/${p.userId}_Tax_Invoice_${Date.now()}.pdf`;
+                    pdfUrl = `${cdnUrl}/${s3Key}`;
+                    await s3Client.send(new PutObjectCommand({
+                        Bucket: s3Bucket,
+                        Key: s3Key,
+                        Body: pdfBuffer,
+                        ContentType: 'application/pdf',
+                        ServerSideEncryption: 'AES256',
+                    }));
+                    await Payout.findByIdAndUpdate(p._id, { invoiceS3Key: s3Key, invoiceUrl: pdfUrl });
+                    console.log(`✅ [AUTO_HEAL_S3] Uploaded generated PDF invoice to AWS S3 & updated MongoDB for Payout ${p._id}: ${s3Key}`);
+                } catch (autoHealErr) {
+                    console.warn(`⚠️ [AUTO_HEAL_S3] Could not auto-upload S3 invoice for Payout ${p._id}:`, autoHealErr.message);
+                }
             }
-            return {
+
+            if (!pdfUrl && s3Key) {
+                pdfUrl = `${cdnUrl}/${s3Key}`;
+            }
+
+            invoices.push({
                 payoutId: p._id,
                 payoutMonth: p.payoutMonth,
                 status: p.status,
@@ -1075,12 +1136,12 @@ export const getCreatorInvoices = async (req, res) => {
                     totalTdsDeducted: p.totalTdsDeducted || 0,
                     totalTcsDeducted: p.totalTcsDeducted || 0,
                 },
-                invoiceS3Key: p.invoiceS3Key || null,
+                invoiceS3Key: s3Key || null,
                 invoiceUrl: pdfUrl || null,
                 createdAt: p.createdAt,
                 completedAt: p.completedAt,
-            };
-        });
+            });
+        }
 
         return res.json({
             success: true,
@@ -1096,7 +1157,7 @@ export const getCreatorInvoices = async (req, res) => {
 /**
  * GET /admin/payouts/:payoutId/invoice-pdf
  * View PDF tax invoice inline for any payout settlement.
- * Streams from S3 if available, or generates PDF dynamically!
+ * Streams DIRECTLY from AWS S3!
  */
 export const getPayoutInvoicePdf = async (req, res) => {
     try {
@@ -1111,65 +1172,77 @@ export const getPayoutInvoicePdf = async (req, res) => {
         }
 
         const s3Bucket = process.env.S3_BUCKET;
-        // 1. Check if PDF exists in S3
-        if (payout.invoiceS3Key && s3Bucket) {
-            try {
-                console.log(`🔍 [INVOICE_PDF_S3_CHECK] Attempting to fetch from S3: s3://${s3Bucket}/${payout.invoiceS3Key}`);
-                const s3Obj = await s3Client.send(new GetObjectCommand({
-                    Bucket: s3Bucket,
-                    Key: payout.invoiceS3Key
-                }));
-                console.log(`✅ [INVOICE_PDF_SERVED] Source: PATH_A_AWS_S3 | Bucket: ${s3Bucket} | Key: ${payout.invoiceS3Key}`);
-                console.log(`=================== [INVOICE_PDF_FETCH_END] ===================\n`);
-                res.setHeader('Content-Type', 'application/pdf');
-                res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
-                return s3Obj.Body.pipe(res);
-            } catch (s3ReadErr) {
-                console.warn(`⚠️ [INVOICE_PDF_S3_WARNING] S3 read failed (${s3ReadErr.message}). Falling back to dynamic PDF generation...`);
+
+        // If invoice is not yet uploaded to S3, generate and upload to AWS S3 FIRST!
+        if (!payout.invoiceS3Key && s3Bucket) {
+            console.log(`ℹ️ [INVOICE_PDF_SERVED] S3 key missing on Payout ${payoutId}. Generating & uploading to AWS S3 FIRST...`);
+            const kyc = await KycDetails.findOne({ userId: payout.userId?._id || payout.userId }).lean();
+            let bankDetails = {};
+            if (kyc) {
+                const dec = decryptBankDetails(kyc);
+                bankDetails = {
+                    accountHolderName: dec.accountHolderName || payout.userId?.channelName || payout.userId?.userName,
+                    bankName: dec.bankName || payout.bankName || '',
+                    accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                    ifscCode: dec.ifscCode || '',
+                };
             }
+
+            const pdfBuffer = await generateSettlementPdf({
+                creatorName: payout.userId?.channelName || payout.userId?.userName || 'Creator',
+                userName: payout.userId?.userName || '',
+                userHandle: payout.userId?.channelHandle || '',
+                gstin: kyc?.gstNumber || '',
+                netAmount: payout.netAmount,
+                grossAmount: payout.grossAmount,
+                payoutMonth: payout.payoutMonth,
+                totalSellingPrice: payout.totalSellingPrice || payout.grossAmount,
+                totalBasePrice: payout.totalBasePrice || 0,
+                totalGstCollected: payout.totalGstCollected || 0,
+                totalPlatformCommission: payout.totalPlatformCommission || 0,
+                totalGstOnCommission: payout.totalGstOnCommission || 0,
+                totalTdsDeducted: payout.totalTdsDeducted || 0,
+                totalTcsDeducted: payout.totalTcsDeducted || 0,
+                bankDetails,
+            });
+
+            const uid = payout.userId?._id || payout.userId;
+            const s3Key = `settlement-invoices/${payout.payoutMonth || 'general'}/${uid}_Tax_Invoice_${Date.now()}.pdf`;
+            const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || `https://${s3Bucket}.s3.amazonaws.com`;
+            const invoiceUrl = `${cdnUrl}/${s3Key}`;
+
+            const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+            await s3Client.send(new PutObjectCommand({
+                Bucket: s3Bucket,
+                Key: s3Key,
+                Body: pdfBuffer,
+                ContentType: 'application/pdf',
+                ServerSideEncryption: 'AES256',
+            }));
+
+            payout.invoiceS3Key = s3Key;
+            payout.invoiceUrl = invoiceUrl;
+            await payout.save();
+            console.log(`✅ [INVOICE_PDF_SERVED] Successfully uploaded PDF to AWS S3: s3://${s3Bucket}/${s3Key} & updated MongoDB`);
         }
 
-        console.log(`ℹ️ [INVOICE_PDF_SERVED] Source: PATH_B_DYNAMIC_GENERATION | PayoutID: ${payoutId} | Month: ${payout.payoutMonth} | (No S3 Key on document)`);
-
-        // 2. Dynamic PDF generation fallback (100% guaranteed for any settlement!)
-        const kyc = await KycDetails.findOne({ userId: payout.userId?._id || payout.userId }).lean();
-        let bankDetails = {};
-        if (kyc) {
-            const dec = decryptBankDetails(kyc);
-            bankDetails = {
-                accountHolderName: dec.accountHolderName || payout.userId?.channelName || payout.userId?.userName,
-                bankName: dec.bankName || payout.bankName || '',
-                accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
-                ifscCode: dec.ifscCode || '',
-            };
+        // Stream DIRECTLY from AWS S3!
+        if (payout.invoiceS3Key && s3Bucket) {
+            console.log(`🔍 [INVOICE_PDF_S3_CHECK] Fetching directly from AWS S3: s3://${s3Bucket}/${payout.invoiceS3Key}`);
+            const s3Obj = await s3Client.send(new GetObjectCommand({
+                Bucket: s3Bucket,
+                Key: payout.invoiceS3Key
+            }));
+            console.log(`✅ [INVOICE_PDF_SERVED] Source: PATH_A_AWS_S3 | Bucket: ${s3Bucket} | Key: ${payout.invoiceS3Key}`);
+            console.log(`=================== [INVOICE_PDF_FETCH_END] ===================\n`);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
+            return s3Obj.Body.pipe(res);
+        } else {
+            throw new Error(`AWS S3 bucket configuration missing or unavailable`);
         }
-
-        const pdfBuffer = await generateSettlementPdf({
-            creatorName: payout.userId?.channelName || payout.userId?.userName || 'Creator',
-            userName: payout.userId?.userName || '',
-            userHandle: payout.userId?.channelHandle || '',
-            gstin: kyc?.gstNumber || '',
-            netAmount: payout.netAmount,
-            grossAmount: payout.grossAmount,
-            payoutMonth: payout.payoutMonth,
-            totalSellingPrice: payout.totalSellingPrice || payout.grossAmount,
-            totalBasePrice: payout.totalBasePrice || 0,
-            totalGstCollected: payout.totalGstCollected || 0,
-            totalPlatformCommission: payout.totalPlatformCommission || 0,
-            totalGstOnCommission: payout.totalGstOnCommission || 0,
-            totalTdsDeducted: payout.totalTdsDeducted || 0,
-            totalTcsDeducted: payout.totalTcsDeducted || 0,
-            bankDetails,
-        });
-
-        console.log(`✅ [INVOICE_PDF_SERVED] Dynamic PDF invoice buffer generated successfully (${pdfBuffer.length} bytes)`);
-        console.log(`=================== [INVOICE_PDF_FETCH_END] ===================\n`);
-
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
-        return res.send(pdfBuffer);
     } catch (err) {
-        console.error('❌ Error serving payout invoice PDF:', err);
-        return res.status(500).send(`Failed to generate invoice PDF: ${err.message}`);
+        console.error('❌ Error serving payout invoice PDF from AWS S3:', err);
+        return res.status(500).send(`Failed to fetch invoice PDF from AWS S3: ${err.message}`);
     }
 };
