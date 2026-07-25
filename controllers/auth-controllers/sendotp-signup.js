@@ -36,8 +36,7 @@ const sendOtp = async (req, res) => {
     // Send OTP
     if (type === 'email') {
       console.log("Sending OTP to email:", contact);
-      const output = await sendOtpToEmail
-        (contact, otp);
+      const output = await sendOtpToEmail(contact, otp, purpose || 'signup');
       if (output === true) {
         return res.status(200).json({ message: 'OTP sent successfully' });
       }

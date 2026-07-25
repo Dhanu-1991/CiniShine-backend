@@ -127,7 +127,7 @@ export const adminSignin = async (req, res) => {
         // Send OTP
         let sent = false;
         if (channel === 'email') {
-            sent = await sendOtpToEmail(admin.contact, otp);
+            sent = await sendOtpToEmail(admin.contact, otp, 'admin_login');
         } else {
             sent = await sendOtpToPhone(admin.contact, otp);
         }
@@ -357,7 +357,7 @@ export const adminSignup = async (req, res) => {
 
             let sent = false;
             if (channel === 'email') {
-                sent = await sendOtpToEmail(normalizedContact, otp);
+                sent = await sendOtpToEmail(normalizedContact, otp, 'adminSignup');
             } else {
                 sent = await sendOtpToPhone(normalizedContact, otp);
             }
@@ -455,7 +455,7 @@ export const adminResendOtp = async (req, res) => {
 
         let sent = false;
         if (session.channel === 'email') {
-            sent = await sendOtpToEmail(session.contact, otp);
+            sent = await sendOtpToEmail(session.contact, otp, session.purpose || 'admin_login');
         } else {
             sent = await sendOtpToPhone(session.contact, otp);
         }
@@ -577,7 +577,7 @@ export const forgotPasswordApprove = async (req, res) => {
 
         let sent = false;
         if (channel === 'email') {
-            sent = await sendOtpToEmail(admin.contact, otp);
+            sent = await sendOtpToEmail(admin.contact, otp, 'forgot_password');
         } else {
             sent = await sendOtpToPhone(admin.contact, otp);
         }

@@ -62,7 +62,7 @@ export const sendBulkPayoutOtp = async (req, res) => {
 
         let sent = false;
         if (channel === 'email') {
-            sent = await sendOtpToEmail(contact, otp);
+            sent = await sendOtpToEmail(contact, otp, 'bulk_payout');
         } else {
             sent = await sendOtpToPhone(contact, otp);
         }

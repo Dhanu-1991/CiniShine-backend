@@ -395,7 +395,7 @@ export const sendKycOtp = async (req, res) => {
             expiresAt: Date.now() + 10 * 60 * 1000,
         });
 
-        await sendOtpToEmail(resolvedEmail, otp);
+        await sendOtpToEmail(resolvedEmail, otp, 'kyc_update');
         return res.json({
             success: true,
             message: `Verification OTP code sent to ${resolvedEmail}`,

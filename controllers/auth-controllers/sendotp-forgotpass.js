@@ -17,8 +17,7 @@ const sendOtp_forgotPass = async (req, res) => {
 
     if (type === 'email') {
       console.log("Sending OTP to email:", contact);
-      const output = await sendOtpToEmail
-        (contact, otp);
+      const output = await sendOtpToEmail(contact, otp, 'forgotPassword');
       if (output === true) {
         return res.status(200).json({ message: 'OTP sent successfully' });
       }
