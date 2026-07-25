@@ -527,6 +527,7 @@ export const getPayoutReport = async (req, res) => {
                 totalFees: Math.round(totalFees * 100) / 100,
                 totalNet: Math.round(totalNet * 100) / 100,
                 totalSellingPrice: Math.round(totalSellingPrice * 100) / 100,
+                totalSpCollected: Math.round(totalSellingPrice * 100) / 100,
                 totalBasePrice: Math.round(totalBasePrice * 100) / 100,
                 totalGstCollected: Math.round(totalGstCollected * 100) / 100,
                 totalPlatformCommission: Math.round(totalPlatformCommission * 100) / 100,

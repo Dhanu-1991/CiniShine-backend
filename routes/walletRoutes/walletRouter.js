@@ -6,6 +6,7 @@ import {
     getWalletTransactions,
     rechargeInit,
     transferToWalletOne,
+    sendTransferOtp,
     submitKyc,
     sendKycOtp,
     verifyKycOtp,
@@ -36,6 +37,7 @@ walletRouter.get('/wallets/earnings/:creatorId', universalTokenVerifier, getCrea
 walletRouter.get('/wallets/:walletId/transactions', universalTokenVerifier, getWalletTransactions);
 walletRouter.post('/wallets/recharge', universalTokenVerifier, rechargeInit);
 walletRouter.post('/wallets/transfer', universalTokenVerifier, transferToWalletOne);
+walletRouter.post('/wallets/transfer/send-otp', universalTokenVerifier, sendTransferOtp);
 walletRouter.post('/wallets/kyc/send-otp', universalTokenVerifier, sendKycOtp);
 walletRouter.post('/wallets/kyc/verify-otp', universalTokenVerifier, verifyKycOtp);
 walletRouter.post('/wallets/kyc', universalTokenVerifier, kycUpload.fields([

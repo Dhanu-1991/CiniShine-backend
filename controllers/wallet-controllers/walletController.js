@@ -315,15 +315,61 @@ export const rechargeInit = async (req, res) => {
     }
 };
 
+export const transferOtpStore = new Map();
+
 /**
- * POST /wallets/transfer — Transfer from secondary to primary wallet
+ * POST /wallets/transfer/send-otp — Send OTP for transferring Wallet 2 balance to Wallet 1
+ */
+export const sendTransferOtp = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        const user = await User.findById(userId).select('email contact userName').lean();
+        const resolvedEmail = user?.email || (user?.contact && user.contact.includes('@') ? user.contact : null) || (req.body.email && req.body.email.includes('@') ? req.body.email.trim() : null);
+
+        if (!user || !resolvedEmail) {
+            return res.status(400).json({ error: 'Registered user email not found' });
+        }
+
+        // 30-second cooldown check
+        const existing = transferOtpStore.get(userId);
+        if (existing && existing.lastSentAt && (Date.now() - existing.lastSentAt < 30000)) {
+            const waitSec = Math.ceil((30000 - (Date.now() - existing.lastSentAt)) / 1000);
+            return res.status(429).json({
+                error: `Please wait ${waitSec} seconds before requesting another OTP.`,
+                retryAfterSec: waitSec
+            });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        transferOtpStore.set(userId, {
+            otp,
+            expiresAt: Date.now() + 5 * 60 * 1000, // 5 min TTL
+            lastSentAt: Date.now()
+        });
+
+        await sendOtpToEmail(resolvedEmail, otp, 'payout');
+        return res.json({
+            success: true,
+            message: `Wallet transfer verification OTP code sent to ${resolvedEmail}. Valid for 5 minutes.`,
+            email: resolvedEmail,
+        });
+    } catch (err) {
+        console.error('Error sending transfer OTP:', err);
+        return res.status(500).json({ error: 'Failed to send wallet transfer OTP email' });
+    }
+};
+
+/**
+ * POST /wallets/transfer — Transfer from secondary to primary wallet (requires OTP)
  */
 export const transferToWalletOne = async (req, res) => {
     try {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-        const { amount, confirmTransfer } = req.body;
+        const { amount, otp, confirmTransfer } = req.body;
         const numAmount = Number(amount);
 
         console.log(`[WALLET_TRANSFER_HTTP_REQ] User: ${userId} | Amount: ₹${numAmount} | Confirm: ${confirmTransfer}`);
@@ -340,6 +386,22 @@ export const transferToWalletOne = async (req, res) => {
                 requiresConfirmation: true,
             });
         }
+
+        // OTP Verification check
+        if (!otp || String(otp).trim().length !== 6) {
+            return res.status(400).json({ error: 'Valid 6-digit verification OTP code is required' });
+        }
+
+        const storedOtp = transferOtpStore.get(userId);
+        if (!storedOtp || storedOtp.expiresAt < Date.now()) {
+            return res.status(400).json({ error: 'OTP has expired or is invalid. Please request a new OTP.' });
+        }
+
+        if (storedOtp.otp !== String(otp).trim()) {
+            return res.status(400).json({ error: 'Invalid OTP code. Please check your email.' });
+        }
+
+        transferOtpStore.delete(userId);
 
         const idempotencyKey = `transfer_${userId}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
@@ -389,20 +451,34 @@ export const sendKycOtp = async (req, res) => {
             await User.findByIdAndUpdate(userId, { email: resolvedEmail });
         }
 
+        const purpose = req.body?.purpose || req.query?.purpose || 'kyc_update';
+
+        // 30-second cooldown check
+        const existing = kycOtpStore.get(userId);
+        if (existing && existing.lastSentAt && (Date.now() - existing.lastSentAt < 30000)) {
+            const waitSec = Math.ceil((30000 - (Date.now() - existing.lastSentAt)) / 1000);
+            return res.status(429).json({
+                error: `Please wait ${waitSec} seconds before requesting another OTP.`,
+                retryAfterSec: waitSec
+            });
+        }
+
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         kycOtpStore.set(userId, {
             otp,
-            expiresAt: Date.now() + 10 * 60 * 1000,
+            expiresAt: Date.now() + 5 * 60 * 1000, // 5 min TTL
+            lastSentAt: Date.now()
         });
 
-        await sendOtpToEmail(resolvedEmail, otp, 'kyc_update');
+        await sendOtpToEmail(resolvedEmail, otp, purpose);
+        const purposeLabel = (purpose === 'account_update' || purpose === 'accountUpdate') ? 'Profile Update' : 'KYC Verification';
         return res.json({
             success: true,
-            message: `Verification OTP code sent to ${resolvedEmail}`,
+            message: `${purposeLabel} OTP code sent to ${resolvedEmail}. Valid for 5 minutes.`,
             email: resolvedEmail,
         });
     } catch (err) {
-        console.error('Error sending KYC OTP:', err);
+        console.error('Error sending KYC/Profile OTP:', err);
         return res.status(500).json({ error: 'Failed to send verification OTP email' });
     }
 };
@@ -429,13 +505,13 @@ export const verifyKycOtp = async (req, res) => {
             return res.status(400).json({ error: 'Invalid OTP code. Please check your email.' });
         }
 
-        // Grant 15-minute window for KYC submission
+        // Grant 15-minute window for KYC / Profile update submission
         kycOtpStore.set(`verified_${userId}`, Date.now() + 15 * 60 * 1000);
         kycOtpStore.delete(userId);
 
         return res.json({ success: true, message: 'OTP verified successfully!' });
     } catch (err) {
-        console.error('Error verifying KYC OTP:', err);
+        console.error('Error verifying OTP:', err);
         return res.status(500).json({ error: 'Failed to verify OTP' });
     }
 };
