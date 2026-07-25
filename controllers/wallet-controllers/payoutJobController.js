@@ -23,7 +23,7 @@ import { decryptBankDetails } from '../../utils/encryption.js';
 import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { generateSettlementPdf } from '../../utils/pdfGenerator.js';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const s3Client = new S3Client({
@@ -356,7 +356,7 @@ export const runMonthEndPayout = async (req, res) => {
         res.json({
             success: true,
             payoutMonth,
-            totalWallets: wallets.length,
+            totalWallets: allWallets.length,
             ...results,
         });
     } catch (error) {
@@ -836,6 +836,7 @@ export const completePayoutSettlement = async (req, res) => {
         // EMAIL GUARD: Send PDF Settlement Invoice FIRST. If mail fails, DO NOT mark completed!
         try {
             await sendAdminEmail('payoutCompleted', creatorEmail, {
+                payoutId: payout._id.toString(),
                 creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                 userName: payout.userId.userName || '',
                 userHandle: payout.userId.channelHandle || '',
@@ -920,6 +921,7 @@ export const completeBulkPayoutSettlement = async (req, res) => {
 
             try {
                 await sendAdminEmail('payoutCompleted', creatorEmail, {
+                    payoutId: payout._id.toString(),
                     creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                     userName: payout.userId.userName || '',
                     userHandle: payout.userId.channelHandle || '',
@@ -1001,6 +1003,7 @@ export const resendSettlementEmail = async (req, res) => {
 
         console.log(`[RESEND_EMAIL_ATTEMPT] Sending PDF Settlement Invoice to ${creatorEmail}...`);
         await sendAdminEmail('payoutCompleted', creatorEmail, {
+            payoutId: payout._id.toString(),
             creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
             userName: payout.userId.userName || '',
             userHandle: payout.userId.channelHandle || '',
@@ -1164,6 +1167,30 @@ export const getPayoutInvoicePdf = async (req, res) => {
         });
 
         console.log(`✅ [INVOICE_PDF_SERVED] Dynamic PDF invoice buffer generated successfully (${pdfBuffer.length} bytes)`);
+
+        // Backfill to AWS S3 & MongoDB so future views hit S3 directly!
+        if (s3Bucket && !payout.invoiceS3Key) {
+            try {
+                const s3Key = `settlement-invoices/${payout.payoutMonth || 'general'}/${payout.userId?._id || payout.userId}_Tax_Invoice_${Date.now()}.pdf`;
+                await s3Client.send(new PutObjectCommand({
+                    Bucket: s3Bucket,
+                    Key: s3Key,
+                    Body: pdfBuffer,
+                    ContentType: 'application/pdf',
+                    ServerSideEncryption: 'AES256',
+                }));
+                const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || `https://${s3Bucket}.s3.amazonaws.com`;
+                const invoiceUrl = `${cdnUrl}/${s3Key}`;
+                await Payout.findByIdAndUpdate(payout._id, {
+                    invoiceS3Key: s3Key,
+                    invoiceUrl,
+                });
+                console.log(`☁️ [INVOICE_PDF_S3_BACKFILLED] Uploaded to AWS S3 & linked to Payout ${payout._id}: s3://${s3Bucket}/${s3Key}`);
+            } catch (backfillErr) {
+                console.error(`⚠️ [INVOICE_PDF_S3_BACKFILL_ERROR] Failed to save to S3: ${backfillErr.message}`);
+            }
+        }
+
         console.log(`=================== [INVOICE_PDF_FETCH_END] ===================\n`);
 
         res.setHeader('Content-Type', 'application/pdf');
