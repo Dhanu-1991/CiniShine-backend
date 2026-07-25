@@ -12,6 +12,7 @@
  * REFACTORED: Uses PrimaryWallet + SecondaryWallet + KycDetails (separate models)
  */
 import mongoose from 'mongoose';
+import User from '../../models/user.model.js';
 import PrimaryWallet from '../../models/primaryWallet.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import KycDetails from '../../models/kycDetails.model.js';

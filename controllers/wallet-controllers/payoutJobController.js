@@ -14,6 +14,7 @@ import KycDetails from '../../models/kycDetails.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
 import Payout from '../../models/payout.model.js';
 import Purchase from '../../models/purchase.model.js';
+import User from '../../models/user.model.js';
 import crypto from 'crypto';
 import OtpSession from '../../models/adminOtpSession.model.js';
 import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
