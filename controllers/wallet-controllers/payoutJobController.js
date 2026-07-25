@@ -640,8 +640,6 @@ export const runSingleCreatorPayout = async (req, res) => {
                 bankFields.forEach(f => { bankSnapshot[f] = kyc[f]; });
                 const bankName = decryptBankDetails(kyc).bankName || '';
 
-                // Calculate tax aggregates from creator's earning transactions since last payout
-                const lastPayoutDoc = await Payout.findOne({
                 // Calculate tax aggregates and self-transfers strictly from creator's Wallet 2 ledger since last payout
                 const ledgerBreakdown = await computePayoutLedgerBreakdown(freshWallet._id, session);
                 const {
