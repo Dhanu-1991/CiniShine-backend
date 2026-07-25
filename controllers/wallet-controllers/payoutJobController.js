@@ -1035,13 +1035,16 @@ export const getPayoutInvoicePdf = async (req, res) => {
                     Bucket: s3Bucket,
                     Key: payout.invoiceS3Key
                 }));
+                console.log(`✅ [INVOICE_PDF_SERVED] Source: PATH_A_AWS_S3 | Key: ${payout.invoiceS3Key}`);
                 res.setHeader('Content-Type', 'application/pdf');
                 res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
                 return s3Obj.Body.pipe(res);
             } catch (s3ReadErr) {
-                console.warn('[InvoicePDF] S3 read fallback to dynamic generation:', s3ReadErr.message);
+                console.warn('⚠️ [INVOICE_PDF_SERVED] S3 read warning, using Path B fallback:', s3ReadErr.message);
             }
         }
+
+        console.log(`ℹ️ [INVOICE_PDF_SERVED] Source: PATH_B_DYNAMIC_GENERATION | PayoutID: ${payoutId} | Month: ${payout.payoutMonth}`);
 
         // 2. Dynamic PDF generation fallback (100% guaranteed for any settlement!)
         const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
