@@ -16,7 +16,7 @@ export const getCreatorEarnings = async (req, res) => {
         if (!userId && !isAdmin) return res.status(401).json({ error: 'Authentication required' });
 
         let targetCreatorId = userId;
-        const paramCreatorId = req.params.creatorId || req.query.creatorId;
+        const paramCreatorId = req.params.creatorId || req.params.id || req.query.creatorId;
 
         if (paramCreatorId) {
             if (isAdmin || paramCreatorId === userId) {
@@ -30,11 +30,16 @@ export const getCreatorEarnings = async (req, res) => {
             return res.status(400).json({ error: 'Invalid creator ID' });
         }
 
-        // Get all content IDs owned by this creator
-        const creatorContents = await Content.find({ userId: targetCreatorId }).select('_id').lean();
-        const contentIds = creatorContents.map(c => c._id);
+        const creatorObjId = new mongoose.Types.ObjectId(targetCreatorId);
+        const creatorIdArray = [targetCreatorId, creatorObjId];
 
-        if (contentIds.length === 0) {
+        // Get all content IDs owned by this creator
+        const creatorContents = await Content.find({ userId: { $in: creatorIdArray } }).select('_id').lean();
+        const contentObjIds = creatorContents.map(c => c._id);
+        const contentStrIds = creatorContents.map(c => c._id.toString());
+        const allContentIds = [...contentObjIds, ...contentStrIds];
+
+        if (allContentIds.length === 0) {
             const currentMonthStr = new Date().toISOString().substring(0, 7);
             const emptyMonths = [];
             const nowObj = new Date();
@@ -87,14 +92,17 @@ export const getCreatorEarnings = async (req, res) => {
         const monthStart = new Date(Date.UTC(year, month, 1, 0, 0, 0));
         const monthEnd = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0));
 
+        const purchaseMatch = {
+            $or: [
+                { contentId: { $in: allContentIds } },
+                { creatorId: { $in: creatorIdArray } }
+            ],
+            status: { $in: ['active', 'expired'] }
+        };
+
         // 1. Aggregation for Lifetime (Till Date)
         const lifetimeAgg = await Purchase.aggregate([
-            {
-                $match: {
-                    contentId: { $in: contentIds },
-                    status: { $in: ['active', 'expired'] }
-                }
-            },
+            { $match: purchaseMatch },
             {
                 $group: {
                     _id: null,
@@ -114,8 +122,7 @@ export const getCreatorEarnings = async (req, res) => {
         const monthlyAgg = await Purchase.aggregate([
             {
                 $match: {
-                    contentId: { $in: contentIds },
-                    status: { $in: ['active', 'expired'] },
+                    ...purchaseMatch,
                     purchasedAt: { $gte: monthStart, $lt: monthEnd }
                 }
             },
@@ -136,12 +143,7 @@ export const getCreatorEarnings = async (req, res) => {
 
         // 3. Find all available months with purchase history
         const monthDates = await Purchase.aggregate([
-            {
-                $match: {
-                    contentId: { $in: contentIds },
-                    status: { $in: ['active', 'expired'] }
-                }
-            },
+            { $match: purchaseMatch },
             {
                 $project: {
                     monthStr: { $dateToString: { format: '%Y-%m', date: '$purchasedAt' } }

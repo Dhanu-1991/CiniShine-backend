@@ -446,7 +446,7 @@ export const getPayoutReport = async (req, res) => {
 
         let filter = {};
         if (month && month !== 'all') {
-            filter.payoutMonth = month;
+            filter.payoutMonth = { $regex: new RegExp(`^${month}`) };
         }
 
         const payouts = await Payout.find(filter)
