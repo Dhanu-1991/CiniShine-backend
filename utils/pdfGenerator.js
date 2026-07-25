@@ -59,16 +59,16 @@ export function generateSettlementPdf({
       const tcs = tcsNum.toFixed(2);
       const transferredToW1 = transferredToW1Num.toFixed(2);
       const net = netNum.toFixed(2);
-      const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
 
-      // Format Date Window with Time (e.g. 12/06/26 05:37 PM to 12/06/26 05:54 PM)
+      // Format Date Window with Time in IST (e.g. 12/06/26 05:37 pm to 12/06/26 05:54 pm)
       const formatDateTime = (d) => {
         if (!d) return null;
         const dt = new Date(d);
         if (isNaN(dt.getTime())) return null;
-        const dStr = dt.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' });
-        const tStr = dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-        return `${dStr} ${tStr}`;
+        const dStr = dt.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Asia/Kolkata' });
+        const tStr = dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+        return `${dStr} ${tStr.toLowerCase()}`;
       };
 
       const windowStartStr = formatDateTime(periodStart) || 'Account Creation';
