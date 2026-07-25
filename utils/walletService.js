@@ -323,6 +323,7 @@ export async function executeTransfer(userId, amount, idempotencyKey) {
 
             // Write transfer log
             const [transferLog] = await WalletTransferLog.create([{
+                userId,
                 fromWalletId: secondaryWallet._id,
                 toWalletId: primaryWallet._id,
                 amount,

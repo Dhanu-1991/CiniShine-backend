@@ -952,3 +952,65 @@ export const resendSettlementEmail = async (req, res) => {
         return res.status(500).json({ error: `Failed to resend settlement email: ${error.message}` });
     }
 };
+
+/**
+ * GET /admin/creator/:id/invoices
+ * Fetch all payout settlement invoices stored in AWS S3 for a creator.
+ * Query params: month (e.g. '2026-07'), sort ('desc' | 'asc')
+ */
+export const getCreatorInvoices = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { month, sort = 'desc' } = req.query;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ error: 'Invalid creator ID' });
+        }
+
+        const filter = { userId: id };
+        if (month) {
+            filter.payoutMonth = month;
+        }
+
+        const sortOrder = sort === 'asc' ? 1 : -1;
+        const payouts = await Payout.find(filter).sort({ createdAt: sortOrder }).lean();
+        const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || 'https://cini-shine.s3.us-east-1.amazonaws.com';
+
+        const invoices = payouts.map(p => {
+            let pdfUrl = p.invoiceUrl;
+            if (!pdfUrl && p.invoiceS3Key) {
+                pdfUrl = `${cdnUrl}/${p.invoiceS3Key}`;
+            }
+            return {
+                payoutId: p._id,
+                payoutMonth: p.payoutMonth,
+                status: p.status,
+                grossAmount: p.grossAmount,
+                netAmount: p.netAmount,
+                feeAmount: p.feeAmount,
+                taxBreakdown: {
+                    totalSellingPrice: p.totalSellingPrice || p.grossAmount,
+                    totalBasePrice: p.totalBasePrice || 0,
+                    totalGstCollected: p.totalGstCollected || 0,
+                    totalPlatformCommission: p.totalPlatformCommission || 0,
+                    totalGstOnCommission: p.totalGstOnCommission || 0,
+                    totalTdsDeducted: p.totalTdsDeducted || 0,
+                    totalTcsDeducted: p.totalTcsDeducted || 0,
+                },
+                invoiceS3Key: p.invoiceS3Key || null,
+                invoiceUrl: pdfUrl || null,
+                createdAt: p.createdAt,
+                completedAt: p.completedAt,
+            };
+        });
+
+        return res.json({
+            success: true,
+            count: invoices.length,
+            invoices,
+        });
+    } catch (err) {
+        console.error('Error fetching creator invoices:', err);
+        return res.status(500).json({ error: 'Failed to fetch creator invoices' });
+    }
+};

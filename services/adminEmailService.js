@@ -358,6 +358,21 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
                         ServerSideEncryption: 'AES256',
                     }));
                     console.log(`[AdminEmail] Saved generated PDF invoice to AWS S3: s3://${s3Bucket}/${s3Key}`);
+
+                    // Save invoice key and URL to Payout document if payoutId is available
+                    if (data.payoutId) {
+                        try {
+                            const Payout = (await import('../models/payout.model.js')).default;
+                            const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || `https://${s3Bucket}.s3.amazonaws.com`;
+                            const invoiceUrl = `${cdnUrl}/${s3Key}`;
+                            await Payout.findByIdAndUpdate(data.payoutId, {
+                                invoiceS3Key: s3Key,
+                                invoiceUrl,
+                            });
+                        } catch (payoutUpdateErr) {
+                            console.error('[AdminEmail] Failed to update Payout document with invoiceUrl:', payoutUpdateErr.message);
+                        }
+                    }
                 } catch (s3Err) {
                     console.error('[AdminEmail] AWS S3 PDF save warning:', s3Err.message || s3Err);
                 }

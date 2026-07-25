@@ -22,12 +22,13 @@ const AdminAuditLogSchema = new mongoose.Schema({
             'channel_ban', 'channel_unban', 'admin_message_sent',
             'ban_request', 'stats_update', 'email_sent',
             'otp_sent', 'otp_verified', 'otp_failed',
+            'single_payout', 'bulk_payout', 'payout_complete', 'payout_resend',
             'other'
         ]
     },
     target_type: {
         type: String,
-        enum: ['admin', 'content', 'report', 'feedback', 'user', 'system', null],
+        enum: ['admin', 'content', 'report', 'feedback', 'user', 'payout', 'system', null],
         default: null
     },
     target_id: {

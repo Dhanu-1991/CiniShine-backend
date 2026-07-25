@@ -34,8 +34,11 @@ const payoutSchema = new mongoose.Schema({
         default: 'pending_settlement'
     },
     payoutMonth: { type: String, required: true },   // '2026-07' format
+    invoiceS3Key: { type: String, default: null },
+    invoiceUrl: { type: String, default: null },
     scheduledFor: { type: Date, default: null },
     processedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
     createdAt: { type: Date, default: Date.now },
 });
 
