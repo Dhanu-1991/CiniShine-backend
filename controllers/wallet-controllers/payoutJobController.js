@@ -37,6 +37,87 @@ const s3Client = new S3Client({
 const MAINTENANCE_FEE_PERCENT = 0; // 0% — no payout fee
 
 /**
+ * Helper function to calculate tax breakdown aggregates and self-transfers
+ * strictly from Wallet 2 ledger transactions between periodStart and periodEnd.
+ * Zero ratio scaling or backtracing.
+ */
+async function computePayoutLedgerBreakdown(walletId, session = null) {
+    const lastPayoutDoc = await Payout.findOne({
+        walletId,
+        status: { $in: ['pending_settlement', 'completed'] },
+    }).sort({ createdAt: -1 }).session(session).lean();
+
+    const periodStart = lastPayoutDoc ? lastPayoutDoc.createdAt : null;
+    const periodEnd = new Date();
+
+    const txnQuery = {
+        walletId,
+        status: 'completed',
+    };
+    if (periodStart) {
+        txnQuery.createdAt = { $gt: periodStart, $lte: periodEnd };
+    } else {
+        txnQuery.createdAt = { $lte: periodEnd };
+    }
+
+    const txnsQuery = WalletTransaction.find(txnQuery).sort({ createdAt: 1 });
+    if (session) txnsQuery.session(session);
+    const periodTxns = await txnsQuery.lean();
+
+    let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, totalTransferredToWallet1 = 0;
+
+    for (const tx of periodTxns) {
+        if (tx.type === 'ppv_earning_credit') {
+            let txBreakdown = tx.taxBreakdown;
+            if (!txBreakdown && tx.relatedPurchaseId) {
+                const purchaseQuery = Purchase.findById(tx.relatedPurchaseId);
+                if (session) purchaseQuery.session(session);
+                const purchase = await purchaseQuery.lean();
+                if (purchase) {
+                    txBreakdown = {
+                        sellingPrice: purchase.amount,
+                        basePrice: purchase.basePrice,
+                        gstAmount: purchase.gstAmount,
+                        platformCommission: purchase.platformCommission,
+                        gstOnCommission: purchase.gstOnCommission,
+                        tdsAmount: purchase.tdsAmount,
+                        tcsAmount: purchase.tcsAmount,
+                        creatorPayout: purchase.creatorPayout,
+                    };
+                }
+            }
+            if (!txBreakdown && tx.amount > 0) {
+                txBreakdown = calculateTaxBreakdown(tx.amount);
+            }
+            if (txBreakdown) {
+                rawSelling += txBreakdown.sellingPrice || 0;
+                rawBase += txBreakdown.basePrice || 0;
+                rawGst += txBreakdown.gstAmount || 0;
+                rawComm += txBreakdown.platformCommission || 0;
+                rawCommGst += txBreakdown.gstOnCommission || 0;
+                rawTds += txBreakdown.tdsAmount || 0;
+                rawTcs += txBreakdown.tcsAmount || 0;
+            }
+        } else if (tx.type === 'transfer_from_settlement' || tx.type === 'transfer_to_primary') {
+            totalTransferredToWallet1 += tx.amount || 0;
+        }
+    }
+
+    return {
+        totalSellingPrice: Number(rawSelling.toFixed(2)),
+        totalBasePrice: Number(rawBase.toFixed(2)),
+        totalGstCollected: Number(rawGst.toFixed(2)),
+        totalPlatformCommission: Number(rawComm.toFixed(2)),
+        totalGstOnCommission: Number(rawCommGst.toFixed(2)),
+        totalTdsDeducted: Number(rawTds.toFixed(2)),
+        totalTcsDeducted: Number(rawTcs.toFixed(2)),
+        totalTransferredToWallet1: Number(totalTransferredToWallet1.toFixed(2)),
+        periodStart,
+        periodEnd,
+    };
+}
+
+/**
  * POST /admin/payouts/send-otp — Send OTP to logged in admin for bulk payout verification
  */
 export const sendBulkPayoutOtp = async (req, res) => {
@@ -261,90 +342,22 @@ export const runMonthEndPayout = async (req, res) => {
                     // Decrypt bank name for the payout record (plain text field)
                     const bankName = decryptBankDetails(kyc).bankName || '';
 
-                    // Calculate tax aggregates from creator's earning transactions since last payout
-                    const lastPayoutDoc = await Payout.findOne({
-                        walletId: freshWallet._id,
-                        status: { $in: ['pending_settlement', 'completed'] },
-                    }).sort({ createdAt: -1 }).session(session).lean();
+                    // Calculate tax aggregates and self-transfers strictly from creator's Wallet 2 ledger since last payout
+                    const ledgerBreakdown = await computePayoutLedgerBreakdown(freshWallet._id, session);
+                    const {
+                        totalSellingPrice,
+                        totalBasePrice,
+                        totalGstCollected,
+                        totalPlatformCommission,
+                        totalGstOnCommission,
+                        totalTdsDeducted,
+                        totalTcsDeducted,
+                        totalTransferredToWallet1,
+                        periodStart,
+                        periodEnd,
+                    } = ledgerBreakdown;
 
-                    const txnQuery = {
-                        walletId: freshWallet._id,
-                        type: 'ppv_earning_credit',
-                        status: 'completed',
-                    };
-                    if (lastPayoutDoc && lastPayoutDoc.createdAt) {
-                        txnQuery.createdAt = { $gt: lastPayoutDoc.createdAt };
-                    }
-
-                    const earningTxns = await WalletTransaction.find(txnQuery).session(session).lean();
-
-                    let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, rawNet = 0;
-
-                    for (const tx of earningTxns) {
-                        let taxSource = 'STORED_LEDGER_BREAKDOWN';
-                        let txBreakdown = tx.taxBreakdown;
-                        if (!txBreakdown && tx.relatedPurchaseId) {
-                            const purchase = await Purchase.findById(tx.relatedPurchaseId).session(session).lean();
-                            if (purchase) {
-                                txBreakdown = {
-                                    sellingPrice: purchase.amount,
-                                    basePrice: purchase.basePrice,
-                                    gstAmount: purchase.gstAmount,
-                                    platformCommission: purchase.platformCommission,
-                                    gstOnCommission: purchase.gstOnCommission,
-                                    tdsAmount: purchase.tdsAmount,
-                                    tcsAmount: purchase.tcsAmount,
-                                    creatorPayout: purchase.creatorPayout,
-                                };
-                                taxSource = 'PURCHASE_LOOKUP';
-                            }
-                        }
-                        if (!txBreakdown && tx.amount > 0) {
-                            const estSelling = Math.round(tx.amount / 0.612985);
-                            txBreakdown = calculateTaxBreakdown(estSelling);
-                            taxSource = 'RATIO_FALLBACK';
-                        }
-                        if (txBreakdown) {
-                            console.log(`[PAYOUT_TAX_STRATEGY] TxnID: ${tx._id} | Amount: ₹${tx.amount} | TaxSource: ${taxSource} | SellingPrice: ₹${txBreakdown.sellingPrice}`);
-                            rawSelling += txBreakdown.sellingPrice || 0;
-                            rawBase += txBreakdown.basePrice || 0;
-                            rawGst += txBreakdown.gstAmount || 0;
-                            rawComm += txBreakdown.platformCommission || 0;
-                            rawCommGst += txBreakdown.gstOnCommission || 0;
-                            rawTds += txBreakdown.tdsAmount || 0;
-                            rawTcs += txBreakdown.tcsAmount || 0;
-                            rawNet += txBreakdown.creatorPayout || tx.amount || 0;
-                        }
-                    }
-
-                    let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
-                    let totalPlatformCommission = 0, totalGstOnCommission = 0;
-                    let totalTdsDeducted = 0, totalTcsDeducted = 0;
-                    let calcMethod = 'AGGREGATED_TRANSACTIONS';
-
-                    if (rawNet > 0 && grossAmount > 0) {
-                        const scale = grossAmount / rawNet;
-                        totalSellingPrice = Number((rawSelling * scale).toFixed(2));
-                        totalBasePrice = Number((rawBase * scale).toFixed(2));
-                        totalGstCollected = Number((rawGst * scale).toFixed(2));
-                        totalPlatformCommission = Number((rawComm * scale).toFixed(2));
-                        totalGstOnCommission = Number((rawCommGst * scale).toFixed(2));
-                        totalTdsDeducted = Number((rawTds * scale).toFixed(2));
-                        totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
-                    } else if (grossAmount > 0) {
-                        calcMethod = 'DIRECT_RATIO_SCALE';
-                        const estSelling = Math.round(grossAmount / 0.612985);
-                        const calc = calculateTaxBreakdown(estSelling);
-                        totalSellingPrice = calc.sellingPrice;
-                        totalBasePrice = calc.basePrice;
-                        totalGstCollected = calc.gstAmount;
-                        totalPlatformCommission = calc.platformCommission;
-                        totalGstOnCommission = calc.gstOnCommission;
-                        totalTdsDeducted = calc.tdsAmount;
-                        totalTcsDeducted = calc.tcsAmount;
-                    }
-
-                    console.log(`[PAYOUT_CALC_METHOD] Wallet: ${freshWallet._id} | Gross: ₹${grossAmount} | Method: ${calcMethod} | RawNet: ₹${rawNet}`);
+                    console.log(`[PAYOUT_LEDGER_BREAKDOWN] Wallet: ${freshWallet._id} | Gross: ₹${grossAmount} | TotalSP: ₹${totalSellingPrice} | TransfersToW1: ₹${totalTransferredToWallet1} | Period: ${periodStart} to ${periodEnd}`);
 
                     // EMAIL GUARD: Check email address FIRST before finalizing
                     const creatorEmail = user?.contact || user?.email;
@@ -365,13 +378,16 @@ export const runMonthEndPayout = async (req, res) => {
                         grossAmount,
                         feeAmount,
                         netAmount,
-                        totalSellingPrice: Number(totalSellingPrice.toFixed(2)),
-                        totalBasePrice: Number(totalBasePrice.toFixed(2)),
-                        totalGstCollected: Number(totalGstCollected.toFixed(2)),
-                        totalPlatformCommission: Number(totalPlatformCommission.toFixed(2)),
-                        totalGstOnCommission: Number(totalGstOnCommission.toFixed(2)),
-                        totalTdsDeducted: Number(totalTdsDeducted.toFixed(2)),
-                        totalTcsDeducted: Number(totalTcsDeducted.toFixed(2)),
+                        totalSellingPrice,
+                        totalBasePrice,
+                        totalGstCollected,
+                        totalPlatformCommission,
+                        totalGstOnCommission,
+                        totalTdsDeducted,
+                        totalTcsDeducted,
+                        totalTransferredToWallet1,
+                        periodStart,
+                        periodEnd,
                         ...bankSnapshot,
                         bankName: bankName,
                         status: 'pending_settlement',
@@ -491,6 +507,9 @@ export const getPayoutReport = async (req, res) => {
                 totalGstOnCommission: payout.totalGstOnCommission || 0,
                 totalTdsDeducted: payout.totalTdsDeducted || 0,
                 totalTcsDeducted: payout.totalTcsDeducted || 0,
+                totalTransferredToWallet1: payout.totalTransferredToWallet1 || 0,
+                periodStart: payout.periodStart || null,
+                periodEnd: payout.periodEnd || payout.createdAt,
                 bankDetails: {
                     accountNumber: bankDetails.bankAccountNumber,
                     bankName: payout.bankName || bankDetails.bankName,
@@ -518,6 +537,7 @@ export const getPayoutReport = async (req, res) => {
         const totalGstOnCommission = payouts.reduce((sum, p) => sum + (p.totalGstOnCommission || 0), 0);
         const totalTdsDeducted = payouts.reduce((sum, p) => sum + (p.totalTdsDeducted || 0), 0);
         const totalTcsDeducted = payouts.reduce((sum, p) => sum + (p.totalTcsDeducted || 0), 0);
+        const totalTransferredToWallet1 = payouts.reduce((sum, p) => sum + (p.totalTransferredToWallet1 || 0), 0);
 
         res.json({
             payoutMonth: month,
@@ -534,6 +554,7 @@ export const getPayoutReport = async (req, res) => {
                 totalGstOnCommission: Math.round(totalGstOnCommission * 100) / 100,
                 totalTdsDeducted: Math.round(totalTdsDeducted * 100) / 100,
                 totalTcsDeducted: Math.round(totalTcsDeducted * 100) / 100,
+                totalTransferredToWallet1: Math.round(totalTransferredToWallet1 * 100) / 100,
             },
             payouts: enrichedPayouts,
         });
@@ -621,88 +642,22 @@ export const runSingleCreatorPayout = async (req, res) => {
 
                 // Calculate tax aggregates from creator's earning transactions since last payout
                 const lastPayoutDoc = await Payout.findOne({
-                    walletId: freshWallet._id,
-                    status: { $in: ['pending_settlement', 'completed'] },
-                }).sort({ createdAt: -1 }).session(session).lean();
+                // Calculate tax aggregates and self-transfers strictly from creator's Wallet 2 ledger since last payout
+                const ledgerBreakdown = await computePayoutLedgerBreakdown(freshWallet._id, session);
+                const {
+                    totalSellingPrice,
+                    totalBasePrice,
+                    totalGstCollected,
+                    totalPlatformCommission,
+                    totalGstOnCommission,
+                    totalTdsDeducted,
+                    totalTcsDeducted,
+                    totalTransferredToWallet1,
+                    periodStart,
+                    periodEnd,
+                } = ledgerBreakdown;
 
-                const txnQuery = {
-                    walletId: freshWallet._id,
-                    type: 'ppv_earning_credit',
-                    status: 'completed',
-                };
-                if (lastPayoutDoc && lastPayoutDoc.createdAt) {
-                    txnQuery.createdAt = { $gt: lastPayoutDoc.createdAt };
-                }
-
-                const earningTxns = await WalletTransaction.find(txnQuery).session(session).lean();
-
-                let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, rawNet = 0;
-
-                for (const tx of earningTxns) {
-                    let taxSource = 'STORED_LEDGER_BREAKDOWN';
-                    let txBreakdown = tx.taxBreakdown;
-                    if (!txBreakdown && tx.relatedPurchaseId) {
-                        const purchase = await Purchase.findById(tx.relatedPurchaseId).session(session).lean();
-                        if (purchase) {
-                            txBreakdown = {
-                                sellingPrice: purchase.amount,
-                                basePrice: purchase.basePrice,
-                                gstAmount: purchase.gstAmount,
-                                platformCommission: purchase.platformCommission,
-                                gstOnCommission: purchase.gstOnCommission,
-                                tdsAmount: purchase.tdsAmount,
-                                tcsAmount: purchase.tcsAmount,
-                                creatorPayout: purchase.creatorPayout,
-                            };
-                            taxSource = 'PURCHASE_LOOKUP';
-                        }
-                    }
-                    if (!txBreakdown && tx.amount > 0) {
-                        const estSelling = Math.round(tx.amount / 0.612985);
-                        txBreakdown = calculateTaxBreakdown(estSelling);
-                        taxSource = 'RATIO_FALLBACK';
-                    }
-                    if (txBreakdown) {
-                        console.log(`[PAYOUT_TAX_STRATEGY] Single Payout | TxnID: ${tx._id} | Amount: ₹${tx.amount} | TaxSource: ${taxSource} | SellingPrice: ₹${txBreakdown.sellingPrice}`);
-                        rawSelling += txBreakdown.sellingPrice || 0;
-                        rawBase += txBreakdown.basePrice || 0;
-                        rawGst += txBreakdown.gstAmount || 0;
-                        rawComm += txBreakdown.platformCommission || 0;
-                        rawCommGst += txBreakdown.gstOnCommission || 0;
-                        rawTds += txBreakdown.tdsAmount || 0;
-                        rawTcs += txBreakdown.tcsAmount || 0;
-                        rawNet += txBreakdown.creatorPayout || tx.amount || 0;
-                    }
-                }
-
-                let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
-                let totalPlatformCommission = 0, totalGstOnCommission = 0;
-                let totalTdsDeducted = 0, totalTcsDeducted = 0;
-                let calcMethod = 'AGGREGATED_TRANSACTIONS';
-
-                if (rawNet > 0 && grossAmount > 0) {
-                    const scale = grossAmount / rawNet;
-                    totalSellingPrice = Number((rawSelling * scale).toFixed(2));
-                    totalBasePrice = Number((rawBase * scale).toFixed(2));
-                    totalGstCollected = Number((rawGst * scale).toFixed(2));
-                    totalPlatformCommission = Number((rawComm * scale).toFixed(2));
-                    totalGstOnCommission = Number((rawCommGst * scale).toFixed(2));
-                    totalTdsDeducted = Number((rawTds * scale).toFixed(2));
-                    totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
-                } else if (grossAmount > 0) {
-                    calcMethod = 'DIRECT_RATIO_SCALE';
-                    const estSelling = Math.round(grossAmount / 0.612985);
-                    const calc = calculateTaxBreakdown(estSelling);
-                    totalSellingPrice = calc.sellingPrice;
-                    totalBasePrice = calc.basePrice;
-                    totalGstCollected = calc.gstAmount;
-                    totalPlatformCommission = calc.platformCommission;
-                    totalGstOnCommission = calc.gstOnCommission;
-                    totalTdsDeducted = calc.tdsAmount;
-                    totalTcsDeducted = calc.tcsAmount;
-                }
-
-                console.log(`[PAYOUT_CALC_METHOD] Single Payout | User: ${userId} | Gross: ₹${grossAmount} | Method: ${calcMethod} | RawNet: ₹${rawNet}`);
+                console.log(`[PAYOUT_LEDGER_BREAKDOWN] Single Payout | User: ${userId} | Gross: ₹${grossAmount} | TotalSP: ₹${totalSellingPrice} | TransfersToW1: ₹${totalTransferredToWallet1} | Period: ${periodStart} to ${periodEnd}`);
 
                 // EMAIL GUARD: Verify email BEFORE finalizing payout
                 const user = await User.findById(userId).select('contact email userName channelName').lean();
@@ -718,13 +673,16 @@ export const runSingleCreatorPayout = async (req, res) => {
                     grossAmount,
                     feeAmount,
                     netAmount,
-                    totalSellingPrice: Number(totalSellingPrice.toFixed(2)),
-                    totalBasePrice: Number(totalBasePrice.toFixed(2)),
-                    totalGstCollected: Number(totalGstCollected.toFixed(2)),
-                    totalPlatformCommission: Number(totalPlatformCommission.toFixed(2)),
-                    totalGstOnCommission: Number(totalGstOnCommission.toFixed(2)),
-                    totalTdsDeducted: Number(totalTdsDeducted.toFixed(2)),
-                    totalTcsDeducted: Number(totalTcsDeducted.toFixed(2)),
+                    totalSellingPrice,
+                    totalBasePrice,
+                    totalGstCollected,
+                    totalPlatformCommission,
+                    totalGstOnCommission,
+                    totalTdsDeducted,
+                    totalTcsDeducted,
+                    totalTransferredToWallet1,
+                    periodStart,
+                    periodEnd,
                     ...bankSnapshot,
                     bankName: bankName,
                     status: 'pending_settlement',
@@ -923,6 +881,9 @@ export const completePayoutSettlement = async (req, res) => {
                 totalGstOnCommission: payout.totalGstOnCommission || 0,
                 totalTdsDeducted: payout.totalTdsDeducted || 0,
                 totalTcsDeducted: payout.totalTcsDeducted || 0,
+                totalTransferredToWallet1: payout.totalTransferredToWallet1 || 0,
+                periodStart: payout.periodStart || null,
+                periodEnd: payout.periodEnd || payout.createdAt,
                 bankDetails,
             });
             console.log(`✅ [SETTLEMENT_EMAIL_GUARD] PDF Settlement Tax Invoice sent successfully to ${creatorEmail}`);
@@ -1008,6 +969,9 @@ export const completeBulkPayoutSettlement = async (req, res) => {
                     totalGstOnCommission: payout.totalGstOnCommission || 0,
                     totalTdsDeducted: payout.totalTdsDeducted || 0,
                     totalTcsDeducted: payout.totalTcsDeducted || 0,
+                    totalTransferredToWallet1: payout.totalTransferredToWallet1 || 0,
+                    periodStart: payout.periodStart || null,
+                    periodEnd: payout.periodEnd || payout.createdAt,
                     bankDetails,
                 });
 
@@ -1090,6 +1054,9 @@ export const resendSettlementEmail = async (req, res) => {
             totalGstOnCommission: payout.totalGstOnCommission || 0,
             totalTdsDeducted: payout.totalTdsDeducted || 0,
             totalTcsDeducted: payout.totalTcsDeducted || 0,
+            totalTransferredToWallet1: payout.totalTransferredToWallet1 || 0,
+            periodStart: payout.periodStart || null,
+            periodEnd: payout.periodEnd || payout.createdAt,
             bankDetails,
         });
 
@@ -1166,6 +1133,9 @@ export const getCreatorInvoices = async (req, res) => {
                         totalGstOnCommission: p.totalGstOnCommission || 0,
                         totalTdsDeducted: p.totalTdsDeducted || 0,
                         totalTcsDeducted: p.totalTcsDeducted || 0,
+                        totalTransferredToWallet1: p.totalTransferredToWallet1 || 0,
+                        periodStart: p.periodStart || null,
+                        periodEnd: p.periodEnd || p.createdAt,
                         bankDetails,
                     });
 
@@ -1208,6 +1178,9 @@ export const getCreatorInvoices = async (req, res) => {
                     totalGstOnCommission: p.totalGstOnCommission || 0,
                     totalTdsDeducted: p.totalTdsDeducted || 0,
                     totalTcsDeducted: p.totalTcsDeducted || 0,
+                    totalTransferredToWallet1: p.totalTransferredToWallet1 || 0,
+                    periodStart: p.periodStart || null,
+                    periodEnd: p.periodEnd || p.createdAt,
                 },
                 invoiceS3Key: s3Key || null,
                 invoiceUrl: pdfUrl || null,
@@ -1293,6 +1266,9 @@ export const getPayoutInvoicePdf = async (req, res) => {
             totalGstOnCommission: payout.totalGstOnCommission || 0,
             totalTdsDeducted: payout.totalTdsDeducted || 0,
             totalTcsDeducted: payout.totalTcsDeducted || 0,
+            totalTransferredToWallet1: payout.totalTransferredToWallet1 || 0,
+            periodStart: payout.periodStart || null,
+            periodEnd: payout.periodEnd || payout.createdAt,
             bankDetails,
         });
 

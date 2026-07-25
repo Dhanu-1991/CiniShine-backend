@@ -15,6 +15,11 @@ const payoutSchema = new mongoose.Schema({
     totalGstOnCommission: { type: Number, default: 0 },
     totalTdsDeducted: { type: Number, default: 0 },
     totalTcsDeducted: { type: Number, default: 0 },
+    totalTransferredToWallet1: { type: Number, default: 0 }, // Self-transferred from W2 to W1 in window
+
+    // Calculation window timestamp boundary (date + time)
+    periodStart: { type: Date, default: null },
+    periodEnd: { type: Date, default: null },
 
     // Encrypted snapshot of bank details at time of payout
     bankAccountNumberEncrypted: { type: String, required: true },

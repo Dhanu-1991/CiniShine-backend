@@ -20,6 +20,9 @@ export function generateSettlementPdf({
   totalGstOnCommission,
   totalTdsDeducted,
   totalTcsDeducted,
+  totalTransferredToWallet1 = 0,
+  periodStart = null,
+  periodEnd = null,
   bankDetails = {}
 }) {
   return new Promise((resolve, reject) => {
@@ -36,6 +39,7 @@ export function generateSettlementPdf({
       const handleStr = userHandle ? (userHandle.startsWith('@') ? userHandle : `@${userHandle}`) : '@creator';
       const gstStr = gstin && String(gstin).trim().length > 3 ? String(gstin).trim().toUpperCase() : 'N/A (Unregistered)';
 
+      // STRICT LEDGER VALUES ONLY — ZERO BACKTRACING / RATIO SCALING
       let sellingNum = Number(totalSellingPrice || 0);
       let baseNum = Number(totalBasePrice || 0);
       let gstNum = Number(totalGstCollected || 0);
@@ -43,24 +47,8 @@ export function generateSettlementPdf({
       let commGstNum = Number(totalGstOnCommission || 0);
       let tdsNum = Number(totalTdsDeducted || 0);
       let tcsNum = Number(totalTcsDeducted || 0);
-      let netNum = Number(netAmount || grossAmount || 0);
-
-      // Integrity Check: Reconcile gross sales with net payout using single source of truth
-      if (netNum > 0) {
-        const expectedSelling = Math.round(netNum / 0.612985);
-        // If totalBasePrice is missing OR if totalSellingPrice is inflated/mismatched by > 2%
-        if (!baseNum || baseNum === 0 || !sellingNum || Math.abs(sellingNum - expectedSelling) > 2) {
-          const calc = calculateTaxBreakdown(expectedSelling);
-          sellingNum = calc.sellingPrice;
-          baseNum = calc.basePrice;
-          gstNum = calc.gstAmount;
-          commNum = calc.platformCommission;
-          commGstNum = calc.gstOnCommission;
-          tdsNum = calc.tdsAmount;
-          tcsNum = calc.tcsAmount;
-          netNum = calc.creatorPayout;
-        }
-      }
+      let transferredToW1Num = Number(totalTransferredToWallet1 || 0);
+      let netNum = Number(netAmount !== undefined ? netAmount : (grossAmount || 0));
 
       const selling = sellingNum.toFixed(2);
       const base = baseNum.toFixed(2);
@@ -69,8 +57,23 @@ export function generateSettlementPdf({
       const commGst = commGstNum.toFixed(2);
       const tds = tdsNum.toFixed(2);
       const tcs = tcsNum.toFixed(2);
-      const net = (netNum || Number(netAmount || grossAmount || 0)).toFixed(2);
+      const transferredToW1 = transferredToW1Num.toFixed(2);
+      const net = netNum.toFixed(2);
       const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+      // Format Date Window with Time (e.g. 12/06/26 05:37 PM to 12/06/26 05:54 PM)
+      const formatDateTime = (d) => {
+        if (!d) return null;
+        const dt = new Date(d);
+        if (isNaN(dt.getTime())) return null;
+        const dStr = dt.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: '2-digit' });
+        const tStr = dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+        return `${dStr} ${tStr}`;
+      };
+
+      const windowStartStr = formatDateTime(periodStart) || 'Account Creation';
+      const windowEndStr = formatDateTime(periodEnd || new Date());
+      const calculationWindowStr = `${windowStartStr} to ${windowEndStr}`;
 
       // Header Banner
       doc.rect(40, 40, 515, 65).fill('#111827');
@@ -95,6 +98,7 @@ export function generateSettlementPdf({
       addMetaRow('Profile Handle:', handleStr);
       addMetaRow('Creator GSTIN:', gstStr);
       addMetaRow('Payout Month / Period:', payoutMonth);
+      addMetaRow('Payout Window (Date & Time):', calculationWindowStr);
       addMetaRow('Invoice Issue Date:', dateStr);
 
       y += 10;
@@ -123,6 +127,10 @@ export function generateSettlementPdf({
       addTableRow('GST on Platform Commission (18%)', `- ${commGst}`, '#7C3AED');
       addTableRow('TDS Deducted (Sec 194-O, 0.1%)', `- ${tds}`, '#DC2626');
       addTableRow('TCS Deducted (Sec 206C, 1.0%)', `- ${tcs}`, '#DC2626');
+
+      if (transferredToW1Num > 0) {
+        addTableRow('Transferred to Wallet 1 (Self Transfer)', `- ${transferredToW1}`, '#D97706');
+      }
 
       y += 6;
       doc.rect(40, y, 515, 32).fill('#ECFDF5');

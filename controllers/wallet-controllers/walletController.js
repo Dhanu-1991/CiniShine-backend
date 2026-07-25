@@ -174,8 +174,7 @@ export const getWalletTransactions = async (req, res) => {
                         }
                     }
                     if (!txn.taxBreakdown && txn.amount) {
-                        const approxSelling = Math.round(txn.amount / 0.612985);
-                        txn.taxBreakdown = calculateTaxBreakdown(approxSelling);
+                        txn.taxBreakdown = calculateTaxBreakdown(txn.amount);
                     }
                 }
             }
