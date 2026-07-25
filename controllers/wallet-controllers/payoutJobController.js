@@ -238,7 +238,7 @@ export const runMonthEndPayout = async (req, res) => {
                     );
 
                     // Write payout ledger entry
-                    const idempotencyKey = `payout_${wallet._id}_${payoutMonth}`;
+                    const idempotencyKey = `payout_${wallet._id}_${payoutMonth}_${Date.now()}`;
                     await WalletTransaction.create([{
                         walletId: freshWallet._id,
                         walletType: 'secondary',
@@ -353,6 +353,12 @@ export const runMonthEndPayout = async (req, res) => {
                         throw new Error(`Creator email address is missing/invalid for ${creatorName}. Payout aborted to protect wallet balance.`);
                     }
 
+                    let recordMonth = payoutMonth;
+                    const monthExists = await Payout.findOne({ walletId: freshWallet._id, payoutMonth: recordMonth }).session(session);
+                    if (monthExists) {
+                        recordMonth = `${payoutMonth}_RUN_${Date.now()}`;
+                    }
+
                     [createdPayout] = await Payout.create([{
                         walletId: freshWallet._id,
                         userId: freshWallet.userId,
@@ -369,7 +375,7 @@ export const runMonthEndPayout = async (req, res) => {
                         ...bankSnapshot,
                         bankName: bankName,
                         status: 'pending_settlement',
-                        payoutMonth,
+                        payoutMonth: recordMonth,
                         scheduledFor: new Date(),
                     }], { session });
 
