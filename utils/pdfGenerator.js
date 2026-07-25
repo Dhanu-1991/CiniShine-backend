@@ -3,6 +3,7 @@
  * Generates beautiful, 100% valid PDF documents for Settlement Tax Invoices.
  */
 import PDFDocument from 'pdfkit';
+import { calculateTaxBreakdown } from './taxCalculator.js';
 
 export function generateSettlementPdf({
   creatorName,
@@ -35,14 +36,47 @@ export function generateSettlementPdf({
       const handleStr = userHandle ? (userHandle.startsWith('@') ? userHandle : `@${userHandle}`) : '@creator';
       const gstStr = gstin && String(gstin).trim().length > 3 ? String(gstin).trim().toUpperCase() : 'N/A (Unregistered)';
 
-      const selling = Number(totalSellingPrice || grossAmount || 0).toFixed(2);
-      const base = Number(totalBasePrice || 0).toFixed(2);
-      const gst = Number(totalGstCollected || 0).toFixed(2);
-      const comm = Number(totalPlatformCommission || 0).toFixed(2);
-      const commGst = Number(totalGstOnCommission || 0).toFixed(2);
-      const tds = Number(totalTdsDeducted || 0).toFixed(2);
-      const tcs = Number(totalTcsDeducted || 0).toFixed(2);
-      const net = Number(netAmount || 0).toFixed(2);
+      let sellingNum = Number(totalSellingPrice || 0);
+      let baseNum = Number(totalBasePrice || 0);
+      let gstNum = Number(totalGstCollected || 0);
+      let commNum = Number(totalPlatformCommission || 0);
+      let commGstNum = Number(totalGstOnCommission || 0);
+      let tdsNum = Number(totalTdsDeducted || 0);
+      let tcsNum = Number(totalTcsDeducted || 0);
+      let netNum = Number(netAmount || 0);
+
+      // Fallback: If base price / itemized breakdown is missing or zero, compute exact legal tax breakdown
+      if (!baseNum || baseNum === 0) {
+        let targetSelling = sellingNum;
+        if (!targetSelling || targetSelling === 0) {
+          const refAmount = Number(grossAmount || netAmount || 0);
+          if (refAmount > 0) {
+            targetSelling = Number((refAmount / 0.61308).toFixed(2));
+          }
+        }
+        if (targetSelling > 0) {
+          const calc = calculateTaxBreakdown(targetSelling);
+          sellingNum = calc.sellingPrice;
+          baseNum = calc.basePrice;
+          gstNum = calc.gstAmount;
+          commNum = calc.platformCommission;
+          commGstNum = calc.gstOnCommission;
+          tdsNum = calc.tdsAmount;
+          tcsNum = calc.tcsAmount;
+          if (!netNum || netNum === 0) {
+            netNum = calc.creatorPayout;
+          }
+        }
+      }
+
+      const selling = sellingNum.toFixed(2);
+      const base = baseNum.toFixed(2);
+      const gst = gstNum.toFixed(2);
+      const comm = commNum.toFixed(2);
+      const commGst = commGstNum.toFixed(2);
+      const tds = tdsNum.toFixed(2);
+      const tcs = tcsNum.toFixed(2);
+      const net = (netNum || Number(netAmount || grossAmount || 0)).toFixed(2);
       const dateStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
       // Header Banner
@@ -109,9 +143,23 @@ export function generateSettlementPdf({
       doc.moveTo(40, y).lineTo(555, y).strokeColor('#E5E7EB').stroke();
       y += 12;
 
+      let rawAcc = bankDetails.accountNumber || '';
+      let rawBank = bankDetails.bankName || '';
+      let displayBank = rawBank;
+      let displayAcc = rawAcc;
+
+      // Smart auto-fix: If bankName is numeric/masked and accountNumber is text, swap them
+      if (rawBank && rawAcc && (/^\d+$/.test(rawBank.replace(/•/g, '')) || rawBank.includes('••••')) && /^[A-Za-z\s]+$/.test(rawAcc)) {
+        displayBank = rawAcc;
+        displayAcc = rawBank;
+      }
+      if (displayAcc && !displayAcc.includes('••••') && displayAcc.length > 4) {
+        displayAcc = '••••' + displayAcc.slice(-4);
+      }
+
       addMetaRow('Account Holder Name:', bankDetails.accountHolderName || cName);
-      addMetaRow('Bank Name:', bankDetails.bankName || 'Registered Settlement Bank');
-      addMetaRow('Bank Account No.:', bankDetails.accountNumber || '•••• Stored Encrypted');
+      addMetaRow('Bank Name:', displayBank || 'Registered Settlement Bank');
+      addMetaRow('Bank Account No.:', displayAcc || '•••• Stored Encrypted');
       addMetaRow('IFSC Code:', bankDetails.ifscCode || 'Stored on File');
 
       y += 18;

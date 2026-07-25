@@ -16,6 +16,7 @@ import Payout from '../../models/payout.model.js';
 import Purchase from '../../models/purchase.model.js';
 import User from '../../models/user.model.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
+import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -131,14 +132,33 @@ export const runMonthEndPayout = async (req, res) => {
                     let totalTdsDeducted = 0, totalTcsDeducted = 0;
 
                     for (const tx of earningTxns) {
-                        if (tx.taxBreakdown) {
-                            totalSellingPrice += tx.taxBreakdown.sellingPrice || 0;
-                            totalBasePrice += tx.taxBreakdown.basePrice || 0;
-                            totalGstCollected += tx.taxBreakdown.gstAmount || 0;
-                            totalPlatformCommission += tx.taxBreakdown.platformCommission || 0;
-                            totalGstOnCommission += tx.taxBreakdown.gstOnCommission || 0;
-                            totalTdsDeducted += tx.taxBreakdown.tdsAmount || 0;
-                            totalTcsDeducted += tx.taxBreakdown.tcsAmount || 0;
+                        let txBreakdown = tx.taxBreakdown;
+                        if (!txBreakdown && tx.amount > 0) {
+                            const estSelling = Number((tx.amount / 0.61308).toFixed(2));
+                            txBreakdown = calculateTaxBreakdown(estSelling);
+                        }
+                        if (txBreakdown) {
+                            totalSellingPrice += txBreakdown.sellingPrice || 0;
+                            totalBasePrice += txBreakdown.basePrice || 0;
+                            totalGstCollected += txBreakdown.gstAmount || 0;
+                            totalPlatformCommission += txBreakdown.platformCommission || 0;
+                            totalGstOnCommission += txBreakdown.gstOnCommission || 0;
+                            totalTdsDeducted += txBreakdown.tdsAmount || 0;
+                            totalTcsDeducted += txBreakdown.tcsAmount || 0;
+                        }
+                    }
+
+                    if (!totalBasePrice || totalBasePrice === 0) {
+                        const estSelling = grossAmount > 0 ? Number((grossAmount / 0.61308).toFixed(2)) : 0;
+                        if (estSelling > 0) {
+                            const calc = calculateTaxBreakdown(estSelling);
+                            totalSellingPrice = calc.sellingPrice;
+                            totalBasePrice = calc.basePrice;
+                            totalGstCollected = calc.gstAmount;
+                            totalPlatformCommission = calc.platformCommission;
+                            totalGstOnCommission = calc.gstOnCommission;
+                            totalTdsDeducted = calc.tdsAmount;
+                            totalTcsDeducted = calc.tcsAmount;
                         }
                     }
 
@@ -381,14 +401,33 @@ export const runSingleCreatorPayout = async (req, res) => {
                 let totalTdsDeducted = 0, totalTcsDeducted = 0;
 
                 for (const tx of earningTxns) {
-                    if (tx.taxBreakdown) {
-                        totalSellingPrice += tx.taxBreakdown.sellingPrice || 0;
-                        totalBasePrice += tx.taxBreakdown.basePrice || 0;
-                        totalGstCollected += tx.taxBreakdown.gstAmount || 0;
-                        totalPlatformCommission += tx.taxBreakdown.platformCommission || 0;
-                        totalGstOnCommission += tx.taxBreakdown.gstOnCommission || 0;
-                        totalTdsDeducted += tx.taxBreakdown.tdsAmount || 0;
-                        totalTcsDeducted += tx.taxBreakdown.tcsAmount || 0;
+                    let txBreakdown = tx.taxBreakdown;
+                    if (!txBreakdown && tx.amount > 0) {
+                        const estSelling = Number((tx.amount / 0.61308).toFixed(2));
+                        txBreakdown = calculateTaxBreakdown(estSelling);
+                    }
+                    if (txBreakdown) {
+                        totalSellingPrice += txBreakdown.sellingPrice || 0;
+                        totalBasePrice += txBreakdown.basePrice || 0;
+                        totalGstCollected += txBreakdown.gstAmount || 0;
+                        totalPlatformCommission += txBreakdown.platformCommission || 0;
+                        totalGstOnCommission += txBreakdown.gstOnCommission || 0;
+                        totalTdsDeducted += txBreakdown.tdsAmount || 0;
+                        totalTcsDeducted += txBreakdown.tcsAmount || 0;
+                    }
+                }
+
+                if (!totalBasePrice || totalBasePrice === 0) {
+                    const estSelling = grossAmount > 0 ? Number((grossAmount / 0.61308).toFixed(2)) : 0;
+                    if (estSelling > 0) {
+                        const calc = calculateTaxBreakdown(estSelling);
+                        totalSellingPrice = calc.sellingPrice;
+                        totalBasePrice = calc.basePrice;
+                        totalGstCollected = calc.gstAmount;
+                        totalPlatformCommission = calc.platformCommission;
+                        totalGstOnCommission = calc.gstOnCommission;
+                        totalTdsDeducted = calc.tdsAmount;
+                        totalTcsDeducted = calc.tcsAmount;
                     }
                 }
 
