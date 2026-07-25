@@ -70,7 +70,7 @@ export const getDailyLedger = async (req, res) => {
                 walletToWalletTransfers: item.walletToWalletTransfers || 0,
                 payoutFees: item.payoutFees || 0,
                 payouts: item.payouts || 0,
-                platformRevenue: (item.walletPPVSales * 0.3) + (item.payoutFees || 0)
+                platformRevenue: (item.walletPPVSales * 0.32) + (item.payoutFees || 0)
             };
         });
 
@@ -93,7 +93,7 @@ export const getDailyLedger = async (req, res) => {
             merged[item._id].gatewayPPVSales = Math.max(0, item.gatewayPPVSales - merged[item._id].walletPPVSales);
             
             // Adjust revenue to include gateway sales cut
-            merged[item._id].platformRevenue += (merged[item._id].gatewayPPVSales * 0.3);
+            merged[item._id].platformRevenue += (merged[item._id].gatewayPPVSales * 0.32);
         });
 
         // Sort by date ascending

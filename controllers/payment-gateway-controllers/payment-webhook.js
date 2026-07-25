@@ -5,8 +5,7 @@ import { fulfillWalletRecharge, fulfillPpvPurchase } from "../../utils/paymentFu
 
 dotenv.config();
 
-/** Platform cut percentage for PPV purchases via gateway */
-const PLATFORM_CUT_PERCENT = 30;
+// Webhook handler for Cashfree PG events
 
 // Helper: flatten nested objects for pre-2025-01-01 versions
 const flattenObject = (obj, parentKey = "", result = {}) => {
