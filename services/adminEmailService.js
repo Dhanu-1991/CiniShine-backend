@@ -346,12 +346,16 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
             const s3Bucket = process.env.S3_BUCKET;
             if (s3Bucket) {
                 try {
-                    const rawUid = data.userId?._id || data.userId || data.creatorId || 'creator';
-                    const uid = typeof rawUid === 'object' ? rawUid.toString() : String(rawUid);
-                    const s3Key = `settlement-invoices/${data.payoutMonth || 'general'}/${uid}_Tax_Invoice_${Date.now()}.pdf`;
+                    const s3Key = `settlement-invoices/${data.payoutMonth || 'general'}/${data.userId || data.creatorId || 'creator'}_Tax_Invoice_${Date.now()}.pdf`;
                     const { PutObjectCommand } = await import('@aws-sdk/client-s3');
                     const { S3Client } = await import('@aws-sdk/client-s3');
-                    const s3Client = new S3Client({ region: REGION });
+                    const s3Client = new S3Client({ 
+                        region: REGION,
+                        credentials: {
+                            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+                            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+                        }
+                    });
                     await s3Client.send(new PutObjectCommand({
                         Bucket: s3Bucket,
                         Key: s3Key,
@@ -359,7 +363,7 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
                         ContentType: 'application/pdf',
                         ServerSideEncryption: 'AES256',
                     }));
-                    console.log(`✅ [AdminEmail] Saved generated PDF invoice to AWS S3: s3://${s3Bucket}/${s3Key}`);
+                    console.log(`[AdminEmail] Saved generated PDF invoice to AWS S3: s3://${s3Bucket}/${s3Key}`);
 
                     // Save invoice key and URL to Payout document if payoutId is available
                     if (data.payoutId) {
@@ -371,13 +375,12 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
                                 invoiceS3Key: s3Key,
                                 invoiceUrl,
                             });
-                            console.log(`✅ [AdminEmail] Updated Payout ${data.payoutId} in MongoDB with AWS S3 Key: ${s3Key}`);
                         } catch (payoutUpdateErr) {
-                            console.error('❌ [AdminEmail] Failed to update Payout document with invoiceUrl:', payoutUpdateErr.message);
+                            console.error('[AdminEmail] Failed to update Payout document with invoiceUrl:', payoutUpdateErr.message);
                         }
                     }
                 } catch (s3Err) {
-                    console.error('❌ [AdminEmail] AWS S3 PDF save error:', s3Err.message || s3Err);
+                    console.error('[AdminEmail] AWS S3 PDF save warning:', s3Err.message || s3Err);
                 }
             }
 
