@@ -47,7 +47,7 @@ export function generateSettlementPdf({
 
       // Integrity Check: Reconcile gross sales with net payout using single source of truth
       if (netNum > 0) {
-        const expectedSelling = Number((netNum / 0.61308).toFixed(2));
+        const expectedSelling = Math.round(netNum / 0.612985);
         // If totalBasePrice is missing OR if totalSellingPrice is inflated/mismatched by > 2%
         if (!baseNum || baseNum === 0 || !sellingNum || Math.abs(sellingNum - expectedSelling) > 2) {
           const calc = calculateTaxBreakdown(expectedSelling);

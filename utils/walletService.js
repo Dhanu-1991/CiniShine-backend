@@ -115,6 +115,7 @@ export async function creditWallet(walletId, walletType, amount, type, meta, ide
         relatedPurchaseId: meta.relatedPurchaseId || null,
         relatedOrderId: meta.relatedOrderId || null,
         relatedBuyerId: meta.relatedBuyerId || null,
+        taxBreakdown: meta.taxBreakdown || null,
         status: 'completed',
         idempotencyKey,
     }], { session });
@@ -156,6 +157,7 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
         relatedPurchaseId: meta.relatedPurchaseId || null,
         relatedOrderId: meta.relatedOrderId || null,
         relatedBuyerId: meta.relatedBuyerId || null,
+        taxBreakdown: meta.taxBreakdown || null,
         status: 'completed',
         idempotencyKey,
     }], { session });

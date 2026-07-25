@@ -156,9 +156,26 @@ export const getWalletTransactions = async (req, res) => {
         if (walletType === 'secondary') {
             for (const txn of transactions) {
                 delete txn.relatedBuyerId;
-                if (txn.type === 'ppv_earning_credit' && !txn.taxBreakdown && txn.amount) {
-                    const approxSelling = Math.round((txn.amount / 0.61308) * 100) / 100;
-                    txn.taxBreakdown = calculateTaxBreakdown(approxSelling);
+                if (txn.type === 'ppv_earning_credit') {
+                    if (!txn.taxBreakdown && txn.relatedPurchaseId) {
+                        const purchase = await Purchase.findById(txn.relatedPurchaseId).lean();
+                        if (purchase) {
+                            txn.taxBreakdown = {
+                                sellingPrice: purchase.amount,
+                                basePrice: purchase.basePrice,
+                                gstAmount: purchase.gstAmount,
+                                platformCommission: purchase.platformCommission,
+                                gstOnCommission: purchase.gstOnCommission,
+                                tdsAmount: purchase.tdsAmount,
+                                tcsAmount: purchase.tcsAmount,
+                                creatorPayout: purchase.creatorPayout,
+                            };
+                        }
+                    }
+                    if (!txn.taxBreakdown && txn.amount) {
+                        const approxSelling = Math.round(txn.amount / 0.612985);
+                        txn.taxBreakdown = calculateTaxBreakdown(approxSelling);
+                    }
                 }
             }
         }

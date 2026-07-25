@@ -78,6 +78,17 @@ export const runMonthEndPayout = async (req, res) => {
                         return;
                     }
 
+                    // Guard: Skip if creator has a previous settlement pending
+                    const pendingSettlement = await Payout.findOne({
+                        walletId: wallet._id,
+                        status: 'pending_settlement',
+                    }).session(session);
+                    if (pendingSettlement) {
+                        results.skipped++;
+                        console.log(`⏩ Skipping payout for wallet ${wallet._id}: previous settlement is still pending`);
+                        return;
+                    }
+
                     // Re-read wallet inside session to get latest balance
                     const freshWallet = await SecondaryWallet.findById(wallet._id).session(session);
                     if (!freshWallet || freshWallet.balance <= 0) {
@@ -141,8 +152,23 @@ export const runMonthEndPayout = async (req, res) => {
 
                     for (const tx of earningTxns) {
                         let txBreakdown = tx.taxBreakdown;
+                        if (!txBreakdown && tx.relatedPurchaseId) {
+                            const purchase = await Purchase.findById(tx.relatedPurchaseId).session(session).lean();
+                            if (purchase) {
+                                txBreakdown = {
+                                    sellingPrice: purchase.amount,
+                                    basePrice: purchase.basePrice,
+                                    gstAmount: purchase.gstAmount,
+                                    platformCommission: purchase.platformCommission,
+                                    gstOnCommission: purchase.gstOnCommission,
+                                    tdsAmount: purchase.tdsAmount,
+                                    tcsAmount: purchase.tcsAmount,
+                                    creatorPayout: purchase.creatorPayout,
+                                };
+                            }
+                        }
                         if (!txBreakdown && tx.amount > 0) {
-                            const estSelling = Number((tx.amount / 0.61308).toFixed(2));
+                            const estSelling = Math.round(tx.amount / 0.612985);
                             txBreakdown = calculateTaxBreakdown(estSelling);
                         }
                         if (txBreakdown) {
@@ -171,7 +197,7 @@ export const runMonthEndPayout = async (req, res) => {
                         totalTdsDeducted = Number((rawTds * scale).toFixed(2));
                         totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
                     } else if (grossAmount > 0) {
-                        const estSelling = Number((grossAmount / 0.61308).toFixed(2));
+                        const estSelling = Math.round(grossAmount / 0.612985);
                         const calc = calculateTaxBreakdown(estSelling);
                         totalSellingPrice = calc.sellingPrice;
                         totalBasePrice = calc.basePrice;
@@ -431,8 +457,23 @@ export const runSingleCreatorPayout = async (req, res) => {
 
                 for (const tx of earningTxns) {
                     let txBreakdown = tx.taxBreakdown;
+                    if (!txBreakdown && tx.relatedPurchaseId) {
+                        const purchase = await Purchase.findById(tx.relatedPurchaseId).session(session).lean();
+                        if (purchase) {
+                            txBreakdown = {
+                                sellingPrice: purchase.amount,
+                                basePrice: purchase.basePrice,
+                                gstAmount: purchase.gstAmount,
+                                platformCommission: purchase.platformCommission,
+                                gstOnCommission: purchase.gstOnCommission,
+                                tdsAmount: purchase.tdsAmount,
+                                tcsAmount: purchase.tcsAmount,
+                                creatorPayout: purchase.creatorPayout,
+                            };
+                        }
+                    }
                     if (!txBreakdown && tx.amount > 0) {
-                        const estSelling = Number((tx.amount / 0.61308).toFixed(2));
+                        const estSelling = Math.round(tx.amount / 0.612985);
                         txBreakdown = calculateTaxBreakdown(estSelling);
                     }
                     if (txBreakdown) {
@@ -461,7 +502,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                     totalTdsDeducted = Number((rawTds * scale).toFixed(2));
                     totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
                 } else if (grossAmount > 0) {
-                    const estSelling = Number((grossAmount / 0.61308).toFixed(2));
+                    const estSelling = Math.round(grossAmount / 0.612985);
                     const calc = calculateTaxBreakdown(estSelling);
                     totalSellingPrice = calc.sellingPrice;
                     totalBasePrice = calc.basePrice;
