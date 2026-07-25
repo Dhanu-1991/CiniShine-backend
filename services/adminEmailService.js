@@ -337,18 +337,31 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
     const { subject, html, text } = templateFn(data);
     let attachments = [];
 
-    // If sending completed payout settlement email, generate PDF, upload to AWS S3, and attach!
+    // If sending completed payout settlement email, fetch saved PDF from AWS S3 (or generate if first time) and attach!
     if (templateName === 'payoutCompleted') {
         try {
-            const pdfBuffer = await generateSettlementPdf(data);
-            
-            // Save generated PDF to AWS S3 before dispatch
+            let pdfBuffer = null;
             const s3Bucket = process.env.S3_BUCKET;
-            if (s3Bucket) {
+
+            // Step A: Check if saved invoice S3 key is passed or stored on Payout document
+            let s3Key = data.invoiceS3Key;
+            if (!s3Key && data.payoutId) {
                 try {
-                    const s3Key = `settlement-invoices/${data.payoutMonth || 'general'}/${data.userId || data.creatorId || 'creator'}_Tax_Invoice_${Date.now()}.pdf`;
-                    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
-                    const { S3Client } = await import('@aws-sdk/client-s3');
+                    const Payout = (await import('../models/payout.model.js')).default;
+                    const payoutDoc = await Payout.findById(data.payoutId).select('invoiceS3Key').lean();
+                    if (payoutDoc?.invoiceS3Key) {
+                        s3Key = payoutDoc.invoiceS3Key;
+                    }
+                } catch (dbErr) {
+                    console.error('[AdminEmail] Error fetching Payout invoiceS3Key:', dbErr.message);
+                }
+            }
+
+            // Step B: If saved S3 key exists, fetch the EXACT saved PDF file from AWS S3! (DO NOT generate a new one)
+            if (s3Key && s3Bucket) {
+                try {
+                    console.log(`[AdminEmail] Fetching existing saved PDF invoice from AWS S3: s3://${s3Bucket}/${s3Key}`);
+                    const { GetObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
                     const s3Client = new S3Client({ 
                         region: REGION,
                         credentials: {
@@ -356,40 +369,76 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
                             secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
                         }
                     });
-                    await s3Client.send(new PutObjectCommand({
+                    const s3Obj = await s3Client.send(new GetObjectCommand({
                         Bucket: s3Bucket,
                         Key: s3Key,
-                        Body: pdfBuffer,
-                        ContentType: 'application/pdf',
-                        ServerSideEncryption: 'AES256',
                     }));
-                    console.log(`[AdminEmail] Saved generated PDF invoice to AWS S3: s3://${s3Bucket}/${s3Key}`);
 
-                    // Save invoice key and URL to Payout document if payoutId is available
-                    if (data.payoutId) {
-                        try {
-                            const Payout = (await import('../models/payout.model.js')).default;
-                            const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || `https://${s3Bucket}.s3.amazonaws.com`;
-                            const invoiceUrl = `${cdnUrl}/${s3Key}`;
-                            await Payout.findByIdAndUpdate(data.payoutId, {
-                                invoiceS3Key: s3Key,
-                                invoiceUrl,
-                            });
-                        } catch (payoutUpdateErr) {
-                            console.error('[AdminEmail] Failed to update Payout document with invoiceUrl:', payoutUpdateErr.message);
-                        }
+                    const chunks = [];
+                    for await (const chunk of s3Obj.Body) {
+                        chunks.push(chunk);
                     }
-                } catch (s3Err) {
-                    console.error('[AdminEmail] AWS S3 PDF save warning:', s3Err.message || s3Err);
+                    pdfBuffer = Buffer.concat(chunks);
+                    console.log(`✅ [AdminEmail] Successfully fetched saved PDF (${pdfBuffer.length} bytes) from S3: s3://${s3Bucket}/${s3Key}`);
+                } catch (s3FetchErr) {
+                    console.warn(`⚠️ [AdminEmail] S3 fetch warning (${s3FetchErr.message}). Will generate PDF as fallback.`);
                 }
             }
 
-            attachments.push({
-                filename: `Tax_Invoice_${data.payoutMonth || 'Settlement'}.pdf`,
-                content: pdfBuffer,
-            });
+            // Step C: Only generate & upload new PDF if no saved file exists in AWS S3 (e.g. initial settlement creation)
+            if (!pdfBuffer) {
+                console.log(`[AdminEmail] No existing saved S3 PDF found. Generating new settlement PDF invoice...`);
+                pdfBuffer = await generateSettlementPdf(data);
+                
+                // Save generated PDF to AWS S3 before dispatch
+                if (s3Bucket) {
+                    try {
+                        const newS3Key = `settlement-invoices/${data.payoutMonth || 'general'}/${data.userId || data.creatorId || 'creator'}_Tax_Invoice_${Date.now()}.pdf`;
+                        const { PutObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
+                        const s3Client = new S3Client({ 
+                            region: REGION,
+                            credentials: {
+                                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+                                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+                            }
+                        });
+                        await s3Client.send(new PutObjectCommand({
+                            Bucket: s3Bucket,
+                            Key: newS3Key,
+                            Body: pdfBuffer,
+                            ContentType: 'application/pdf',
+                            ServerSideEncryption: 'AES256',
+                        }));
+                        console.log(`[AdminEmail] Saved generated PDF invoice to AWS S3: s3://${s3Bucket}/${newS3Key}`);
+
+                        // Save invoice key and URL to Payout document if payoutId is available
+                        if (data.payoutId) {
+                            try {
+                                const Payout = (await import('../models/payout.model.js')).default;
+                                const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || `https://${s3Bucket}.s3.amazonaws.com`;
+                                const invoiceUrl = `${cdnUrl}/${newS3Key}`;
+                                await Payout.findByIdAndUpdate(data.payoutId, {
+                                    invoiceS3Key: newS3Key,
+                                    invoiceUrl,
+                                });
+                            } catch (payoutUpdateErr) {
+                                console.error('[AdminEmail] Failed to update Payout document with invoiceUrl:', payoutUpdateErr.message);
+                            }
+                        }
+                    } catch (s3Err) {
+                        console.error('[AdminEmail] AWS S3 PDF save warning:', s3Err.message || s3Err);
+                    }
+                }
+            }
+
+            if (pdfBuffer) {
+                attachments.push({
+                    filename: `Tax_Invoice_${data.payoutMonth || 'Settlement'}.pdf`,
+                    content: pdfBuffer,
+                });
+            }
         } catch (pdfErr) {
-            console.error('[AdminEmail] PDF generation error:', pdfErr);
+            console.error('[AdminEmail] PDF processing error:', pdfErr);
         }
     }
 

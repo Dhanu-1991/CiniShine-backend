@@ -1038,6 +1038,7 @@ export const resendSettlementEmail = async (req, res) => {
         console.log(`[RESEND_EMAIL_ATTEMPT] Sending PDF Settlement Invoice to ${creatorEmail}...`);
         await sendAdminEmail('payoutCompleted', creatorEmail, {
             payoutId: payout._id.toString(),
+            invoiceS3Key: payout.invoiceS3Key,
             creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
             userName: payout.userId.userName || '',
             userHandle: payout.userId.channelHandle || '',
