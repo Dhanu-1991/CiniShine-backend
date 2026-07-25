@@ -344,6 +344,8 @@ export const deleteComment = async (req, res) => {
     }
 };
 
+import { kycOtpStore } from '../wallet-controllers/walletController.js';
+
 /**
  * Update profile settings
  * Fields: channelName, userName, bio, achievements, channelDescription
@@ -352,6 +354,12 @@ export const updateProfileSettings = async (req, res) => {
     try {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        // Enforce OTP Verification check
+        const verifiedUntil = kycOtpStore.get(`verified_${userId}`);
+        if (!verifiedUntil || verifiedUntil < Date.now()) {
+            return res.status(400).json({ error: 'Email OTP verification is required before updating profile settings' });
+        }
 
         const { channelName, userName, bio, achievements, channelDescription } = req.body;
 
@@ -375,6 +383,9 @@ export const updateProfileSettings = async (req, res) => {
         const user = await User.findByIdAndUpdate(userId, update, { new: true }).select(
             'userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture'
         );
+
+        // Consume single-use OTP verification token
+        kycOtpStore.delete(`verified_${userId}`);
 
         res.json({
             success: true,

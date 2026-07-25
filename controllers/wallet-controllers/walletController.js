@@ -367,7 +367,7 @@ export const transferToWalletOne = async (req, res) => {
     }
 };
 
-const kycOtpStore = new Map();
+export const kycOtpStore = new Map();
 
 /**
  * POST /wallets/kyc/send-otp — Send 6-digit verification OTP to user email
