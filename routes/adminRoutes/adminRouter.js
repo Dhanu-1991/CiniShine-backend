@@ -32,7 +32,7 @@ import {
     getDailyLedger, getLiveTransfers
 } from '../../controllers/admin-controllers/adminLedgerController.js';
 import {
-    getPayoutReport, runMonthEndPayout, getDailyPayoutStats, runSingleCreatorPayout, completePayoutSettlement, completeBulkPayoutSettlement, resendSettlementEmail, getCreatorInvoices
+    getPayoutReport, runMonthEndPayout, getDailyPayoutStats, runSingleCreatorPayout, completePayoutSettlement, completeBulkPayoutSettlement, resendSettlementEmail, getCreatorInvoices, getPayoutInvoicePdf
 } from '../../controllers/wallet-controllers/payoutJobController.js';
 import { getCreatorEarnings } from '../../controllers/wallet-controllers/earningsController.js';
 import {
@@ -128,6 +128,7 @@ adminRouter.post('/payouts/run', runMonthEndPayout);
 adminRouter.post('/payouts/complete-bulk', completeBulkPayoutSettlement);
 adminRouter.post('/payouts/:payoutId/complete', completePayoutSettlement);
 adminRouter.post('/payouts/:payoutId/resend-email', resendSettlementEmail);
+adminRouter.get('/payouts/:payoutId/invoice-pdf', getPayoutInvoicePdf);
 
 // Ledger & Live Transfers
 adminRouter.get('/ledger/daily', getDailyLedger);

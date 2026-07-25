@@ -18,6 +18,7 @@ import User from '../../models/user.model.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
 import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
+import { generateSettlementPdf } from '../../utils/pdfGenerator.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -1012,5 +1013,72 @@ export const getCreatorInvoices = async (req, res) => {
     } catch (err) {
         console.error('Error fetching creator invoices:', err);
         return res.status(500).json({ error: 'Failed to fetch creator invoices' });
+    }
+};
+
+/**
+ * GET /admin/payouts/:payoutId/invoice-pdf
+ * View PDF tax invoice inline for any payout settlement.
+ * Streams from S3 if available, or generates PDF dynamically!
+ */
+export const getPayoutInvoicePdf = async (req, res) => {
+    try {
+        const payoutId = req.params.payoutId || req.params.id;
+        const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle contact email');
+        if (!payout) return res.status(404).send('Payout record not found');
+
+        const s3Bucket = process.env.S3_BUCKET;
+        // 1. Check if PDF exists in S3
+        if (payout.invoiceS3Key && s3Bucket) {
+            try {
+                const s3Obj = await s3Client.send(new GetObjectCommand({
+                    Bucket: s3Bucket,
+                    Key: payout.invoiceS3Key
+                }));
+                res.setHeader('Content-Type', 'application/pdf');
+                res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
+                return s3Obj.Body.pipe(res);
+            } catch (s3ReadErr) {
+                console.warn('[InvoicePDF] S3 read fallback to dynamic generation:', s3ReadErr.message);
+            }
+        }
+
+        // 2. Dynamic PDF generation fallback (100% guaranteed for any settlement!)
+        const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
+        let bankDetails = {};
+        if (kyc) {
+            const dec = decryptBankDetails(kyc);
+            bankDetails = {
+                accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
+                bankName: dec.bankName || payout.bankName || '',
+                accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                ifscCode: dec.ifscCode || '',
+            };
+        }
+
+        const pdfBuffer = await generateSettlementPdf({
+            creatorName: payout.userId?.channelName || payout.userId?.userName || 'Creator',
+            userName: payout.userId?.userName || '',
+            userHandle: payout.userId?.channelHandle || '',
+            gstin: kyc?.gstNumber || '',
+            netAmount: payout.netAmount,
+            grossAmount: payout.grossAmount,
+            payoutMonth: payout.payoutMonth,
+            totalSellingPrice: payout.totalSellingPrice || payout.grossAmount,
+            totalBasePrice: payout.totalBasePrice || 0,
+            totalGstCollected: payout.totalGstCollected || 0,
+            totalPlatformCommission: payout.totalPlatformCommission || 0,
+            totalGstOnCommission: payout.totalGstOnCommission || 0,
+            totalTdsDeducted: payout.totalTdsDeducted || 0,
+            totalTcsDeducted: payout.totalTcsDeducted || 0,
+            bankDetails,
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
+        return res.send(pdfBuffer);
+    } catch (err) {
+        console.error('Error serving payout invoice PDF:', err);
+        return res.status(500).send(`Failed to generate invoice PDF: ${err.message}`);
     }
 };
