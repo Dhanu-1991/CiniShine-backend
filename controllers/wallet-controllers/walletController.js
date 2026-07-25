@@ -29,7 +29,6 @@ import { encryptBankDetails } from '../../utils/encryption.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import Content from '../../models/content.model.js';
-import User from '../../models/user.model.js';
 import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
 import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import PaymentDetails from '../../models/payment.details.model.js';
@@ -57,9 +56,6 @@ const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production'
     : CFEnvironment.SANDBOX;
 const cashfree = new Cashfree(cfEnv, process.env.CF_CLIENT_ID?.trim(), process.env.CF_CLIENT_SECRET?.trim());
 
-/**
- * GET /wallets — Get user's wallets (primary + secondary if exists)
- */
 export const getMyWallets = async (req, res) => {
     try {
         const userId = req.user?.id;
