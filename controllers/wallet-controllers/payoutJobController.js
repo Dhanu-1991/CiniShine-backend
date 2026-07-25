@@ -14,7 +14,10 @@ import KycDetails from '../../models/kycDetails.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
 import Payout from '../../models/payout.model.js';
 import Purchase from '../../models/purchase.model.js';
-import User from '../../models/user.model.js';
+import crypto from 'crypto';
+import OtpSession from '../../models/adminOtpSession.model.js';
+import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
+import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
 import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
@@ -33,40 +36,121 @@ const s3Client = new S3Client({
 const MAINTENANCE_FEE_PERCENT = 0; // 0% — no payout fee
 
 /**
- * POST /admin/payouts/run — Run month-end payout job
+ * POST /admin/payouts/send-otp — Send OTP to logged in admin for bulk payout verification
+ */
+export const sendBulkPayoutOtp = async (req, res) => {
+    try {
+        const contact = req.admin?.contact;
+        if (!contact) {
+            return res.status(401).json({ error: "Admin authentication required or contact details missing" });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const channel = contact.includes('@') ? 'email' : 'sms';
+
+        await OtpSession.deleteMany({ contact, purpose: 'bulk_payout' });
+
+        await OtpSession.create({
+            admin_id: req.admin._id,
+            contact,
+            otp_hash: crypto.createHash('sha256').update(otp).digest('hex'),
+            channel,
+            purpose: 'bulk_payout',
+            expires_at: new Date(Date.now() + 5 * 60 * 1000)
+        });
+
+        let sent = false;
+        if (channel === 'email') {
+            sent = await sendOtpToEmail(contact, otp);
+        } else {
+            sent = await sendOtpToPhone(contact, otp);
+        }
+
+        if (!sent) {
+            return res.status(500).json({ error: "Failed to send OTP to admin contact" });
+        }
+
+        return res.json({
+            success: true,
+            message: `OTP sent successfully to admin contact (${contact})`
+        });
+    } catch (error) {
+        console.error('❌ Error sending bulk payout OTP:', error);
+        return res.status(500).json({ error: 'Failed to send OTP' });
+    }
+};
+
+/**
+ * POST /admin/payouts/run — Run bulk payout job (Requires Admin OTP)
  * Finds all secondary wallets with balance > 0, paired with submitted KYC
- * Processes each in an individual atomic transaction
+ * Processes each in an individual atomic transaction. Can be run anytime by admin.
  */
 export const runMonthEndPayout = async (req, res) => {
     try {
+        const { otp } = req.body;
+        if (!otp) {
+            return res.status(400).json({ error: "Admin OTP is required to initiate bulk payout" });
+        }
+
+        const contact = req.admin?.contact;
+        if (!contact) {
+            return res.status(401).json({ error: "Admin contact details missing" });
+        }
+
+        const otpSession = await OtpSession.findOne({
+            contact,
+            purpose: 'bulk_payout',
+            expires_at: { $gt: new Date() }
+        });
+
+        if (!otpSession) {
+            return res.status(400).json({ error: "OTP expired or not requested. Please request a new OTP." });
+        }
+
+        const otpHash = crypto.createHash('sha256').update(String(otp).trim()).digest('hex');
+        if (otpSession.otp_hash !== otpHash) {
+            otpSession.attempts = (otpSession.attempts || 0) + 1;
+            await otpSession.save();
+            return res.status(400).json({ error: "Invalid OTP provided" });
+        }
+
+        // OTP verified — clear session
+        await OtpSession.deleteOne({ _id: otpSession._id });
+
         const now = new Date();
         const payoutMonth = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
         console.log(`\n=================== [PAYOUT_JOB_BULK_INIT] ===================`);
         console.log(`Month: ${payoutMonth}`);
 
-        // Find all secondary wallets with balance > 0
-        const wallets = await SecondaryWallet.find({ balance: { $gt: 0 } }).lean();
-        console.log(`Found ${wallets.length} secondary wallet(s) with balance > 0`);
+        // STEP 1: Fetch ALL secondary wallets
+        const allWallets = await SecondaryWallet.find({}).lean();
+        console.log(`Found ${allWallets.length} total secondary wallet(s)`);
 
-        // Get KYC details for all wallet owners (MUST be verified)
-        const userIds = wallets.map(w => w.userId);
+        // STEP 2: Fetch KYC details for all wallet owners
+        const userIds = allWallets.map(w => w.userId);
         const kycDocs = await KycDetails.find({
             userId: { $in: userIds },
-            kycStatus: 'verified',
         }).lean();
         const kycByUser = new Map(kycDocs.map(k => [k.userId.toString(), k]));
 
         const results = { processed: 0, skipped: 0, failed: 0, skippedNoKyc: 0, errors: [] };
 
-        for (const wallet of wallets) {
+        for (const wallet of allWallets) {
             const kyc = kycByUser.get(wallet.userId.toString());
             
-            // Skip processing payout if KYC is missing, pending, or not verified
+            // STEP 3: MUST check KYC verification status FIRST before inspecting balance!
             if (!kyc || kyc.kycStatus !== 'verified') {
                 results.skippedNoKyc++;
                 results.skipped++;
-                console.log(`⏩ [PAYOUT_BULK_SKIP] Wallet ${wallet._id} (User ${wallet.userId}): KYC is not verified`);
+                console.log(`⏩ [PAYOUT_BULK_SKIP_KYC] Wallet ${wallet._id} (User ${wallet.userId}): Creator KYC is not verified (Status: ${kyc?.kycStatus || 'none'}). Skipped BEFORE balance check.`);
+                continue;
+            }
+
+            // STEP 4: Check wallet balance ONLY AFTER KYC verification passes!
+            if (wallet.balance <= 0) {
+                results.skipped++;
+                console.log(`⏩ [PAYOUT_BULK_SKIP_BALANCE] Wallet ${wallet._id} (User ${wallet.userId}): Balance is ₹${wallet.balance}. Skipped.`);
                 continue;
             }
 
@@ -74,17 +158,6 @@ export const runMonthEndPayout = async (req, res) => {
             try {
                 let createdPayout;
                 await session.withTransaction(async () => {
-                    // Idempotency check
-                    const existingPayout = await Payout.findOne({
-                        walletId: wallet._id,
-                        payoutMonth,
-                    }).session(session);
-                    if (existingPayout) {
-                        results.skipped++;
-                        console.log(`⏩ [PAYOUT_BULK_SKIP] Wallet ${wallet._id}: Payout for ${payoutMonth} already exists.`);
-                        return;
-                    }
-
                     // Guard: Skip if creator has a previous settlement pending
                     const pendingSettlement = await Payout.findOne({
                         walletId: wallet._id,
@@ -299,11 +372,12 @@ export const getPayoutReport = async (req, res) => {
     try {
         const { month } = req.params;
 
-        if (!month || !/^\d{4}-\d{2}$/.test(month)) {
-            return res.status(400).json({ error: 'Month must be in YYYY-MM format' });
+        let filter = {};
+        if (month && month !== 'all') {
+            filter.payoutMonth = month;
         }
 
-        const payouts = await Payout.find({ payoutMonth: month })
+        const payouts = await Payout.find(filter)
             .populate('userId', 'userName channelName contact email')
             .sort({ createdAt: -1 })
             .lean();
@@ -409,22 +483,25 @@ export const runSingleCreatorPayout = async (req, res) => {
             return res.status(400).json({ error: "userId is required" });
         }
 
+        // 1. MUST check KYC verification status FIRST before checking wallet balance!
+        const kyc = await KycDetails.findOne({ userId });
+        if (!kyc || kyc.kycStatus !== 'verified') {
+            console.error(`[PAYOUT_SINGLE_REJECTED] Creator ${userId} KYC is not verified (Status: ${kyc?.kycStatus || 'none'})`);
+            return res.status(400).json({ error: "Creator KYC is not verified. Payouts can only be initiated for KYC-verified creators." });
+        }
+
+        // 2. Check if previous settlement is still pending
         const pendingPayout = await Payout.findOne({ userId, status: 'pending_settlement' });
         if (pendingPayout) {
             console.error(`[PAYOUT_SINGLE_REJECTED] Previous settlement (${pendingPayout._id}) is still pending for User ${userId}`);
             return res.status(400).json({ error: "Cannot initiate payout while a previous settlement is pending for this creator" });
         }
 
+        // 3. Check wallet balance AFTER verifying KYC
         const wallet = await SecondaryWallet.findOne({ userId });
         if (!wallet || wallet.balance <= 0) {
             console.error(`[PAYOUT_SINGLE_REJECTED] Creator ${userId} has no withdrawable secondary wallet balance (Balance: ₹${wallet?.balance || 0})`);
             return res.status(400).json({ error: "Creator has no withdrawable secondary wallet balance" });
-        }
-
-        const kyc = await KycDetails.findOne({ userId });
-        if (!kyc || kyc.kycStatus !== 'verified') {
-            console.error(`[PAYOUT_SINGLE_REJECTED] Creator ${userId} KYC is not verified (Status: ${kyc?.kycStatus || 'none'})`);
-            return res.status(400).json({ error: "Creator KYC is not verified. Payouts can only be initiated for KYC-verified creators." });
         }
 
         const now = new Date();
@@ -806,7 +883,7 @@ export const completeBulkPayoutSettlement = async (req, res) => {
 
         if (payoutIds && Array.isArray(payoutIds) && payoutIds.length > 0) {
             query._id = { $in: payoutIds };
-        } else if (month) {
+        } else if (month && month !== 'all') {
             query.payoutMonth = { $regex: new RegExp(`^${month}`) };
         }
 
@@ -1024,35 +1101,43 @@ export const getCreatorInvoices = async (req, res) => {
 export const getPayoutInvoicePdf = async (req, res) => {
     try {
         const payoutId = req.params.payoutId || req.params.id;
+        console.log(`\n=================== [INVOICE_PDF_FETCH_INIT] ===================`);
+        console.log(`Payout ID: ${payoutId}`);
+
         const payout = await Payout.findById(payoutId).populate('userId', 'userName channelName channelHandle contact email');
-        if (!payout) return res.status(404).send('Payout record not found');
+        if (!payout) {
+            console.error(`❌ [INVOICE_PDF_ERROR] Payout ${payoutId} not found in DB`);
+            return res.status(404).send('Payout record not found');
+        }
 
         const s3Bucket = process.env.S3_BUCKET;
         // 1. Check if PDF exists in S3
         if (payout.invoiceS3Key && s3Bucket) {
             try {
+                console.log(`🔍 [INVOICE_PDF_S3_CHECK] Attempting to fetch from S3: s3://${s3Bucket}/${payout.invoiceS3Key}`);
                 const s3Obj = await s3Client.send(new GetObjectCommand({
                     Bucket: s3Bucket,
                     Key: payout.invoiceS3Key
                 }));
-                console.log(`✅ [INVOICE_PDF_SERVED] Source: PATH_A_AWS_S3 | Key: ${payout.invoiceS3Key}`);
+                console.log(`✅ [INVOICE_PDF_SERVED] Source: PATH_A_AWS_S3 | Bucket: ${s3Bucket} | Key: ${payout.invoiceS3Key}`);
+                console.log(`=================== [INVOICE_PDF_FETCH_END] ===================\n`);
                 res.setHeader('Content-Type', 'application/pdf');
                 res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
                 return s3Obj.Body.pipe(res);
             } catch (s3ReadErr) {
-                console.warn('⚠️ [INVOICE_PDF_SERVED] S3 read warning, using Path B fallback:', s3ReadErr.message);
+                console.warn(`⚠️ [INVOICE_PDF_S3_WARNING] S3 read failed (${s3ReadErr.message}). Falling back to dynamic PDF generation...`);
             }
         }
 
-        console.log(`ℹ️ [INVOICE_PDF_SERVED] Source: PATH_B_DYNAMIC_GENERATION | PayoutID: ${payoutId} | Month: ${payout.payoutMonth}`);
+        console.log(`ℹ️ [INVOICE_PDF_SERVED] Source: PATH_B_DYNAMIC_GENERATION | PayoutID: ${payoutId} | Month: ${payout.payoutMonth} | (No S3 Key on document)`);
 
         // 2. Dynamic PDF generation fallback (100% guaranteed for any settlement!)
-        const kyc = await KycDetails.findOne({ userId: payout.userId._id }).lean();
+        const kyc = await KycDetails.findOne({ userId: payout.userId?._id || payout.userId }).lean();
         let bankDetails = {};
         if (kyc) {
             const dec = decryptBankDetails(kyc);
             bankDetails = {
-                accountHolderName: dec.accountHolderName || payout.userId.channelName || payout.userId.userName,
+                accountHolderName: dec.accountHolderName || payout.userId?.channelName || payout.userId?.userName,
                 bankName: dec.bankName || payout.bankName || '',
                 accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
                 ifscCode: dec.ifscCode || '',
@@ -1077,11 +1162,14 @@ export const getPayoutInvoicePdf = async (req, res) => {
             bankDetails,
         });
 
+        console.log(`✅ [INVOICE_PDF_SERVED] Dynamic PDF invoice buffer generated successfully (${pdfBuffer.length} bytes)`);
+        console.log(`=================== [INVOICE_PDF_FETCH_END] ===================\n`);
+
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `inline; filename="Tax_Invoice_${payout.payoutMonth}.pdf"`);
         return res.send(pdfBuffer);
     } catch (err) {
-        console.error('Error serving payout invoice PDF:', err);
+        console.error('❌ Error serving payout invoice PDF:', err);
         return res.status(500).send(`Failed to generate invoice PDF: ${err.message}`);
     }
 };
