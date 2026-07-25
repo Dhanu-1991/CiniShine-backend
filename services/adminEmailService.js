@@ -9,7 +9,6 @@
  *  - warning         — admin sends a warning to a creator
  *  - custom          — free-form email from admin
  */
-import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { Resend } from "resend";
 import dotenv from "dotenv";
 import { generateSettlementPdf } from '../utils/pdfGenerator.js';
@@ -20,7 +19,6 @@ const REGION = process.env.AWS_REGION || "us-east-1";
 const FROM_ADDRESS = process.env.EMAIL_USER || "no-reply@example.com";
 const PLATFORM_NAME = process.env.PLATFORM_NAME || "Watchinit";
 
-const ses = new SESClient({ region: REGION });
 const getResendClient = () => {
     const key = process.env.RESEND_API_KEY;
     return key ? new Resend(key) : null;
@@ -238,7 +236,7 @@ export const QUICK_TEMPLATES = [
 // ─── CORE SEND FUNCTION ───────────────────────────────────────────────────
 
 /**
- * Send an email using Resend (preferred) or SES (fallback).
+ * Send an email strictly using Resend API.
  * @param {string} to — recipient email address
  * @param {string} subject — email subject
  * @param {string} html — HTML email body
@@ -252,74 +250,72 @@ async function sendEmail(to, subject, html, text, attachments = []) {
         return false;
     }
 
-    const defaultFrom = process.env.RESEND_FROM || (FROM_ADDRESS && !FROM_ADDRESS.includes('example.com') ? FROM_ADDRESS : 'Watchinit <onboarding@resend.dev>');
     const resendClient = getResendClient();
+    if (!resendClient) {
+        console.error('[AdminEmail] RESEND_API_KEY is not configured');
+        return false;
+    }
 
-    // Prefer Resend
-    if (resendClient) {
-        try {
-            const options = {
-                from: defaultFrom,
-                to,
-                subject,
-                html,
-                ...(text ? { text } : {}),
-                ...(attachments && attachments.length > 0 ? { attachments } : {}),
-            };
-            const resp = await resendClient.emails.send(options);
-            console.log('[AdminEmail] Resend send response:', JSON.stringify(resp));
-            const succeeded = Boolean(resp && (resp.id || resp.messageId || resp.data?.id));
-            if (succeeded) {
-                console.log(`[AdminEmail] Sent via Resend to ${to}: "${subject}"`);
-                return true;
-            }
-        } catch (err) {
-            console.error('[AdminEmail] Resend primary error:', err.message || err);
-            // If custom sender domain is not verified, attempt send using onboarding@resend.dev
+    const defaultFrom = process.env.RESEND_FROM || (FROM_ADDRESS && !FROM_ADDRESS.includes('example.com') ? FROM_ADDRESS : 'Watchinit <onboarding@resend.dev>');
+
+    try {
+        const options = {
+            from: defaultFrom,
+            to,
+            subject,
+            html,
+            ...(text ? { text } : {}),
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        };
+        const resp = await resendClient.emails.send(options);
+        console.log('[AdminEmail] Resend send response:', JSON.stringify(resp));
+
+        if (resp && resp.error) {
+            console.error('[AdminEmail] Resend error:', resp.error);
             if (defaultFrom !== 'Watchinit <onboarding@resend.dev>') {
-                try {
-                    const fallbackOptions = {
-                        from: 'Watchinit <onboarding@resend.dev>',
-                        to,
-                        subject,
-                        html,
-                        ...(text ? { text } : {}),
-                        ...(attachments && attachments.length > 0 ? { attachments } : {}),
-                    };
-                    const fbResp = await resendClient.emails.send(fallbackOptions);
-                    console.log('[AdminEmail] Resend fallback send response:', JSON.stringify(fbResp));
-                    const succeeded = Boolean(fbResp && (fbResp.id || fbResp.messageId || fbResp.data?.id));
-                    if (succeeded) {
-                        console.log(`[AdminEmail] Sent via Resend fallback to ${to}: "${subject}"`);
-                        return true;
-                    }
-                } catch (fallbackErr) {
-                    console.error('[AdminEmail] Resend fallback error:', fallbackErr.message || fallbackErr);
+                console.log('[AdminEmail] Attempting resend with fallback sender domain onboarding@resend.dev...');
+                const fbResp = await resendClient.emails.send({
+                    ...options,
+                    from: 'Watchinit <onboarding@resend.dev>',
+                });
+                console.log('[AdminEmail] Resend fallback response:', JSON.stringify(fbResp));
+                if (fbResp && !fbResp.error && (fbResp.id || fbResp.data?.id)) {
+                    console.log(`[AdminEmail] Sent via Resend fallback to ${to}: "${subject}"`);
+                    return true;
                 }
+            }
+            return false;
+        }
+
+        const succeeded = Boolean(resp && (resp.id || resp.data?.id));
+        if (succeeded) {
+            console.log(`[AdminEmail] Sent via Resend to ${to}: "${subject}"`);
+            return true;
+        }
+    } catch (err) {
+        console.error('[AdminEmail] Resend exception:', err.message || err);
+        if (defaultFrom !== 'Watchinit <onboarding@resend.dev>') {
+            try {
+                const fbResp = await resendClient.emails.send({
+                    from: 'Watchinit <onboarding@resend.dev>',
+                    to,
+                    subject,
+                    html,
+                    ...(text ? { text } : {}),
+                    ...(attachments && attachments.length > 0 ? { attachments } : {}),
+                });
+                console.log('[AdminEmail] Resend fallback catch response:', JSON.stringify(fbResp));
+                if (fbResp && !fbResp.error && (fbResp.id || fbResp.data?.id)) {
+                    console.log(`[AdminEmail] Sent via Resend fallback to ${to}: "${subject}"`);
+                    return true;
+                }
+            } catch (fallbackErr) {
+                console.error('[AdminEmail] Resend fallback catch error:', fallbackErr.message || fallbackErr);
             }
         }
     }
 
-    // SES Fallback
-    try {
-        const command = new SendEmailCommand({
-            Source: FROM_ADDRESS,
-            Destination: { ToAddresses: [to] },
-            Message: {
-                Subject: { Data: subject, Charset: "UTF-8" },
-                Body: {
-                    Html: { Data: html, Charset: "UTF-8" },
-                    ...(text ? { Text: { Data: text, Charset: "UTF-8" } } : {}),
-                },
-            },
-        });
-        await ses.send(command);
-        console.log(`[AdminEmail] Sent via SES to ${to}: "${subject}"`);
-        return true;
-    } catch (err) {
-        console.error(`[AdminEmail] Failed to send email to ${to}:`, err.message || err);
-        return false;
-    }
+    return false;
 }
 
 // ─── PUBLIC API ───────────────────────────────────────────────────────────

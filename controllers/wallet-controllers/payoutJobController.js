@@ -564,7 +564,7 @@ export const completePayoutSettlement = async (req, res) => {
                 };
             }
 
-            sendAdminEmail('payoutCompleted', payout.userId.email, {
+            sendAdminEmail('payoutCompleted', creatorEmail, {
                 creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                 userName: payout.userId.userName || '',
                 userHandle: payout.userId.channelHandle || '',
@@ -630,7 +630,7 @@ export const completeBulkPayoutSettlement = async (req, res) => {
                     };
                 }
 
-                sendAdminEmail('payoutCompleted', payout.userId.email, {
+                sendAdminEmail('payoutCompleted', creatorEmail, {
                     creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
                     userName: payout.userId.userName || '',
                     userHandle: payout.userId.channelHandle || '',
