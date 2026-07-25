@@ -120,16 +120,24 @@ export const runMonthEndPayout = async (req, res) => {
                     // Decrypt bank name for the payout record (plain text field)
                     const bankName = decryptBankDetails(kyc).bankName || '';
 
-                    // Calculate tax aggregates from creator's earning transactions
-                    const earningTxns = await WalletTransaction.find({
+                    // Calculate tax aggregates from creator's earning transactions since last payout
+                    const lastPayoutDoc = await Payout.findOne({
+                        walletId: freshWallet._id,
+                        status: { $in: ['pending_settlement', 'completed'] },
+                    }).sort({ createdAt: -1 }).session(session).lean();
+
+                    const txnQuery = {
                         walletId: freshWallet._id,
                         type: 'ppv_earning_credit',
                         status: 'completed',
-                    }).session(session).lean();
+                    };
+                    if (lastPayoutDoc && lastPayoutDoc.createdAt) {
+                        txnQuery.createdAt = { $gt: lastPayoutDoc.createdAt };
+                    }
 
-                    let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
-                    let totalPlatformCommission = 0, totalGstOnCommission = 0;
-                    let totalTdsDeducted = 0, totalTcsDeducted = 0;
+                    const earningTxns = await WalletTransaction.find(txnQuery).session(session).lean();
+
+                    let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, rawNet = 0;
 
                     for (const tx of earningTxns) {
                         let txBreakdown = tx.taxBreakdown;
@@ -138,28 +146,40 @@ export const runMonthEndPayout = async (req, res) => {
                             txBreakdown = calculateTaxBreakdown(estSelling);
                         }
                         if (txBreakdown) {
-                            totalSellingPrice += txBreakdown.sellingPrice || 0;
-                            totalBasePrice += txBreakdown.basePrice || 0;
-                            totalGstCollected += txBreakdown.gstAmount || 0;
-                            totalPlatformCommission += txBreakdown.platformCommission || 0;
-                            totalGstOnCommission += txBreakdown.gstOnCommission || 0;
-                            totalTdsDeducted += txBreakdown.tdsAmount || 0;
-                            totalTcsDeducted += txBreakdown.tcsAmount || 0;
+                            rawSelling += txBreakdown.sellingPrice || 0;
+                            rawBase += txBreakdown.basePrice || 0;
+                            rawGst += txBreakdown.gstAmount || 0;
+                            rawComm += txBreakdown.platformCommission || 0;
+                            rawCommGst += txBreakdown.gstOnCommission || 0;
+                            rawTds += txBreakdown.tdsAmount || 0;
+                            rawTcs += txBreakdown.tcsAmount || 0;
+                            rawNet += txBreakdown.creatorPayout || tx.amount || 0;
                         }
                     }
 
-                    if (!totalBasePrice || totalBasePrice === 0) {
-                        const estSelling = grossAmount > 0 ? Number((grossAmount / 0.61308).toFixed(2)) : 0;
-                        if (estSelling > 0) {
-                            const calc = calculateTaxBreakdown(estSelling);
-                            totalSellingPrice = calc.sellingPrice;
-                            totalBasePrice = calc.basePrice;
-                            totalGstCollected = calc.gstAmount;
-                            totalPlatformCommission = calc.platformCommission;
-                            totalGstOnCommission = calc.gstOnCommission;
-                            totalTdsDeducted = calc.tdsAmount;
-                            totalTcsDeducted = calc.tcsAmount;
-                        }
+                    let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
+                    let totalPlatformCommission = 0, totalGstOnCommission = 0;
+                    let totalTdsDeducted = 0, totalTcsDeducted = 0;
+
+                    if (rawNet > 0 && grossAmount > 0) {
+                        const scale = grossAmount / rawNet;
+                        totalSellingPrice = Number((rawSelling * scale).toFixed(2));
+                        totalBasePrice = Number((rawBase * scale).toFixed(2));
+                        totalGstCollected = Number((rawGst * scale).toFixed(2));
+                        totalPlatformCommission = Number((rawComm * scale).toFixed(2));
+                        totalGstOnCommission = Number((rawCommGst * scale).toFixed(2));
+                        totalTdsDeducted = Number((rawTds * scale).toFixed(2));
+                        totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
+                    } else if (grossAmount > 0) {
+                        const estSelling = Number((grossAmount / 0.61308).toFixed(2));
+                        const calc = calculateTaxBreakdown(estSelling);
+                        totalSellingPrice = calc.sellingPrice;
+                        totalBasePrice = calc.basePrice;
+                        totalGstCollected = calc.gstAmount;
+                        totalPlatformCommission = calc.platformCommission;
+                        totalGstOnCommission = calc.gstOnCommission;
+                        totalTdsDeducted = calc.tdsAmount;
+                        totalTcsDeducted = calc.tcsAmount;
                     }
 
                     await Payout.create([{
@@ -390,15 +410,24 @@ export const runSingleCreatorPayout = async (req, res) => {
                 bankFields.forEach(f => { bankSnapshot[f] = kyc[f]; });
                 const bankName = decryptBankDetails(kyc).bankName || '';
 
-                const earningTxns = await WalletTransaction.find({
+                // Calculate tax aggregates from creator's earning transactions since last payout
+                const lastPayoutDoc = await Payout.findOne({
+                    walletId: freshWallet._id,
+                    status: { $in: ['pending_settlement', 'completed'] },
+                }).sort({ createdAt: -1 }).session(session).lean();
+
+                const txnQuery = {
                     walletId: freshWallet._id,
                     type: 'ppv_earning_credit',
                     status: 'completed',
-                }).session(session).lean();
+                };
+                if (lastPayoutDoc && lastPayoutDoc.createdAt) {
+                    txnQuery.createdAt = { $gt: lastPayoutDoc.createdAt };
+                }
 
-                let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
-                let totalPlatformCommission = 0, totalGstOnCommission = 0;
-                let totalTdsDeducted = 0, totalTcsDeducted = 0;
+                const earningTxns = await WalletTransaction.find(txnQuery).session(session).lean();
+
+                let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, rawNet = 0;
 
                 for (const tx of earningTxns) {
                     let txBreakdown = tx.taxBreakdown;
@@ -407,28 +436,40 @@ export const runSingleCreatorPayout = async (req, res) => {
                         txBreakdown = calculateTaxBreakdown(estSelling);
                     }
                     if (txBreakdown) {
-                        totalSellingPrice += txBreakdown.sellingPrice || 0;
-                        totalBasePrice += txBreakdown.basePrice || 0;
-                        totalGstCollected += txBreakdown.gstAmount || 0;
-                        totalPlatformCommission += txBreakdown.platformCommission || 0;
-                        totalGstOnCommission += txBreakdown.gstOnCommission || 0;
-                        totalTdsDeducted += txBreakdown.tdsAmount || 0;
-                        totalTcsDeducted += txBreakdown.tcsAmount || 0;
+                        rawSelling += txBreakdown.sellingPrice || 0;
+                        rawBase += txBreakdown.basePrice || 0;
+                        rawGst += txBreakdown.gstAmount || 0;
+                        rawComm += txBreakdown.platformCommission || 0;
+                        rawCommGst += txBreakdown.gstOnCommission || 0;
+                        rawTds += txBreakdown.tdsAmount || 0;
+                        rawTcs += txBreakdown.tcsAmount || 0;
+                        rawNet += txBreakdown.creatorPayout || tx.amount || 0;
                     }
                 }
 
-                if (!totalBasePrice || totalBasePrice === 0) {
-                    const estSelling = grossAmount > 0 ? Number((grossAmount / 0.61308).toFixed(2)) : 0;
-                    if (estSelling > 0) {
-                        const calc = calculateTaxBreakdown(estSelling);
-                        totalSellingPrice = calc.sellingPrice;
-                        totalBasePrice = calc.basePrice;
-                        totalGstCollected = calc.gstAmount;
-                        totalPlatformCommission = calc.platformCommission;
-                        totalGstOnCommission = calc.gstOnCommission;
-                        totalTdsDeducted = calc.tdsAmount;
-                        totalTcsDeducted = calc.tcsAmount;
-                    }
+                let totalSellingPrice = 0, totalBasePrice = 0, totalGstCollected = 0;
+                let totalPlatformCommission = 0, totalGstOnCommission = 0;
+                let totalTdsDeducted = 0, totalTcsDeducted = 0;
+
+                if (rawNet > 0 && grossAmount > 0) {
+                    const scale = grossAmount / rawNet;
+                    totalSellingPrice = Number((rawSelling * scale).toFixed(2));
+                    totalBasePrice = Number((rawBase * scale).toFixed(2));
+                    totalGstCollected = Number((rawGst * scale).toFixed(2));
+                    totalPlatformCommission = Number((rawComm * scale).toFixed(2));
+                    totalGstOnCommission = Number((rawCommGst * scale).toFixed(2));
+                    totalTdsDeducted = Number((rawTds * scale).toFixed(2));
+                    totalTcsDeducted = Number((rawTcs * scale).toFixed(2));
+                } else if (grossAmount > 0) {
+                    const estSelling = Number((grossAmount / 0.61308).toFixed(2));
+                    const calc = calculateTaxBreakdown(estSelling);
+                    totalSellingPrice = calc.sellingPrice;
+                    totalBasePrice = calc.basePrice;
+                    totalGstCollected = calc.gstAmount;
+                    totalPlatformCommission = calc.platformCommission;
+                    totalGstOnCommission = calc.gstOnCommission;
+                    totalTdsDeducted = calc.tdsAmount;
+                    totalTcsDeducted = calc.tcsAmount;
                 }
 
                 [createdPayout] = await Payout.create([{

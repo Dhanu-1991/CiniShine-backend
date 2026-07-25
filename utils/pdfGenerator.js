@@ -43,19 +43,14 @@ export function generateSettlementPdf({
       let commGstNum = Number(totalGstOnCommission || 0);
       let tdsNum = Number(totalTdsDeducted || 0);
       let tcsNum = Number(totalTcsDeducted || 0);
-      let netNum = Number(netAmount || 0);
+      let netNum = Number(netAmount || grossAmount || 0);
 
-      // Fallback: If base price / itemized breakdown is missing or zero, compute exact legal tax breakdown
-      if (!baseNum || baseNum === 0) {
-        let targetSelling = sellingNum;
-        if (!targetSelling || targetSelling === 0) {
-          const refAmount = Number(grossAmount || netAmount || 0);
-          if (refAmount > 0) {
-            targetSelling = Number((refAmount / 0.61308).toFixed(2));
-          }
-        }
-        if (targetSelling > 0) {
-          const calc = calculateTaxBreakdown(targetSelling);
+      // Integrity Check: Reconcile gross sales with net payout using single source of truth
+      if (netNum > 0) {
+        const expectedSelling = Number((netNum / 0.61308).toFixed(2));
+        // If totalBasePrice is missing OR if totalSellingPrice is inflated/mismatched by > 2%
+        if (!baseNum || baseNum === 0 || !sellingNum || Math.abs(sellingNum - expectedSelling) > 2) {
+          const calc = calculateTaxBreakdown(expectedSelling);
           sellingNum = calc.sellingPrice;
           baseNum = calc.basePrice;
           gstNum = calc.gstAmount;
@@ -63,9 +58,7 @@ export function generateSettlementPdf({
           commGstNum = calc.gstOnCommission;
           tdsNum = calc.tdsAmount;
           tcsNum = calc.tcsAmount;
-          if (!netNum || netNum === 0) {
-            netNum = calc.creatorPayout;
-          }
+          netNum = calc.creatorPayout;
         }
       }
 
