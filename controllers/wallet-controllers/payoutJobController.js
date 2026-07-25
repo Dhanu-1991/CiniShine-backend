@@ -128,30 +128,61 @@ export const runMonthEndPayout = async (req, res) => {
         const allWallets = await SecondaryWallet.find({}).lean();
         console.log(`Found ${allWallets.length} total secondary wallet(s)`);
 
-        // STEP 2: Fetch KYC details for all wallet owners
+        // STEP 2: Fetch KYC details & user profiles for all wallet owners
         const userIds = allWallets.map(w => w.userId);
-        const kycDocs = await KycDetails.find({
-            userId: { $in: userIds },
-        }).lean();
-        const kycByUser = new Map(kycDocs.map(k => [k.userId.toString(), k]));
+        const [kycDocs, userDocs] = await Promise.all([
+            KycDetails.find({ userId: { $in: userIds } }).lean(),
+            User.find({ _id: { $in: userIds } }).select('userName channelName contact email').lean()
+        ]);
 
-        const results = { processed: 0, skipped: 0, failed: 0, skippedNoKyc: 0, errors: [] };
+        const kycByUser = new Map(kycDocs.map(k => [k.userId.toString(), k]));
+        const userMap = new Map(userDocs.map(u => [u._id.toString(), u]));
+
+        const results = {
+            processed: 0,
+            skipped: 0,
+            failed: 0,
+            skippedNoKyc: 0,
+            skippedZeroBalance: 0,
+            skippedPendingSettlement: 0,
+            skippedDetails: [],
+            errors: []
+        };
 
         for (const wallet of allWallets) {
             const kyc = kycByUser.get(wallet.userId.toString());
+            const user = userMap.get(wallet.userId.toString());
+            const creatorName = user?.channelName || user?.userName || user?.email || `User_${wallet.userId}`;
             
             // STEP 3: MUST check KYC verification status FIRST before inspecting balance!
             if (!kyc || kyc.kycStatus !== 'verified') {
                 results.skippedNoKyc++;
                 results.skipped++;
-                console.log(`⏩ [PAYOUT_BULK_SKIP_KYC] Wallet ${wallet._id} (User ${wallet.userId}): Creator KYC is not verified (Status: ${kyc?.kycStatus || 'none'}). Skipped BEFORE balance check.`);
+                const reason = `Creator KYC is not verified (Status: ${kyc?.kycStatus || 'none'})`;
+                results.skippedDetails.push({
+                    walletId: wallet._id.toString(),
+                    userId: wallet.userId.toString(),
+                    creatorName,
+                    balance: wallet.balance,
+                    reason
+                });
+                console.log(`⏩ [PAYOUT_BULK_SKIP_KYC] Wallet ${wallet._id} | Creator: "${creatorName}" (${wallet.userId}) | Balance: ₹${wallet.balance} | Reason: ${reason}`);
                 continue;
             }
 
             // STEP 4: Check wallet balance ONLY AFTER KYC verification passes!
             if (wallet.balance <= 0) {
+                results.skippedZeroBalance++;
                 results.skipped++;
-                console.log(`⏩ [PAYOUT_BULK_SKIP_BALANCE] Wallet ${wallet._id} (User ${wallet.userId}): Balance is ₹${wallet.balance}. Skipped.`);
+                const reason = `Withdrawable balance is ₹${wallet.balance} (No earnings pending payout)`;
+                results.skippedDetails.push({
+                    walletId: wallet._id.toString(),
+                    userId: wallet.userId.toString(),
+                    creatorName,
+                    balance: wallet.balance,
+                    reason
+                });
+                console.log(`⏩ [PAYOUT_BULK_SKIP_BALANCE] Wallet ${wallet._id} | Creator: "${creatorName}" (${wallet.userId}) | Reason: ${reason}`);
                 continue;
             }
 
@@ -165,15 +196,33 @@ export const runMonthEndPayout = async (req, res) => {
                         status: 'pending_settlement',
                     }).session(session);
                     if (pendingSettlement) {
+                        results.skippedPendingSettlement++;
                         results.skipped++;
-                        console.log(`⏩ [PAYOUT_BULK_SKIP] Wallet ${wallet._id}: previous settlement (${pendingSettlement._id}) is still pending`);
+                        const reason = `Previous settlement (${pendingSettlement._id}) is still pending approval/completion`;
+                        results.skippedDetails.push({
+                            walletId: wallet._id.toString(),
+                            userId: wallet.userId.toString(),
+                            creatorName,
+                            balance: wallet.balance,
+                            reason
+                        });
+                        console.log(`⏩ [PAYOUT_BULK_SKIP_PENDING] Wallet ${wallet._id} | Creator: "${creatorName}" (${wallet.userId}) | Reason: ${reason}`);
                         return;
                     }
 
                     // Re-read wallet inside session to get latest balance
                     const freshWallet = await SecondaryWallet.findById(wallet._id).session(session);
                     if (!freshWallet || freshWallet.balance <= 0) {
+                        results.skippedZeroBalance++;
                         results.skipped++;
+                        const reason = `Withdrawable balance is ₹${freshWallet?.balance || 0}`;
+                        results.skippedDetails.push({
+                            walletId: wallet._id.toString(),
+                            userId: wallet.userId.toString(),
+                            creatorName,
+                            balance: freshWallet?.balance || 0,
+                            reason
+                        });
                         return;
                     }
 
@@ -298,11 +347,10 @@ export const runMonthEndPayout = async (req, res) => {
                     console.log(`[PAYOUT_CALC_METHOD] Wallet: ${freshWallet._id} | Gross: ₹${grossAmount} | Method: ${calcMethod} | RawNet: ₹${rawNet}`);
 
                     // EMAIL GUARD: Check email address FIRST before finalizing
-                    const user = await User.findById(freshWallet.userId).select('contact email userName channelName').lean();
                     const creatorEmail = user?.contact || user?.email;
                     if (!creatorEmail || !creatorEmail.includes('@')) {
-                        console.error(`❌ [PAYOUT_EMAIL_GUARD] Creator ${freshWallet.userId} has no valid email address. Aborting payout to preserve wallet balance.`);
-                        throw new Error(`Creator email address is missing/invalid. Payout aborted to protect wallet balance.`);
+                        console.error(`❌ [PAYOUT_EMAIL_GUARD] Creator ${freshWallet.userId} ("${creatorName}") has no valid email address. Aborting payout to preserve wallet balance.`);
+                        throw new Error(`Creator email address is missing/invalid for ${creatorName}. Payout aborted to protect wallet balance.`);
                     }
 
                     [createdPayout] = await Payout.create([{
@@ -328,7 +376,7 @@ export const runMonthEndPayout = async (req, res) => {
                     // Send email INSIDE transaction scope — if mail fails, throw error so MongoDB transaction rolls back balance!
                     try {
                         await sendAdminEmail('payoutInitiated', creatorEmail, {
-                            creatorName: user.channelName || user.userName || 'Creator',
+                            creatorName,
                             netAmount,
                             grossAmount,
                             payoutMonth
@@ -340,21 +388,38 @@ export const runMonthEndPayout = async (req, res) => {
                     }
 
                     results.processed++;
-                    console.log(`✅ [PAYOUT_BULK_SUCCESS] Created Payout ${createdPayout._id} | User: ${freshWallet.userId} | Gross: ₹${grossAmount} | Net: ₹${netAmount}`);
+                    console.log(`✅ [PAYOUT_BULK_SUCCESS] Created Payout ${createdPayout._id} | Creator: "${creatorName}" (${freshWallet.userId}) | Gross: ₹${grossAmount} | Net: ₹${netAmount}`);
                 });
             } catch (err) {
                 results.failed++;
-                results.errors.push({ walletId: wallet._id.toString(), error: err.message });
-                console.error(`❌ [PAYOUT_BULK_ERROR] Payout failed for wallet ${wallet._id}:`, err);
+                results.errors.push({ walletId: wallet._id.toString(), creatorName, error: err.message });
+                console.error(`❌ [PAYOUT_BULK_ERROR] Payout failed for wallet ${wallet._id} (Creator: "${creatorName}"):`, err);
             } finally {
                 await session.endSession();
             }
         }
 
-        console.log(`✅ [PAYOUT_JOB_BULK_COMPLETE] Processed: ${results.processed} | Skipped: ${results.skipped} | Failed: ${results.failed}`);
+        console.log(`\n=================== [PAYOUT_JOB_BULK_SUMMARY] ===================`);
+        console.log(`Total Wallets Evaluated: ${allWallets.length}`);
+        console.log(`✅ Processed: ${results.processed}`);
+        console.log(`⏩ Skipped: ${results.skipped} (Zero Balance: ${results.skippedZeroBalance}, Unverified KYC: ${results.skippedNoKyc}, Pending Settlement: ${results.skippedPendingSettlement})`);
+        console.log(`❌ Failed: ${results.failed}`);
+        if (results.skippedDetails.length > 0) {
+            console.log(`📋 Skipped Wallets Breakdown:`);
+            results.skippedDetails.forEach((item, i) => {
+                console.log(`   ${i + 1}. Creator: "${item.creatorName}" | Wallet: ${item.walletId} | Reason: ${item.reason}`);
+            });
+        }
         console.log(`=================== [PAYOUT_JOB_BULK_END] ===================\n`);
+
+        let message = `Bulk payout job executed successfully. Processed: ${results.processed} | Skipped: ${results.skipped} | Failed: ${results.failed}`;
+        if (results.processed === 0 && results.skipped > 0) {
+            message = `No new payouts initiated: All ${allWallets.length} creator wallet(s) were skipped (${results.skippedZeroBalance} zero balance, ${results.skippedNoKyc} unverified KYC, ${results.skippedPendingSettlement} pending settlement).`;
+        }
+
         res.json({
             success: true,
+            message,
             payoutMonth,
             totalWallets: allWallets.length,
             ...results,
@@ -1056,13 +1121,71 @@ export const getCreatorInvoices = async (req, res) => {
 
         const sortOrder = sort === 'asc' ? 1 : -1;
         const payouts = await Payout.find(filter).sort({ createdAt: sortOrder }).lean();
-        const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || 'https://cini-shine.s3.us-east-1.amazonaws.com';
+        const s3Bucket = process.env.S3_BUCKET || 'cini-shine';
+        const cdnUrl = process.env.VITE_CDN_URL || process.env.CDN_URL || `https://${s3Bucket}.s3.amazonaws.com`;
 
-        const invoices = payouts.map(p => {
+        const invoices = await Promise.all(payouts.map(async (p) => {
+            let s3Key = p.invoiceS3Key;
             let pdfUrl = p.invoiceUrl;
-            if (!pdfUrl && p.invoiceS3Key) {
-                pdfUrl = `${cdnUrl}/${p.invoiceS3Key}`;
+
+            // Auto-sync & upload to AWS S3 for any completed payout missing an S3 invoice key!
+            if (!s3Key && s3Bucket && p.status === 'completed') {
+                try {
+                    console.log(`☁️ [INVOICE_AUTO_S3_SYNC] Missing S3 Key for completed payout ${p._id}. Generating PDF & uploading to AWS S3...`);
+                    const kyc = await KycDetails.findOne({ userId: p.userId }).lean();
+                    let bankDetails = {};
+                    if (kyc) {
+                        const dec = decryptBankDetails(kyc);
+                        bankDetails = {
+                            accountHolderName: dec.accountHolderName || '',
+                            bankName: dec.bankName || p.bankName || '',
+                            accountNumber: dec.bankAccountNumber ? '••••' + dec.bankAccountNumber.slice(-4) : '',
+                            ifscCode: dec.ifscCode || '',
+                        };
+                    }
+                    const userObj = await User.findById(p.userId).select('userName channelName channelHandle').lean();
+                    const pdfBuffer = await generateSettlementPdf({
+                        creatorName: userObj?.channelName || userObj?.userName || 'Creator',
+                        userName: userObj?.userName || '',
+                        userHandle: userObj?.channelHandle || '',
+                        gstin: kyc?.gstNumber || '',
+                        netAmount: p.netAmount,
+                        grossAmount: p.grossAmount,
+                        payoutMonth: p.payoutMonth,
+                        totalSellingPrice: p.totalSellingPrice || p.grossAmount,
+                        totalBasePrice: p.totalBasePrice || 0,
+                        totalGstCollected: p.totalGstCollected || 0,
+                        totalPlatformCommission: p.totalPlatformCommission || 0,
+                        totalGstOnCommission: p.totalGstOnCommission || 0,
+                        totalTdsDeducted: p.totalTdsDeducted || 0,
+                        totalTcsDeducted: p.totalTcsDeducted || 0,
+                        bankDetails,
+                    });
+
+                    s3Key = `settlement-invoices/${p.payoutMonth || 'general'}/${p.userId}_Tax_Invoice_${Date.now()}.pdf`;
+                    await s3Client.send(new PutObjectCommand({
+                        Bucket: s3Bucket,
+                        Key: s3Key,
+                        Body: pdfBuffer,
+                        ContentType: 'application/pdf',
+                        ServerSideEncryption: 'AES256',
+                    }));
+
+                    pdfUrl = `${cdnUrl}/${s3Key}`;
+                    await Payout.findByIdAndUpdate(p._id, {
+                        invoiceS3Key: s3Key,
+                        invoiceUrl: pdfUrl,
+                    });
+                    console.log(`✅ [INVOICE_AUTO_S3_SYNC] Uploaded to AWS S3 & updated Payout ${p._id}: s3://${s3Bucket}/${s3Key}`);
+                } catch (autoSyncErr) {
+                    console.error(`❌ [INVOICE_AUTO_S3_SYNC_ERR] Failed to sync payout ${p._id} to AWS S3:`, autoSyncErr.message);
+                }
             }
+
+            if (!pdfUrl && s3Key) {
+                pdfUrl = `${cdnUrl}/${s3Key}`;
+            }
+
             return {
                 payoutId: p._id,
                 payoutMonth: p.payoutMonth,
@@ -1079,12 +1202,12 @@ export const getCreatorInvoices = async (req, res) => {
                     totalTdsDeducted: p.totalTdsDeducted || 0,
                     totalTcsDeducted: p.totalTcsDeducted || 0,
                 },
-                invoiceS3Key: p.invoiceS3Key || null,
+                invoiceS3Key: s3Key || null,
                 invoiceUrl: pdfUrl || null,
                 createdAt: p.createdAt,
                 completedAt: p.completedAt,
             };
-        });
+        }));
 
         return res.json({
             success: true,
