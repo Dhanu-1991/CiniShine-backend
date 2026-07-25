@@ -35,6 +35,7 @@ import PaymentDetails from '../../models/payment.details.model.js';
 import { Cashfree, CFEnvironment } from 'cashfree-pg';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 
 // Razorpay instance (lazy — only used when ACTIVE_PAYMENT_GATEWAY=razorpay)
 const getRazorpayInstance = () => new Razorpay({
@@ -72,6 +73,9 @@ export const getMyWallets = async (req, res) => {
                 type: 'primary',
                 balance: primaryWallet.balance,
                 currency: primaryWallet.currency,
+                isPinSet: primaryWallet.isPinSet || false,
+                isPinLocked: primaryWallet.isPinLocked || false,
+                failedPinAttempts: primaryWallet.failedPinAttempts || 0,
                 label: 'In-App Credit',
                 withdrawable: false,
             },
@@ -349,7 +353,7 @@ export const sendTransferOtp = async (req, res) => {
             lastSentAt: Date.now()
         });
 
-        await sendOtpToEmail(resolvedEmail, otp, 'payout');
+        await sendOtpToEmail(resolvedEmail, otp, 'wallet_transfer');
         return res.json({
             success: true,
             message: `Wallet transfer verification OTP code sent to ${resolvedEmail}. Valid for 5 minutes.`,
@@ -637,6 +641,131 @@ export const submitKyc = async (req, res) => {
     }
 };
 
+export const pinOtpStore = new Map();
+
+/**
+ * POST /wallets/pin/send-otp — Send 6-digit OTP code to email for setting/updating payment PIN
+ */
+export const sendPinOtp = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        const user = await User.findById(userId).select('email contact userName').lean();
+        const resolvedEmail = user?.email || (user?.contact && user.contact.includes('@') ? user.contact : null) || (req.body.email && req.body.email.includes('@') ? req.body.email.trim() : null);
+
+        if (!user || !resolvedEmail) {
+            return res.status(400).json({ error: 'Registered user email not found' });
+        }
+
+        // 30-second cooldown check
+        const existing = pinOtpStore.get(userId);
+        if (existing && existing.lastSentAt && (Date.now() - existing.lastSentAt < 30000)) {
+            const waitSec = Math.ceil((30000 - (Date.now() - existing.lastSentAt)) / 1000);
+            return res.status(429).json({
+                error: `Please wait ${waitSec} seconds before requesting another OTP.`,
+                retryAfterSec: waitSec
+            });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        pinOtpStore.set(userId, {
+            otp,
+            expiresAt: Date.now() + 5 * 60 * 1000, // 5 min TTL
+            lastSentAt: Date.now()
+        });
+
+        await sendOtpToEmail(resolvedEmail, otp, 'pin_setup');
+        return res.json({
+            success: true,
+            message: `Payment PIN verification OTP code sent to ${resolvedEmail}. Valid for 5 minutes.`,
+            email: resolvedEmail,
+        });
+    } catch (err) {
+        console.error('Error sending PIN OTP:', err);
+        return res.status(500).json({ error: 'Failed to send PIN OTP email' });
+    }
+};
+
+/**
+ * POST /wallets/pin/verify-otp — Verify 6-digit OTP code for PIN setup/update
+ */
+export const verifyPinOtp = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        const { otp } = req.body;
+        if (!otp || String(otp).trim().length !== 6) {
+            return res.status(400).json({ error: 'Valid 6-digit OTP code is required' });
+        }
+
+        const stored = pinOtpStore.get(userId);
+        if (!stored || stored.expiresAt < Date.now()) {
+            return res.status(400).json({ error: 'OTP has expired or is invalid. Please request a new OTP.' });
+        }
+
+        if (stored.otp !== String(otp).trim()) {
+            return res.status(400).json({ error: 'Invalid OTP code. Please check your email.' });
+        }
+
+        // Grant 15-minute window for setting PIN
+        pinOtpStore.set(`verified_${userId}`, Date.now() + 15 * 60 * 1000);
+        pinOtpStore.delete(userId);
+
+        return res.json({ success: true, message: 'OTP verified successfully! You can now set your 4-digit PIN.' });
+    } catch (err) {
+        console.error('Error verifying PIN OTP:', err);
+        return res.status(500).json({ error: 'Failed to verify OTP' });
+    }
+};
+
+/**
+ * POST /wallets/pin/set — Set or Update 4-digit Payment PIN
+ */
+export const setPaymentPin = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+        // Enforce OTP Verification check
+        const verifiedUntil = pinOtpStore.get(`verified_${userId}`);
+        if (!verifiedUntil || verifiedUntil < Date.now()) {
+            return res.status(400).json({ error: 'Email OTP verification is required before setting payment PIN' });
+        }
+
+        const { pin, confirmPin } = req.body;
+        if (!pin || !/^\d{4}$/.test(String(pin).trim())) {
+            return res.status(400).json({ error: 'PIN must be a 4-digit numeric code' });
+        }
+
+        if (String(pin).trim() !== String(confirmPin).trim()) {
+            return res.status(400).json({ error: 'PIN and confirmation PIN do not match' });
+        }
+
+        const primaryWallet = await ensurePrimaryWallet(userId);
+        const pinHash = await bcrypt.hash(String(pin).trim(), 10);
+
+        primaryWallet.pinHash = pinHash;
+        primaryWallet.isPinSet = true;
+        primaryWallet.isPinLocked = false;
+        primaryWallet.failedPinAttempts = 0;
+        await primaryWallet.save();
+
+        pinOtpStore.delete(`verified_${userId}`);
+
+        return res.json({
+            success: true,
+            message: 'Payment PIN set successfully!',
+            isPinSet: true,
+            isPinLocked: false,
+        });
+    } catch (err) {
+        console.error('Error setting payment PIN:', err);
+        return res.status(500).json({ error: 'Failed to set payment PIN' });
+    }
+};
+
 /**
  * POST /wallets/purchase-ppv — Purchase PPV content using wallet balance
  */
@@ -674,6 +803,57 @@ export const purchasePpvWithWallet = async (req, res) => {
         });
         if (existingPurchase) {
             return res.status(400).json({ error: 'You already have an active purchase for this content', expiresAt: existingPurchase.expiresAt });
+        }
+
+        // ── PIN Verification Check ──
+        const buyerWallet = await ensurePrimaryWallet(userId);
+        if (!buyerWallet.isPinSet) {
+            return res.status(400).json({
+                error: 'Payment PIN is not set. Please set your PIN in Wallet page first.',
+                isPinSet: false,
+            });
+        }
+
+        if (buyerWallet.isPinLocked) {
+            return res.status(400).json({
+                error: 'Payment PIN is locked due to 3 incorrect attempts. Please update/reset your PIN in Wallet page.',
+                isPinLocked: true,
+            });
+        }
+
+        const { pin } = req.body;
+        if (!pin || !/^\d{4}$/.test(String(pin).trim())) {
+            return res.status(400).json({
+                error: 'Please enter your 4-digit Payment PIN',
+                pinRequired: true,
+            });
+        }
+
+        const isPinValid = await bcrypt.compare(String(pin).trim(), buyerWallet.pinHash);
+        if (!isPinValid) {
+            buyerWallet.failedPinAttempts = (buyerWallet.failedPinAttempts || 0) + 1;
+            if (buyerWallet.failedPinAttempts >= 3) {
+                buyerWallet.isPinLocked = true;
+                await buyerWallet.save();
+                return res.status(400).json({
+                    error: 'Incorrect PIN. Your Payment PIN has been locked due to 3 incorrect attempts. Please update your PIN in Wallet page.',
+                    isPinLocked: true,
+                    failedPinAttempts: 3,
+                });
+            }
+            await buyerWallet.save();
+            const remaining = 3 - buyerWallet.failedPinAttempts;
+            return res.status(400).json({
+                error: `Incorrect PIN. ${remaining} attempt(s) remaining.`,
+                remainingAttempts: remaining,
+                failedPinAttempts: buyerWallet.failedPinAttempts,
+            });
+        }
+
+        // Reset failed PIN attempts on successful validation
+        if (buyerWallet.failedPinAttempts > 0) {
+            buyerWallet.failedPinAttempts = 0;
+            await buyerWallet.save();
         }
 
         // Execute atomic wallet purchase (70% to creator, 30% platform)

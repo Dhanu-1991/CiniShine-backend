@@ -11,6 +11,9 @@ import {
     sendKycOtp,
     verifyKycOtp,
     purchasePpvWithWallet,
+    sendPinOtp,
+    verifyPinOtp,
+    setPaymentPin,
 } from '../../controllers/wallet-controllers/walletController.js';
 import { handleRechargeWebhook } from '../../controllers/wallet-controllers/rechargeWebhookController.js';
 import { runMonthEndPayout, getPayoutReport } from '../../controllers/wallet-controllers/payoutJobController.js';
@@ -40,6 +43,9 @@ walletRouter.post('/wallets/transfer', universalTokenVerifier, transferToWalletO
 walletRouter.post('/wallets/transfer/send-otp', universalTokenVerifier, sendTransferOtp);
 walletRouter.post('/wallets/kyc/send-otp', universalTokenVerifier, sendKycOtp);
 walletRouter.post('/wallets/kyc/verify-otp', universalTokenVerifier, verifyKycOtp);
+walletRouter.post('/wallets/pin/send-otp', universalTokenVerifier, sendPinOtp);
+walletRouter.post('/wallets/pin/verify-otp', universalTokenVerifier, verifyPinOtp);
+walletRouter.post('/wallets/pin/set', universalTokenVerifier, setPaymentPin);
 walletRouter.post('/wallets/kyc', universalTokenVerifier, kycUpload.fields([
     { name: 'kycDocument', maxCount: 1 },
     { name: 'gstCertificate', maxCount: 1 }

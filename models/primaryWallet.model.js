@@ -22,6 +22,22 @@ const primaryWalletSchema = new mongoose.Schema({
         type: String,
         default: 'INR',
     },
+    pinHash: {
+        type: String,
+        default: null,
+    },
+    isPinSet: {
+        type: Boolean,
+        default: false,
+    },
+    isPinLocked: {
+        type: Boolean,
+        default: false,
+    },
+    failedPinAttempts: {
+        type: Number,
+        default: 0,
+    },
     createdAt: {
         type: Date,
         default: Date.now,
