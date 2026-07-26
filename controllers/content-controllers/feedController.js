@@ -870,7 +870,9 @@ export const getCategoryTrending = async (req, res) => {
         const limit = Math.min(parseInt(req.query.limit) || 5, 20);
         const seenIds = req.query.seenIds ? req.query.seenIds.split(',').filter(Boolean) : [];
 
-        // Dashboard now renders trending only in "for-you".
+        const contentTypeFilter = req.query.type === 'audio' ? 'audio' : 'video';
+
+        // Dashboard renders trending in "for-you"
         if (categoryId !== 'for-you') {
             return res.json({ content: [] });
         }
@@ -887,6 +889,12 @@ export const getCategoryTrending = async (req, res) => {
             status: 'completed',
             visibility: { $in: ['public', 'pay_per_view'] },
         };
+
+        if (contentTypeFilter === 'audio') {
+            query.contentType = 'audio';
+        } else {
+            query.contentType = { $in: ['video', 'short'] };
+        }
 
         if (excludeIdSet.length > 0) {
             query._id = { $nin: excludeIdSet };

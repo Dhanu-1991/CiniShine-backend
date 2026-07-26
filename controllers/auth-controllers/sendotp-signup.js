@@ -36,13 +36,13 @@ const sendOtp = async (req, res) => {
       console.log("Sending OTP to email:", contact);
       const output = await sendOtpToEmail(contact, otp, purpose || 'signup');
       if (output === true) {
-        return res.status(200).json({ message: 'OTP sent successfully. Valid for 5 minutes.' });
+        return res.status(200).json({ success: true, message: 'OTP sent successfully. Valid for 5 minutes.' });
       }
-      return res.status(500).json({ message: 'Failed to send OTP to email' });
+      return res.status(500).json({ success: false, message: 'Failed to send OTP to email' });
     } else {
       const output = await sendOtpToPhone(contact, otp);
       if (output === true) {
-        return res.status(200).json({ message: 'OTP sent successfully. Valid for 5 minutes.' });
+        return res.status(200).json({ success: true, message: 'OTP sent successfully. Valid for 5 minutes.' });
       }
       return res.status(500).json({ message: 'Failed to send OTP to phone' });
     }
