@@ -122,10 +122,16 @@ export const getWalletsList = async (req, res) => {
             .limit(limit);
         
         const total = await PrimaryWallet.countDocuments(query);
+        const totalBalanceResult = await PrimaryWallet.aggregate([
+            { $match: query },
+            { $group: { _id: null, totalBalance: { $sum: '$balance' } } }
+        ]);
+        const totalBalance = totalBalanceResult[0]?.totalBalance || 0;
 
         res.status(200).json({
             success: true,
             wallets,
+            totalBalance,
             pagination: {
                 total,
                 page,
@@ -173,10 +179,16 @@ export const getSecondaryWalletsList = async (req, res) => {
             .limit(limit);
         
         const total = await SecondaryWallet.countDocuments(query);
+        const totalBalanceResult = await SecondaryWallet.aggregate([
+            { $match: query },
+            { $group: { _id: null, totalBalance: { $sum: '$balance' } } }
+        ]);
+        const totalBalance = totalBalanceResult[0]?.totalBalance || 0;
 
         res.status(200).json({
             success: true,
             wallets,
+            totalBalance,
             pagination: {
                 total,
                 page,

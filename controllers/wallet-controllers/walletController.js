@@ -125,7 +125,7 @@ export const getWalletTransactions = async (req, res) => {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-        const { walletId } = req.params;
+        const { filter, date, month } = req.query;
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const limit = Math.min(50, parseInt(req.query.limit) || 20);
         const skip = (page - 1) * limit;
@@ -143,6 +143,37 @@ export const getWalletTransactions = async (req, res) => {
 
         // Only show completed transactions to users
         const query = { walletId, status: 'completed' };
+
+        if (filter && filter !== 'all') {
+            if (filter === 'payouts' || filter === 'payout') {
+                query.type = { $in: ['payout', 'payout_fee'] };
+            } else if (filter === 'transfer_to_wallet1' || filter === 'transfer_from_settlement') {
+                query.type = 'transfer_from_settlement';
+            } else if (filter === 'transfer_in' || filter === 'transfer_to_primary') {
+                query.type = 'transfer_to_primary';
+            } else if (filter === 'recharge') {
+                query.type = 'recharge';
+            } else if (filter === 'ppv_purchase') {
+                query.type = 'ppv_purchase_debit';
+            } else if (filter === 'ppv_earning') {
+                query.type = 'ppv_earning_credit';
+            } else {
+                query.type = filter;
+            }
+        }
+
+        if (date) {
+            const [y, m, d] = date.split('-').map(Number);
+            const start = new Date(y, m - 1, d, 0, 0, 0, 0);
+            const end = new Date(y, m - 1, d, 23, 59, 59, 999);
+            query.createdAt = { $gte: start, $lte: end };
+        } else if (month) {
+            const [y, m] = month.split('-').map(Number);
+            const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+            const end = new Date(y, m, 0, 23, 59, 59, 999);
+            query.createdAt = { $gte: start, $lte: end };
+        }
+
         const [transactions, total] = await Promise.all([
             WalletTransaction.find(query)
                 .sort({ createdAt: -1 })
