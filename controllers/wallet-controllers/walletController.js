@@ -125,10 +125,15 @@ export const getWalletTransactions = async (req, res) => {
         const userId = req.user?.id;
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
+        const { walletId } = req.params;
         const { filter, date, month } = req.query;
         const page = Math.max(1, parseInt(req.query.page) || 1);
         const limit = Math.min(50, parseInt(req.query.limit) || 20);
         const skip = (page - 1) * limit;
+
+        if (!walletId || !mongoose.Types.ObjectId.isValid(walletId)) {
+            return res.status(400).json({ error: 'Invalid wallet ID' });
+        }
 
         // Verify wallet ownership — check both models
         let wallet = await PrimaryWallet.findById(walletId);
