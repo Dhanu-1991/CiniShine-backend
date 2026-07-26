@@ -893,7 +893,7 @@ export const getCategoryTrending = async (req, res) => {
         if (contentTypeFilter === 'audio') {
             query.contentType = 'audio';
         } else {
-            query.contentType = { $in: ['video', 'short'] };
+            query.contentType = 'video'; // Strictly long-form videos (excludes shorts and posts)
         }
 
         if (excludeIdSet.length > 0) {
@@ -903,17 +903,35 @@ export const getCategoryTrending = async (req, res) => {
         const trendingProjection =
             'contentType title description duration thumbnailKey imageKey hlsMasterKey processedKey originalKey views likeCount likes createdAt channelName status tags category artist album audioCategory postContent userId';
 
-        let candidates = await Content.find(query)
-            .select(trendingProjection)
-            .sort({ views: -1, createdAt: -1 })
-            .limit(150)
-            .populate('userId', 'userName channelName channelHandle channelPicture')
-            .lean();
+        // Fetch both recent and popular candidates so trending algorithm can evaluate velocity and upload recency
+        const [recentCandidates, popularCandidates] = await Promise.all([
+            Content.find(query)
+                .select(trendingProjection)
+                .sort({ createdAt: -1 })
+                .limit(100)
+                .populate('userId', 'userName channelName channelHandle channelPicture')
+                .lean(),
+            Content.find(query)
+                .select(trendingProjection)
+                .sort({ views: -1 })
+                .limit(100)
+                .populate('userId', 'userName channelName channelHandle channelPicture')
+                .lean()
+        ]);
+
+        const candidateMap = new Map();
+        for (const item of [...recentCandidates, ...popularCandidates]) {
+            if (item?._id) {
+                candidateMap.set(item._id.toString(), item);
+            }
+        }
+        const candidates = Array.from(candidateMap.values());
 
         if (candidates.length === 0) {
             return res.json({ content: [] });
         }
 
+        // Run YouTube-grade trending algorithm (evaluates velocity, engagement, upload time windows)
         const trending = recommendationEngine.getTrendingVideos(candidates, limit);
         const content = await normalizeFeedItems(trending, req.user?.id);
 
