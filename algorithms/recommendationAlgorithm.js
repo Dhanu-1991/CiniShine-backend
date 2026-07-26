@@ -105,31 +105,54 @@ export class RecommendationEngine {
     getTrendingVideos(videos, limit = 10) {
         if (!videos || videos.length === 0) return [];
 
-        const windows = [7, 30, 90, Infinity]; // days
-        for (const days of windows) {
-            const cutoff = days === Infinity
-                ? new Date(0)
-                : new Date(Date.now() - days * 86400000);
-            const candidates = videos
-                .filter(v => new Date(v.createdAt) >= cutoff)
-                .map(v => {
-                    // For wider time windows, weight popularity more since velocity is less meaningful
-                    const velocityW = days <= 7 ? 0.5 : days <= 30 ? 0.3 : 0.1;
-                    const engagementW = 0.4;
-                    const popularityW = 1 - velocityW - engagementW;
-                    const maxViews = Math.max(1, ...videos.map(c => c.views || 0));
-                    const trend = (this._velocityScore(v) * velocityW)
-                        + (this._engagementScore(v) * engagementW)
-                        + (this._viewPopularityScore(v, maxViews) * popularityW);
-                    return { ...v, _trend: trend };
-                })
-                .sort((a, b) => b._trend - a._trend)
-                .slice(0, limit);
-            if (candidates.length >= limit || days === Infinity) {
-                return candidates;
+        const now = Date.now();
+        const cutoff7d = new Date(now - 7 * 86400000);
+        const maxViews = Math.max(1, ...videos.map(c => c.views || 0));
+
+        const scoreItem = (v, is7dWindow) => {
+            const velocityW = is7dWindow ? 0.60 : 0.25;
+            const engagementW = is7dWindow ? 0.30 : 0.35;
+            const popularityW = 1 - velocityW - engagementW;
+            const recencyW = is7dWindow ? 0.10 : 0.05;
+
+            const trend = (this._velocityScore(v) * velocityW)
+                + (this._engagementScore(v) * engagementW)
+                + (this._viewPopularityScore(v, maxViews) * popularityW)
+                + (this._recencyScore(v.createdAt) * recencyW);
+
+            return { ...v, _trend: trend };
+        };
+
+        const under7dCandidates = [];
+        const olderCandidates = [];
+
+        for (const v of videos) {
+            const createdAt = new Date(v.createdAt);
+            if (!isNaN(createdAt.getTime()) && createdAt >= cutoff7d) {
+                under7dCandidates.push(v);
+            } else {
+                olderCandidates.push(v);
             }
         }
-        return [];
+
+        const scored7d = under7dCandidates
+            .map(v => scoreItem(v, true))
+            .sort((a, b) => b._trend - a._trend);
+
+        if (scored7d.length >= limit) {
+            return scored7d.slice(0, limit);
+        }
+
+        // If under 7d content isn't sufficient (< limit),
+        // KEEP ALL under 7d items, and fill remaining slots with top gaining fallback items!
+        const scoredOlder = olderCandidates
+            .map(v => scoreItem(v, false))
+            .sort((a, b) => b._trend - a._trend);
+
+        const needed = limit - scored7d.length;
+        const fallbackPicks = scoredOlder.slice(0, needed);
+
+        return [...scored7d, ...fallbackPicks];
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -240,12 +263,16 @@ export class RecommendationEngine {
         return 0.05;
     }
 
-    /** Recent view velocity: recentViews/total scaled */
+    /** Recent view velocity: views gained per hour since upload */
     _velocityScore(item) {
         const total = item.views || 0;
-        const recent = item.recentViews || 0;
         if (total === 0) return 0;
-        return Math.min(1, (recent / total) * 10);
+        if (item.recentViews && item.recentViews > 0) {
+            return Math.min(1, (item.recentViews / total) * 10);
+        }
+        const hoursOld = Math.max(0.2, (Date.now() - new Date(item.createdAt)) / 3600000);
+        const viewsPerHour = total / hoursOld;
+        return Math.min(1, Math.log10(viewsPerHour + 1) / 3);
     }
 
     /** View popularity: log-normalized view count against max */
