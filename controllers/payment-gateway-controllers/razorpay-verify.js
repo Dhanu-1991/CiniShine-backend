@@ -3,13 +3,23 @@ dotenv.config();
 
 import crypto from "crypto";
 import PaymentDetails from "../../models/payment.details.model.js";
-import { fulfillWalletRecharge, fulfillPpvPurchase } from "../../utils/paymentFulfillmentService.js";
 
+/**
+ * Razorpay Verify — STATUS-CHECK & SIGNATURE ACKNOWLEDGMENT ONLY.
+ *
+ * This endpoint does NOT fulfill orders (no wallet credit, no purchase creation).
+ * Fulfillment happens exclusively via the Razorpay webhook (razorpay-webhook.js).
+ *
+ * Two modes:
+ *  1. Status-check: frontend polls with { orderId } to check if webhook has fulfilled.
+ *  2. Signature ack: frontend sends { razorpay_order_id, razorpay_payment_id, razorpay_signature }
+ *     after checkout popup closes → we verify signature, record paymentId, mark PAYMENT_RECEIVED.
+ */
 const razorpayVerify = async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, orderId } = req.body;
 
-    // ─── STATUS-CHECK MODE ─────────────────────────────────────────────────────
+    // ─── MODE 1: STATUS-CHECK (polling from PaymentResultPage) ─────────────────
     if (orderId && !razorpay_signature) {
       console.log(`[RAZORPAY_STATUS_CHECK] OrderID: ${orderId}`);
       const paymentDetail = await PaymentDetails.findOne({ orderId });
@@ -22,8 +32,8 @@ const razorpayVerify = async (req, res) => {
       });
     }
 
-    // ─── FULL SIGNATURE VERIFY MODE ────────────────────────────────────────────
-    console.log(`\n=================== [RAZORPAY_VERIFY_INIT] ===================`);
+    // ─── MODE 2: SIGNATURE ACKNOWLEDGMENT (from Razorpay checkout handler) ─────
+    console.log(`\n=================== [RAZORPAY_VERIFY_ACK] ===================`);
     console.log(`Razorpay OrderID: ${razorpay_order_id} | PaymentID: ${razorpay_payment_id}`);
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -31,6 +41,7 @@ const razorpayVerify = async (req, res) => {
       return res.status(400).json({ error: "Missing required Razorpay parameters" });
     }
 
+    // Verify the Razorpay payment signature to confirm the checkout was legitimate
     const secret = process.env.RAZORPAY_KEY_SECRET;
     const body = razorpay_order_id + "|" + razorpay_payment_id;
 
@@ -48,16 +59,17 @@ const razorpayVerify = async (req, res) => {
 
     console.log(`✅ [RAZORPAY_VERIFY] Signature authentic for order: ${razorpay_order_id}`);
 
-    // Signature valid — find pending record
-    let paymentDetail = await PaymentDetails.findOne({ orderId: razorpay_order_id });
+    // Find the pending payment record
+    const paymentDetail = await PaymentDetails.findOne({ orderId: razorpay_order_id });
 
     if (!paymentDetail) {
       console.error(`❌ [RAZORPAY_VERIFY] Order ${razorpay_order_id} not found in DB`);
       return res.status(404).json({ error: "Order not found in database" });
     }
 
+    // If webhook already fulfilled it, just return success
     if (paymentDetail.status === "SUCCESS") {
-      console.log(`[RAZORPAY_VERIFY] [IDEMPOTENT_SKIP] Order ${razorpay_order_id} already fulfilled.`);
+      console.log(`[RAZORPAY_VERIFY] [ALREADY_FULFILLED] Order ${razorpay_order_id} already completed by webhook.`);
       return res.json([{
         orderId: paymentDetail.orderId,
         status: paymentDetail.status,
@@ -65,40 +77,19 @@ const razorpayVerify = async (req, res) => {
       }]);
     }
 
-    // Fulfill based on content type
-    const amount = paymentDetail.amount;
-    const currency = paymentDetail.currency;
-    const userId = paymentDetail.userId;
-    const contentId = paymentDetail.contentId;
+    // Record the paymentId and mark as PAYMENT_RECEIVED (awaiting webhook fulfillment)
+    // This does NOT credit wallets or create purchases — the webhook does that.
+    paymentDetail.paymentId = razorpay_payment_id;
+    paymentDetail.status = "PAYMENT_RECEIVED";
+    await paymentDetail.save();
 
-    if (!contentId) {
-      // Wallet Recharge
-      console.log(`[RAZORPAY_VERIFY] Fulfilling wallet recharge for Order: ${razorpay_order_id}`);
-      paymentDetail = await fulfillWalletRecharge({
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id,
-        amount,
-        currency,
-        userId,
-      });
-    } else {
-      // PPV Purchase
-      console.log(`[RAZORPAY_VERIFY] Fulfilling PPV purchase for Order: ${razorpay_order_id}`);
-      paymentDetail = await fulfillPpvPurchase({
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id,
-        amount,
-        currency,
-        userId,
-        contentId,
-      });
-    }
+    console.log(`[RAZORPAY_VERIFY] Marked order ${razorpay_order_id} as PAYMENT_RECEIVED. Awaiting webhook fulfillment.`);
+    console.log(`=================== [RAZORPAY_VERIFY_ACK_DONE] ===================\n`);
 
-    console.log(`=================== [RAZORPAY_VERIFY_SUCCESS] ===================\n`);
     return res.json([{
       orderId: paymentDetail.orderId,
-      status: paymentDetail.status,
-      message: "Payment successfully verified and fulfilled.",
+      status: "PAYMENT_RECEIVED",
+      message: "Payment received. Confirming via payment provider...",
     }]);
 
   } catch (error) {
