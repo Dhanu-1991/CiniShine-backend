@@ -53,7 +53,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const userId = watcherIsAuthenticated ? req.user.id : null;
     const anonymousViewerId = watcherIsAuthenticated ? null : resolveAnonymousViewerId(req, event);
     const watchSessionId = event.watchSessionId || event.sessionId || null;
-    const eventId = String(event.eventId || `${contentRecord._id}-${watchSessionId || 'watch'}-${Date.now()}`);
+    const eventId = String(event.eventId || `${contentRecord._id}-${watchSessionId || userId || anonymousViewerId || 'anon'}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
     const eventType = event.eventType || 'heartbeat';
     const activePlayTime = Math.min(Math.max(Number(event.activePlayTime) || 0, 0), 14400);
     const playheadSeconds = resolvePlayheadSeconds(event);
@@ -68,8 +68,10 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     }
 
     if (!contentRecord.duration && contentDuration > 0) {
-        contentRecord.duration = contentDuration;
-        await contentRecord.save();
+        await Content.updateOne(
+            { _id: contentRecord._id, $or: [{ duration: { $exists: false } }, { duration: null }, { duration: 0 }] },
+            { $set: { duration: contentDuration } }
+        );
     }
 
     const consumptionPercent = resolveCompletionRate(contentDuration, playheadSeconds);
@@ -103,20 +105,18 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         ? { watchSessionId, contentId: contentRecord._id }
         : { eventId }; // fallback to eventId if no watchSessionId
 
-    // First, read the existing record to compute the delta for Content.totalWatchTime
-    const existingSession = await ContentWatchtime.findOne(sessionUpsertKey).lean();
-    const previousActivePlayTime = existingSession?.activePlayTime || 0;
-    const activePlayTimeDelta = Math.max(0, activePlayTime - previousActivePlayTime);
-    const isNewSession = !existingSession;
-
-    let createdEvent;
+    // ── RACE-SAFE delta computation ──
+    // Use findOneAndUpdate with new:false to atomically read the PREVIOUS state
+    // and write the update in a single MongoDB operation. This prevents the race
+    // where two concurrent heartbeats both read the same old value and both
+    // compute the same delta, causing totalWatchTime to be double-incremented.
+    let previousDoc;
     try {
-        createdEvent = await ContentWatchtime.findOneAndUpdate(
+        previousDoc = await ContentWatchtime.findOneAndUpdate(
             sessionUpsertKey,
             {
                 // Always set the latest event data
                 $set: {
-                    eventId,
                     userId,
                     anonymousViewerId,
                     isAuthenticated: watcherIsAuthenticated,
@@ -141,13 +141,14 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 $max: {
                     activePlayTime,
                 },
-                // Set fields only on first insert
+                // Set fields only on first insert (eventId stays stable across heartbeats)
                 $setOnInsert: {
+                    eventId,
                     watchSessionId,
                     contentId: contentRecord._id,
                 },
             },
-            { upsert: true, new: true }
+            { upsert: true, new: false }
         );
     } catch (error) {
         if (error?.code === 11000) {
@@ -155,6 +156,11 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         }
         throw error;
     }
+
+    // Compute delta from the atomic previous state (null means new insert)
+    const previousActivePlayTime = previousDoc?.activePlayTime || 0;
+    const activePlayTimeDelta = Math.max(0, activePlayTime - previousActivePlayTime);
+    const isNewSession = !previousDoc;
 
     const now = new Date();
     const bestPlayhead = Math.max(Number(contentRecord.furthestPlayheadSeconds) || 0, playheadSeconds || 0);
@@ -243,65 +249,79 @@ export async function recordWatchSignal({ req, content, contentId, event, device
             viewCounted = true;
         } else {
             // Either new viewer entirely, or same session already counted.
-            // Try upsert without the session filter to create if truly new.
-            const existingViewer = await ContentView.findOne(viewerQuery).lean();
+            // Wrap in try/catch to handle E11000 from concurrent inserts for the same new viewer.
+            try {
+                const existingViewer = await ContentView.findOne(viewerQuery).lean();
 
-            if (!existingViewer) {
-                // Brand new viewer
-                const newViewerUpdate = {
+                if (!existingViewer) {
+                    // Brand new viewer
+                    const newViewerUpdate = {
+                        $set: {
+                            viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
+                            sessionId: event.sessionId || watchSessionId || eventId,
+                            watchSessionId,
+                            lastPlayheadSeconds: playheadSeconds,
+                            bestPlayheadSeconds: playheadSeconds || 0,
+                            lastWatchEventAt: now,
+                            lastCountedWatchSessionId: watchSessionId,
+                            ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
+                        },
+                        $inc: { viewCount: 1 },
+                        $setOnInsert: {
+                            firstViewedAt: now,
+                            weekBucket: dateBucket?.slice(0, 7) || undefined,
+                            monthBucket,
+                            ipAddress: watcherIsAuthenticated ? undefined : (req.ip || req.headers['x-forwarded-for'] || ''),
+                        },
+                    };
+                    await ContentView.updateOne(viewerQuery, newViewerUpdate, { upsert: true });
+
+                    const contentInc = watcherIsAuthenticated
+                        ? { views: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
+                        : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
+                    await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc });
+                    viewCounted = true;
+                }
+                // else: same session already counted → no-op (deduplication working correctly)
+            } catch (err) {
+                if (err?.code === 11000) {
+                    // Concurrent insert race for the same new viewer — the other request
+                    // handled the view count. Safe to ignore.
+                } else {
+                    throw err;
+                }
+            }
+        }
+    } else {
+        // Below threshold — just update playhead position for resume, no view count
+        try {
+            await ContentView.updateOne(
+                watcherIsAuthenticated
+                    ? { contentId: contentRecord._id, userId }
+                    : { contentId: contentRecord._id, anonymousViewerId },
+                {
                     $set: {
                         viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
                         sessionId: event.sessionId || watchSessionId || eventId,
                         watchSessionId,
                         lastPlayheadSeconds: playheadSeconds,
-                        bestPlayheadSeconds: playheadSeconds || 0,
                         lastWatchEventAt: now,
-                        lastCountedWatchSessionId: watchSessionId,
                         ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
                     },
-                    $inc: { viewCount: 1 },
+                    $max: { bestPlayheadSeconds: playheadSeconds || 0 },
                     $setOnInsert: {
                         firstViewedAt: now,
                         weekBucket: dateBucket?.slice(0, 7) || undefined,
                         monthBucket,
                         ipAddress: watcherIsAuthenticated ? undefined : (req.ip || req.headers['x-forwarded-for'] || ''),
                     },
-                };
-                await ContentView.updateOne(viewerQuery, newViewerUpdate, { upsert: true });
-
-                const contentInc = watcherIsAuthenticated
-                    ? { views: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
-                    : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
-                await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc });
-                viewCounted = true;
-            }
-            // else: same session already counted → no-op (deduplication working correctly)
+                },
+                { upsert: true }
+            );
+        } catch (err) {
+            if (err?.code !== 11000) throw err;
+            // E11000 = viewer record created by concurrent request, safe to ignore
         }
-    } else {
-        // Below threshold — just update playhead position for resume, no view count
-        await ContentView.updateOne(
-            watcherIsAuthenticated
-                ? { contentId: contentRecord._id, userId }
-                : { contentId: contentRecord._id, anonymousViewerId },
-            {
-                $set: {
-                    viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
-                    sessionId: event.sessionId || watchSessionId || eventId,
-                    watchSessionId,
-                    lastPlayheadSeconds: playheadSeconds,
-                    lastWatchEventAt: now,
-                    ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
-                },
-                $max: { bestPlayheadSeconds: playheadSeconds || 0 },
-                $setOnInsert: {
-                    firstViewedAt: now,
-                    weekBucket: dateBucket?.slice(0, 7) || undefined,
-                    monthBucket,
-                    ipAddress: watcherIsAuthenticated ? undefined : (req.ip || req.headers['x-forwarded-for'] || ''),
-                },
-            },
-            { upsert: true }
-        );
     }
 
     // ── Upsert WatchHistory for authenticated users ──
@@ -378,24 +398,37 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         }
     }
 
-    // Recompute running average completion for the response
+    // Recompute running averages for the response
     const updatedContent = await Content.findById(contentRecord._id)
-        .select('views totalWatchTime furthestPlayheadSeconds completionRate completionSumPercent completionSessionCount averageWatchPercent authenticatedViews anonymousViews authenticatedUniqueViewers anonymousUniqueViewers')
+        .select('views totalWatchTime furthestPlayheadSeconds completionRate completionSumPercent completionSessionCount averageWatchPercent averageWatchTime authenticatedViews anonymousViews authenticatedUniqueViewers anonymousUniqueViewers')
         .lean();
 
     // Derive completionRate as running average
     const avgCompletion = (updatedContent?.completionSessionCount > 0)
         ? Math.min(100, Math.round(updatedContent.completionSumPercent / updatedContent.completionSessionCount))
         : null;
+
+    // Compute averageWatchTime = totalWatchTime / views
+    const avgWatchTime = (updatedContent?.views > 0)
+        ? Math.round((updatedContent.totalWatchTime || 0) / updatedContent.views)
+        : 0;
+
+    const contentUpdates = {};
     if (avgCompletion !== null && avgCompletion !== updatedContent?.completionRate) {
-        await Content.updateOne({ _id: contentRecord._id }, { $set: { completionRate: avgCompletion, averageWatchPercent: avgCompletion } });
+        contentUpdates.completionRate = avgCompletion;
+        contentUpdates.averageWatchPercent = avgCompletion;
+    }
+    if (avgWatchTime !== (updatedContent?.averageWatchTime || 0)) {
+        contentUpdates.averageWatchTime = avgWatchTime;
+    }
+    if (Object.keys(contentUpdates).length > 0) {
+        await Content.updateOne({ _id: contentRecord._id }, { $set: contentUpdates });
     }
 
     return {
         success: true,
         duplicate: false,
         viewCounted,
-        content: { ...updatedContent, completionRate: avgCompletion ?? updatedContent?.completionRate },
-        event: createdEvent,
+        content: { ...updatedContent, completionRate: avgCompletion ?? updatedContent?.completionRate, averageWatchTime: avgWatchTime },
     };
 }
