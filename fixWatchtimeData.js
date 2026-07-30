@@ -26,9 +26,10 @@
 import mongoose from 'mongoose';
 import ContentWatchtime from './models/contentWatchtime.model.js';
 import Content from './models/content.model.js';
+import ContentView from './models/contentView.model.js';
 import WatchHistory from './models/watchHistory.model.js';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mydb';
+const MONGODB_URI = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/mydb';
 
 
 async function fixWatchtimeData() {
@@ -89,19 +90,11 @@ async function fixWatchtimeData() {
                     _id: { watchSessionId: '$watchSessionId', contentId: '$contentId' },
                     count: { $sum: 1 },
                     maxActivePlayTime: { $max: '$activePlayTime' },
-                    records: {
-                        $push: {
-                            recordId: '$_id',
-                            activePlayTime: '$activePlayTime',
-                            eventType: '$eventType',
-                            createdAt: '$createdAt',
-                        }
-                    },
                 },
             },
             { $match: { count: { $gt: 1 } } },
             { $sort: { count: -1 } },
-        ]);
+        ]).allowDiskUse(true);
 
         console.log(`   Found ${duplicateSessions.length} duplicate sessions grouped by (watchSessionId + contentId).`);
 
@@ -115,19 +108,11 @@ async function fixWatchtimeData() {
                         _id: { watchSessionId: '$sessionId', contentId: '$contentId' },
                         count: { $sum: 1 },
                         maxActivePlayTime: { $max: '$activePlayTime' },
-                        records: {
-                            $push: {
-                                recordId: '$_id',
-                                activePlayTime: '$activePlayTime',
-                                eventType: '$eventType',
-                                createdAt: '$createdAt',
-                            }
-                        },
                     },
                 },
                 { $match: { count: { $gt: 1 } } },
                 { $sort: { count: -1 } },
-            ]);
+            ]).allowDiskUse(true);
             console.log(`   Found ${duplicateSessions.length} duplicate sessions grouped by (sessionId + contentId).`);
         }
 
@@ -144,19 +129,11 @@ async function fixWatchtimeData() {
                         },
                         count: { $sum: 1 },
                         maxActivePlayTime: { $max: '$activePlayTime' },
-                        records: {
-                            $push: {
-                                recordId: '$_id',
-                                activePlayTime: '$activePlayTime',
-                                eventType: '$eventType',
-                                createdAt: '$createdAt',
-                            }
-                        },
                     },
                 },
                 { $match: { count: { $gt: 1 } } },
                 { $sort: { count: -1 } },
-            ]);
+            ]).allowDiskUse(true);
             console.log(`   Found ${duplicateSessions.length} duplicate viewer-content sessions per day.`);
         }
 
@@ -174,29 +151,34 @@ async function fixWatchtimeData() {
             const idsToDelete = [];
 
             for (const session of batch) {
-                const records = session.records;
+                const queryFilter = session._id.watchSessionId
+                    ? { watchSessionId: session._id.watchSessionId, contentId: session._id.contentId }
+                    : (session._id.viewer
+                        ? { $or: [{ userId: session._id.viewer }, { anonymousViewerId: session._id.viewer }], contentId: session._id.contentId, dateBucket: session._id.dateBucket }
+                        : { contentId: session._id.contentId });
 
-                // Find the "best" record: highest activePlayTime.
-                // If multiple have the same max, prefer 'ended' > 'unload' > 'pagehide' > latest createdAt
+                const records = await ContentWatchtime.find(queryFilter)
+                    .select('_id activePlayTime eventType createdAt')
+                    .lean();
+
+                if (records.length <= 1) continue;
+
                 const priorityOrder = { ended: 0, unload: 1, pagehide: 2 };
                 const sorted = records.sort((a, b) => {
-                    // Highest activePlayTime first
                     if (b.activePlayTime !== a.activePlayTime) return b.activePlayTime - a.activePlayTime;
-                    // Prefer session-end events
                     const aPri = priorityOrder[a.eventType] ?? 99;
                     const bPri = priorityOrder[b.eventType] ?? 99;
                     if (aPri !== bPri) return aPri - bPri;
-                    // Latest createdAt
                     return new Date(b.createdAt) - new Date(a.createdAt);
                 });
 
-                // Keep the first (best), delete the rest
                 for (let j = 1; j < sorted.length; j++) {
-                    idsToDelete.push(sorted[j].recordId);
+                    idsToDelete.push(sorted[j]._id);
                 }
 
-                // Track affected content
-                affectedContentIds.add(session._id.contentId.toString());
+                if (session._id.contentId) {
+                    affectedContentIds.add(session._id.contentId.toString());
+                }
             }
 
             if (idsToDelete.length > 0) {
@@ -212,6 +194,50 @@ async function fixWatchtimeData() {
         console.log(`   ✅ Deleted ${totalDeleted} duplicate ContentWatchtime records.`);
         console.log(`   📦 ${affectedContentIds.size} content items affected.`);
 
+        // ─── STEP 1.5: Normalize & Cap activePlayTime against content duration ───
+        console.log('\n📐 Step 1.5: Normalizing & capping activePlayTime against content duration...');
+        const allRecords = await ContentWatchtime.find({ activePlayTime: { $gt: 0 } }).select('_id contentId activePlayTime contentDuration').lean();
+        
+        let cappedCount = 0;
+        const bulkCapOps = [];
+        const contentDurationMap = {};
+        const contents = await Content.find({}).select('_id duration').lean();
+        contents.forEach(c => { contentDurationMap[c._id.toString()] = c.duration || 0; });
+
+        for (const record of allRecords) {
+            let duration = record.contentDuration || contentDurationMap[record.contentId?.toString()] || 0;
+            let active = record.activePlayTime;
+
+            if (active > 500 && (duration <= 0 || active > duration * 2)) {
+                active = active / 1000;
+            }
+
+            const maxAllowed = duration > 0 ? duration * 2 : 14400;
+            if (active > maxAllowed) {
+                active = Math.round(maxAllowed);
+            }
+
+            if (active !== record.activePlayTime) {
+                bulkCapOps.push({
+                    updateOne: {
+                        filter: { _id: record._id },
+                        update: { $set: { activePlayTime: Math.round(active) } }
+                    }
+                });
+                cappedCount++;
+            }
+        }
+
+        if (bulkCapOps.length > 0) {
+            console.log(`   Capping ${bulkCapOps.length} records that exceeded duration / ms scale...`);
+            for (let i = 0; i < bulkCapOps.length; i += 500) {
+                await ContentWatchtime.bulkWrite(bulkCapOps.slice(i, i + 500));
+            }
+            console.log(`   ✅ Successfully normalized ${cappedCount} ContentWatchtime records.`);
+        } else {
+            console.log('   ✅ All ContentWatchtime activePlayTime records are within normal bounds.');
+        }
+
         // ─── STEP 3: Recompute Content.totalWatchTime from cleaned data ─────
         console.log('\n🔄 Step 3: Recomputing Content.totalWatchTime for all content...');
 
@@ -223,7 +249,7 @@ async function fixWatchtimeData() {
                     correctTotalWatchTime: { $sum: '$activePlayTime' },
                 }
             }
-        ]);
+        ]).allowDiskUse(true);
 
         console.log(`   Computing correct totals for ${watchtimeSums.length} content items...`);
 
@@ -270,6 +296,39 @@ async function fixWatchtimeData() {
                 console.log(`   Processed ${Math.min(i + batchSize, watchtimeSums.length)}/${watchtimeSums.length}...`);
             }
         }
+
+        // ─── STEP 4: Recalculate averageWatchTime and sync unique viewer metrics ───
+        console.log('\n🔄 Step 4: Recalculating averageWatchTime and unique viewers for all content...');
+        const allContent = await Content.find({}).select('_id views totalWatchTime averageWatchTime authenticatedViews anonymousViews authenticatedUniqueViewers anonymousUniqueViewers').lean();
+
+        let healedCount = 0;
+        for (const c of allContent) {
+            const views = c.views || 0;
+            const correctAvg = views > 0 ? Math.round((c.totalWatchTime || 0) / views) : 0;
+
+            const [authUniques, anonUniques] = await Promise.all([
+                ContentView.countDocuments({ contentId: c._id, viewerType: 'authenticated' }),
+                ContentView.countDocuments({ contentId: c._id, viewerType: 'anonymous' }),
+            ]);
+
+            const authViews = Math.max(c.authenticatedViews || 0, authUniques);
+            const anonViews = Math.max(c.anonymousViews || 0, anonUniques);
+
+            await Content.updateOne(
+                { _id: c._id },
+                {
+                    $set: {
+                        averageWatchTime: correctAvg,
+                        authenticatedUniqueViewers: authUniques,
+                        anonymousUniqueViewers: anonUniques,
+                        authenticatedViews: authViews,
+                        anonymousViews: anonViews,
+                    }
+                }
+            );
+            healedCount++;
+        }
+        console.log(`   ✅ Recalculated metrics & unique viewers for ${healedCount} content items.`);
 
         console.log(`\n✅ Migration complete!`);
         console.log(`   📊 Summary:`);

@@ -62,7 +62,8 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const eventType = event.eventType || 'heartbeat';
     const rawActivePlay = Number(event.activePlayTime) || 0;
     const normalizedPlayTime = rawActivePlay > 500 ? rawActivePlay / 1000 : rawActivePlay;
-    const activePlayTime = Math.min(Math.max(normalizedPlayTime, 0), 14400);
+    const maxSessionPlayTime = contentDuration > 0 ? Math.round(contentDuration * 2) : 14400;
+    const activePlayTime = Math.min(Math.max(normalizedPlayTime, 0), maxSessionPlayTime);
     const playheadSeconds = resolvePlayheadSeconds(event);
     const contentDuration = Number.isFinite(Number(event.contentDuration)) && Number(event.contentDuration) > 0
         ? Number(event.contentDuration)

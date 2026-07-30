@@ -621,14 +621,16 @@ export const getContentAnalytics = async (req, res) => {
 
         const isPpv = content.visibility === 'pay_per_view';
 
-        // Parallel fetch: comments, reactions, watch history, signed URLs, unique viewers, PPV purchases
-        const [commentCount, likes, dislikes, watchEntries, uniqueViewers, thumbnailUrl, imageUrl, ppvData] = await Promise.all([
+        // Parallel fetch: comments, reactions, watch history, signed URLs, unique viewers, viewer breakdown, PPV purchases
+        const [commentCount, likes, dislikes, watchEntries, uniqueViewers, signedInUniquesCount, anonymousUniquesCount, thumbnailUrl, imageUrl, ppvData] = await Promise.all([
             Comment.countDocuments({ videoId: id, parentCommentId: { $exists: false } }),
             VideoReaction.countDocuments({ videoId: id, type: 'like' }),
             VideoReaction.countDocuments({ videoId: id, type: 'dislike' }),
             WatchHistory.find({ contentId: id }).select('sessions watchTime watchPercentage completedWatch').lean(),
             // ContentView is IMMUTABLE — never deleted even when user clears history → reliable unique viewer count
             ContentView.countDocuments({ contentId: id }),
+            ContentView.countDocuments({ contentId: id, viewerType: 'authenticated' }),
+            ContentView.countDocuments({ contentId: id, viewerType: 'anonymous' }),
             getCfUrl(content.thumbnailKey),
             getCfUrl(content.imageKey),
             // PPV analytics: purchase count, revenue, and recent purchases
@@ -683,8 +685,8 @@ export const getContentAnalytics = async (req, res) => {
             })() : null,
         ]);
 
-        const signedInUniqueViewers = content.authenticatedUniqueViewers || 0;
-        const anonymousUniqueViewers = content.anonymousUniqueViewers || 0;
+        const signedInUniqueViewers = content.authenticatedUniqueViewers || signedInUniquesCount;
+        const anonymousUniqueViewers = content.anonymousUniqueViewers || anonymousUniquesCount;
         const splitUniqueViewers = signedInUniqueViewers + anonymousUniqueViewers;
         const completionRate = content.completionRate !== null && content.completionRate !== undefined
             ? content.completionRate
@@ -738,8 +740,8 @@ export const getContentAnalytics = async (req, res) => {
             },
             stats: {
                 views: content.views || 0,
-                signedInViews: content.authenticatedViews || 0,
-                anonymousViews: content.anonymousViews || 0,
+                signedInViews: (content.authenticatedViews || 0) > 0 ? content.authenticatedViews : signedInUniqueViewers,
+                anonymousViews: (content.anonymousViews || 0) > 0 ? content.anonymousViews : anonymousUniqueViewers,
                 likes,
                 dislikes,
                 commentCount,
