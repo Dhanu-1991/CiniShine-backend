@@ -21,10 +21,15 @@ const resolveAnonymousViewerId = (req, event) => {
 
 const resolvePlayheadSeconds = (event) => {
     const playhead = Number(event.playheadSeconds);
-    if (Number.isFinite(playhead) && playhead >= 0) return playhead;
+    if (Number.isFinite(playhead) && playhead >= 0) {
+        return playhead > 86400 ? playhead / 1000 : playhead;
+    }
 
-    const fallback = Number(event.activePlayTime) / 1000;
-    return Number.isFinite(fallback) && fallback >= 0 ? fallback : 0;
+    const fallback = Number(event.activePlayTime);
+    if (Number.isFinite(fallback) && fallback >= 0) {
+        return fallback > 500 ? fallback / 1000 : fallback;
+    }
+    return 0;
 };
 
 const resolveCompletionRate = (durationSeconds, playheadSeconds) => {
@@ -55,7 +60,9 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const watchSessionId = event.watchSessionId || event.sessionId || null;
     const eventId = String(event.eventId || `${contentRecord._id}-${watchSessionId || userId || anonymousViewerId || 'anon'}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
     const eventType = event.eventType || 'heartbeat';
-    const activePlayTime = Math.min(Math.max(Number(event.activePlayTime) || 0, 0), 14400);
+    const rawActivePlay = Number(event.activePlayTime) || 0;
+    const normalizedPlayTime = rawActivePlay > 500 ? rawActivePlay / 1000 : rawActivePlay;
+    const activePlayTime = Math.min(Math.max(normalizedPlayTime, 0), 14400);
     const playheadSeconds = resolvePlayheadSeconds(event);
     const contentDuration = Number.isFinite(Number(event.contentDuration)) && Number(event.contentDuration) > 0
         ? Number(event.contentDuration)

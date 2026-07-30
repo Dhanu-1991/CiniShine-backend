@@ -381,10 +381,11 @@ export const updateContentWatchTime = async (req, res) => {
     try {
         const { id } = req.params;
         const { watchTime, duration: clientDuration } = req.body;
-        const watchTimeMs = Number(watchTime);
-        if (!Number.isFinite(watchTimeMs) || watchTimeMs <= 0) {
+        const watchTimeRaw = Number(watchTime);
+        if (!Number.isFinite(watchTimeRaw) || watchTimeRaw <= 0) {
             return res.status(400).json({ error: 'Invalid watch time' });
         }
+        const watchTimeSeconds = watchTimeRaw > 500 ? watchTimeRaw / 1000 : watchTimeRaw;
 
         const content = await Content.findById(id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
@@ -402,7 +403,7 @@ export const updateContentWatchTime = async (req, res) => {
             event: {
                 ...req.body,
                 eventId: req.body.eventId || `${id}-${req.body.watchSessionId || req.body.sessionId || 'legacy'}-${Date.now()}`,
-                activePlayTime: watchTimeMs,
+                activePlayTime: watchTimeSeconds,
                 contentDuration: content.duration || clientDuration || 0,
                 sessionId: req.body.sessionId || req.body.watchSessionId || null,
             },

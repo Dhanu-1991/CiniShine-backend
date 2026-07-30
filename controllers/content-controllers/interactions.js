@@ -135,11 +135,12 @@ export const dislikeVideo = async (req, res) => {
 export const updateWatchTime = async (req, res) => {
     try {
         const videoId = req.params.id;
-        const watchTimeMs = Number(req.body.watchTime);
+        const watchTimeRaw = Number(req.body.watchTime);
 
-        if (!Number.isFinite(watchTimeMs) || watchTimeMs <= 0) {
+        if (!Number.isFinite(watchTimeRaw) || watchTimeRaw <= 0) {
             return res.status(400).json({ message: "Invalid watch time" });
         }
+        const watchTimeSeconds = watchTimeRaw > 500 ? watchTimeRaw / 1000 : watchTimeRaw;
 
         const video = await Content.findById(videoId).lean();
         if (!video) {
@@ -154,7 +155,7 @@ export const updateWatchTime = async (req, res) => {
             event: {
                 ...req.body,
                 eventId: req.body.eventId || `${videoId}-${req.body.watchSessionId || req.body.sessionId || 'legacy'}-${Date.now()}`,
-                activePlayTime: watchTimeMs,
+                activePlayTime: watchTimeSeconds,
                 contentDuration: video.duration || req.body.duration || 0,
                 sessionId: req.body.sessionId || req.body.watchSessionId || null,
             },
