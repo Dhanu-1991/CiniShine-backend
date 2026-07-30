@@ -6,6 +6,7 @@ import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import mongoose from 'mongoose';
+import { getCfUrl } from '../../config/cloudfront.js';
 
 /**
  * Helper: generate date range based on period filter
@@ -501,6 +502,10 @@ export const getUserAnalytics = async (req, res) => {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
+        if (user.profilePicture) {
+            user.profilePicture = getCfUrl(user.profilePicture);
+        }
+
         // Format page usage
         const pageMap = {};
         for (const p of pageUsage) {
@@ -558,13 +563,22 @@ export const searchUsersForAnalytics = async (req, res) => {
                 { email: regex },
                 { channelName: regex },
                 { channelHandle: regex },
+                { userName: regex },
+                { fullName: regex },
+                { contact: regex },
             ],
         })
-            .select('email channelName channelHandle profilePicture')
+            .select('email channelName channelHandle profilePicture userName fullName contact')
             .limit(20)
             .lean();
 
-        return res.status(200).json({ success: true, users });
+        const mapped = users.map(u => {
+            const obj = u.toObject ? u.toObject() : { ...u };
+            if (obj.profilePicture) obj.profilePicture = getCfUrl(obj.profilePicture);
+            return obj;
+        });
+
+        return res.status(200).json({ success: true, users: mapped });
     } catch (error) {
         console.error('searchUsersForAnalytics error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });

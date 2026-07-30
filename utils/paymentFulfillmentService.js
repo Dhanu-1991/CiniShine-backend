@@ -5,6 +5,8 @@ import Content from "../models/content.model.js";
 import SecondaryWallet from "../models/secondaryWallet.model.js";
 import { ensurePrimaryWallet, ensureSecondaryWallet, creditWallet } from "./walletService.js";
 
+import { sendWalletRechargeEmail, sendPpvRentalEmail } from "../services/paymentEmailService.js";
+
 export const PLATFORM_CUT_PERCENT = 32;
 
 /**
@@ -54,6 +56,12 @@ export async function fulfillWalletRecharge({ orderId, paymentId, amount, curren
       }
     });
     console.log(`✅ [RECHARGE_FULFILL_SUCCESS] Credited ₹${amount} to Primary Wallet of User ${userId} | Order: ${orderId}`);
+
+    // Trigger automated email notification asynchronously
+    sendWalletRechargeEmail({ userId, amount, orderId, paymentId }).catch(err => {
+      console.error('[PaymentFulfillment] Failed to send recharge confirmation email:', err);
+    });
+
     console.log(`=================== [RECHARGE_FULFILL_END] ===================\n`);
     return existingPayment;
   } catch (err) {
@@ -161,6 +169,18 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
   } catch (creatorWalletErr) {
     console.error('❌ [PPV_PG_CREATOR_CREDIT_ERROR] Failed to process creator wallet credit:', creatorWalletErr);
   }
+
+  // Trigger automated PPV rental email notification asynchronously
+  sendPpvRentalEmail({
+    userId,
+    contentId,
+    amount,
+    orderId,
+    paymentId,
+    paymentMethod: 'Online Payment'
+  }).catch(err => {
+    console.error('[PaymentFulfillment] Failed to send PPV rental email:', err);
+  });
 
   console.log(`=================== [PPV_PG_FULFILL_SUCCESS] ===================\n`);
   return existingPayment;

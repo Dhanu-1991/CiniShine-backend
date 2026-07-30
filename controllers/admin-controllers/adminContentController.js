@@ -1208,6 +1208,18 @@ export const listPpvContent = async (req, res) => {
                 }
             },
             { $unwind: { path: '$creator', preserveNullAndEmptyArrays: true } },
+            // Lookup subscriber count for the creator
+            {
+                $lookup: {
+                    from: 'users',
+                    let: { creatorId: '$creator._id' },
+                    pipeline: [
+                        { $match: { $expr: { $in: ['$$creatorId', { $ifNull: ['$subscriptions', []] }] } } },
+                        { $count: 'n' }
+                    ],
+                    as: '_creatorFollowers'
+                }
+            },
             {
                 $lookup: {
                     from: 'purchases',
@@ -1267,7 +1279,12 @@ export const listPpvContent = async (req, res) => {
                         userName: '$creator.userName',
                         channelHandle: '$creator.channelHandle',
                         channelPicture: '$creator.channelPicture',
-                        subscriberCount: { $ifNull: ['$creator.subscriberCount', 0] }
+                        subscriberCount: {
+                            $ifNull: [
+                                '$creator.subscriberCountOverride',
+                                { $ifNull: [{ $arrayElemAt: ['$_creatorFollowers.n', 0] }, 0] }
+                            ]
+                        }
                     },
                     totalRevenue: { $ifNull: ['$purchaseStats.totalRevenue', 0] },
                     totalUnlocks: { $ifNull: ['$purchaseStats.totalUnlocks', 0] }

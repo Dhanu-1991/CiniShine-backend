@@ -20,6 +20,7 @@ import SecondaryWallet from '../models/secondaryWallet.model.js';
 import WalletTransaction from '../models/walletTransaction.model.js';
 import WalletTransferLog from '../models/walletTransferLog.model.js';
 import Purchase from '../models/purchase.model.js';
+import { sendWalletRechargeEmail } from '../services/paymentEmailService.js';
 import { calculateTaxBreakdown } from './taxCalculator.js';
 
 /** Platform cut percentage for PPV purchases */
@@ -386,7 +387,11 @@ export async function executeRecharge(userId, amount, orderId) {
                     idempotencyKey: `recharge_${orderId}`
                 }], { session });
             }
+        // Trigger automated email notification asynchronously
+        sendWalletRechargeEmail({ userId, amount, orderId }).catch(err => {
+            console.error('[WalletService] Failed to send recharge confirmation email:', err);
         });
+
         return txn;
     } finally {
         await session.endSession();

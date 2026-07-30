@@ -30,6 +30,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { v4 as uuidv4 } from 'uuid';
 import Content from '../../models/content.model.js';
 import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
+import { sendPpvRentalEmail } from '../../services/paymentEmailService.js';
 import { calculateTaxBreakdown } from '../../utils/taxCalculator.js';
 import PaymentDetails from '../../models/payment.details.model.js';
 import { Cashfree, CFEnvironment } from 'cashfree-pg';
@@ -893,6 +894,17 @@ export const purchasePpvWithWallet = async (req, res) => {
 
         // Execute atomic wallet purchase (70% to creator, 30% platform)
         const result = await executePpvPurchase(userId, content.userId.toString(), contentId, content.price);
+
+        // Trigger automated PPV rental email notification asynchronously
+        sendPpvRentalEmail({
+            userId,
+            contentId,
+            amount: content.price,
+            orderId: result.purchase?.orderId || result.purchase?._id?.toString(),
+            paymentMethod: 'Wallet 1 Balance',
+        }).catch(err => {
+            console.error('[WalletPurchase] Failed to send PPV rental email:', err);
+        });
 
         res.json({
             success: true,

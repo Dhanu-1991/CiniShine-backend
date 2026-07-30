@@ -146,6 +146,12 @@ ContentWatchtimeSchema.index({ userId: 1, contentType: 1, dateBucket: 1 });
 ContentWatchtimeSchema.index({ contentId: 1, watchSessionId: 1 });
 ContentWatchtimeSchema.index({ contentId: 1, anonymousViewerId: 1 });
 ContentWatchtimeSchema.index({ contentId: 1, userId: 1 });
+// Unique compound index for upsert-by-session pattern (only when watchSessionId exists)
+ContentWatchtimeSchema.index(
+    { watchSessionId: 1, contentId: 1 },
+    { unique: true, partialFilterExpression: { watchSessionId: { $type: 'string' } } }
+);
+
 
 const ContentWatchtime = mongoose.model('ContentWatchtime', ContentWatchtimeSchema);
 export default ContentWatchtime;

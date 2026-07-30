@@ -95,33 +95,60 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         if (typeSpecific.clickedThrough) contentTypeInc.clickThroughCount = 1;
     }
 
+    // ── Upsert ContentWatchtime by watchSessionId + contentId ──
+    // The frontend sends CUMULATIVE activePlayTime on every heartbeat,
+    // so we use $max to store only the highest value per watch session
+    // instead of creating a new record per heartbeat event.
+    const sessionUpsertKey = watchSessionId
+        ? { watchSessionId, contentId: contentRecord._id }
+        : { eventId }; // fallback to eventId if no watchSessionId
+
+    // First, read the existing record to compute the delta for Content.totalWatchTime
+    const existingSession = await ContentWatchtime.findOne(sessionUpsertKey).lean();
+    const previousActivePlayTime = existingSession?.activePlayTime || 0;
+    const activePlayTimeDelta = Math.max(0, activePlayTime - previousActivePlayTime);
+    const isNewSession = !existingSession;
+
     let createdEvent;
     try {
-        createdEvent = await ContentWatchtime.create({
-            eventId,
-            userId,
-            anonymousViewerId,
-            isAuthenticated: watcherIsAuthenticated,
-            sessionId: event.sessionId || watchSessionId || eventId,
-            watchSessionId,
-            eventType,
-            contentId: contentRecord._id,
-            contentType: contentRecord.contentType,
-            activePlayTime,
-            playheadSeconds,
-            contentDuration,
-            consumptionPercent,
-            completed,
-            totalBufferTime: Math.max(Number(event.bufferTime) || 0, 0),
-            totalPauseTime: Math.max(Number(event.pauseTime) || 0, 0),
-            totalSeekTime: Math.max(Number(event.seekTime) || 0, 0),
-            readTime: Math.max(Number(event.readTime) || 0, 0),
-            creatorId: event.creatorId || contentRecord.userId || null,
-            dateBucket,
-            monthBucket,
-            device,
-            ...typeSpecific,
-        });
+        createdEvent = await ContentWatchtime.findOneAndUpdate(
+            sessionUpsertKey,
+            {
+                // Always set the latest event data
+                $set: {
+                    eventId,
+                    userId,
+                    anonymousViewerId,
+                    isAuthenticated: watcherIsAuthenticated,
+                    sessionId: event.sessionId || watchSessionId || eventId,
+                    eventType,
+                    contentType: contentRecord.contentType,
+                    playheadSeconds,
+                    contentDuration,
+                    consumptionPercent,
+                    completed,
+                    totalBufferTime: Math.max(Number(event.bufferTime) || 0, 0),
+                    totalPauseTime: Math.max(Number(event.pauseTime) || 0, 0),
+                    totalSeekTime: Math.max(Number(event.seekTime) || 0, 0),
+                    readTime: Math.max(Number(event.readTime) || 0, 0),
+                    creatorId: event.creatorId || contentRecord.userId || null,
+                    dateBucket,
+                    monthBucket,
+                    device,
+                    ...typeSpecific,
+                },
+                // Use $max for cumulative fields — frontend sends running totals
+                $max: {
+                    activePlayTime,
+                },
+                // Set fields only on first insert
+                $setOnInsert: {
+                    watchSessionId,
+                    contentId: contentRecord._id,
+                },
+            },
+            { upsert: true, new: true }
+        );
     } catch (error) {
         if (error?.code === 11000) {
             return { success: true, duplicate: true, viewCounted: false };
@@ -134,26 +161,38 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const thisSessionCompletion = resolveCompletionRate(contentDuration, playheadSeconds);
 
     // Update content-level watch stats atomically
+    // IMPORTANT: Only increment totalWatchTime by the DELTA (new - previous),
+    // since frontend sends cumulative activePlayTime, not per-heartbeat chunks.
     const contentUpdate = {
-        $inc: { totalWatchTime: activePlayTime },
         $max: { furthestPlayheadSeconds: bestPlayhead },
         $set: { lastWatchEventAt: now },
     };
+
+    // Only add $inc if there's something to increment
+    const contentIncs = {};
+    if (activePlayTimeDelta > 0) {
+        contentIncs.totalWatchTime = activePlayTimeDelta;
+    }
 
     // Running average completion: only increment sum/count when a session ends
     // (ended, unload, pagehide) to avoid inflating the count on every heartbeat
     const isSessionEnd = eventType === 'ended' || eventType === 'unload' || eventType === 'pagehide';
     if (isSessionEnd && thisSessionCompletion !== null && thisSessionCompletion > 0) {
-        contentUpdate.$inc.completionSumPercent = thisSessionCompletion;
-        contentUpdate.$inc.completionSessionCount = 1;
+        contentIncs.completionSumPercent = thisSessionCompletion;
+        contentIncs.completionSessionCount = 1;
     }
 
-    // Merge content-type specific aggregate increments
-    if (Object.keys(contentTypeInc).length > 0) {
-        Object.assign(contentUpdate.$inc, contentTypeInc);
+    // Merge content-type specific aggregate increments (only on first occurrence)
+    if (isNewSession && Object.keys(contentTypeInc).length > 0) {
+        Object.assign(contentIncs, contentTypeInc);
+    }
+
+    if (Object.keys(contentIncs).length > 0) {
+        contentUpdate.$inc = contentIncs;
     }
 
     await Content.updateOne({ _id: contentRecord._id }, contentUpdate);
+
 
     const threshold = getWatchThreshold(contentRecord.contentType, contentDuration);
     const shouldCountView = activePlayTime >= threshold || completed || eventType === 'ended';

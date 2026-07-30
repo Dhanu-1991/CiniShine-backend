@@ -10,6 +10,7 @@ import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js'
 import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const OTP_COOLDOWN_MS = 30 * 1000; // 30 seconds cooldown
 const MAX_OTP_ATTEMPTS = 3;
 const MAX_LOGIN_ATTEMPTS = 3;
 const PASSWORD_MIN_LENGTH = 8;
@@ -108,9 +109,30 @@ export const adminSignin = async (req, res) => {
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
         }
 
-        // Password correct — send OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        // Password correct — check for active OTP session within cooldown period
         const channel = detectContactType(admin.contact);
+        const existingSession = await OtpSession.findOne({ contact: admin.contact, purpose: 'login' })
+            .sort({ createdAt: -1 });
+
+        if (existingSession && existingSession.createdAt) {
+            const lastSentTime = existingSession.updatedAt ? existingSession.updatedAt.getTime() : existingSession.createdAt.getTime();
+            const ageMs = Date.now() - lastSentTime;
+            if (ageMs < OTP_COOLDOWN_MS && existingSession.expires_at > new Date()) {
+                const cooldownRemaining = Math.ceil((OTP_COOLDOWN_MS - ageMs) / 1000);
+                return res.status(200).json({
+                    success: true,
+                    needsOtp: true,
+                    otpSessionId: existingSession._id,
+                    channel,
+                    maskedContact: maskContact(admin.contact, channel),
+                    cooldownRemaining,
+                    message: 'An OTP was already sent recently. Please enter the code.'
+                });
+            }
+        }
+
+        // Generate new OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
         // Delete any existing OTP sessions for this admin login
         await OtpSession.deleteMany({ contact: admin.contact, purpose: 'login' });
@@ -150,7 +172,8 @@ export const adminSignin = async (req, res) => {
             needsOtp: true,
             otpSessionId: otpSession._id,
             channel,
-            maskedContact: maskContact(admin.contact, channel)
+            maskedContact: maskContact(admin.contact, channel),
+            cooldownRemaining: Math.ceil(OTP_COOLDOWN_MS / 1000)
         });
     } catch (error) {
         console.error('Admin signin error:', error);
@@ -342,8 +365,28 @@ export const adminSignup = async (req, res) => {
 
         // Step 1: If not OTP-verified yet, send OTP
         if (!otpVerified) {
-            const otp = Math.floor(100000 + Math.random() * 900000).toString();
             const channel = detectContactType(normalizedContact);
+            const existingSession = await OtpSession.findOne({ contact: normalizedContact, purpose: 'signup' })
+                .sort({ createdAt: -1 });
+
+            if (existingSession && existingSession.createdAt) {
+                const lastSentTime = existingSession.updatedAt ? existingSession.updatedAt.getTime() : existingSession.createdAt.getTime();
+                const ageMs = Date.now() - lastSentTime;
+                if (ageMs < OTP_COOLDOWN_MS && existingSession.expires_at > new Date()) {
+                    const cooldownRemaining = Math.ceil((OTP_COOLDOWN_MS - ageMs) / 1000);
+                    return res.status(200).json({
+                        success: true,
+                        needsOtp: true,
+                        otpSessionId: existingSession._id,
+                        channel,
+                        maskedContact: maskContact(normalizedContact, channel),
+                        cooldownRemaining,
+                        message: 'An OTP was already sent recently.'
+                    });
+                }
+            }
+
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
             await OtpSession.deleteMany({ contact: normalizedContact, purpose: 'signup' });
 
@@ -371,7 +414,8 @@ export const adminSignup = async (req, res) => {
                 needsOtp: true,
                 otpSessionId: otpSession._id,
                 channel,
-                maskedContact: maskContact(normalizedContact, channel)
+                maskedContact: maskContact(normalizedContact, channel),
+                cooldownRemaining: Math.ceil(OTP_COOLDOWN_MS / 1000)
             });
         }
 
@@ -435,13 +479,15 @@ export const adminResendOtp = async (req, res) => {
             return res.status(400).json({ success: false, message: 'OTP session not found or expired' });
         }
 
-        // Throttle: only allow resend if session was created >60s ago
-        const ageMs = Date.now() - session.createdAt.getTime();
-        if (ageMs < 60000) {
+        // Throttle: only allow resend if session was created/updated >30s ago
+        const lastSentTime = session.updatedAt ? session.updatedAt.getTime() : session.createdAt.getTime();
+        const ageMs = Date.now() - lastSentTime;
+        if (ageMs < OTP_COOLDOWN_MS) {
             return res.status(429).json({
                 success: false,
                 message: 'Please wait before requesting another OTP',
-                retryAfterMs: 60000 - ageMs
+                retryAfterMs: OTP_COOLDOWN_MS - ageMs,
+                cooldownRemaining: Math.ceil((OTP_COOLDOWN_MS - ageMs) / 1000)
             });
         }
 
@@ -468,7 +514,8 @@ export const adminResendOtp = async (req, res) => {
             success: true,
             message: 'OTP resent successfully',
             channel: session.channel,
-            maskedContact: maskContact(session.contact, session.channel)
+            maskedContact: maskContact(session.contact, session.channel),
+            cooldownRemaining: Math.ceil(OTP_COOLDOWN_MS / 1000)
         });
     } catch (error) {
         console.error('Admin resend OTP error:', error);
