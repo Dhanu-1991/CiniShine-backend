@@ -398,7 +398,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         }
     }
 
-    // Recompute running averages for the response
+    // Recompute running averages and sync unique viewer metrics for the response
     const updatedContent = await Content.findById(contentRecord._id)
         .select('views totalWatchTime furthestPlayheadSeconds completionRate completionSumPercent completionSessionCount averageWatchPercent averageWatchTime authenticatedViews anonymousViews authenticatedUniqueViewers anonymousUniqueViewers')
         .lean();
@@ -414,6 +414,38 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         : 0;
 
     const contentUpdates = {};
+
+    let authUniques = updatedContent?.authenticatedUniqueViewers || 0;
+    let anonUniques = updatedContent?.anonymousUniqueViewers || 0;
+    let authViews = updatedContent?.authenticatedViews || 0;
+    let anonViews = updatedContent?.anonymousViews || 0;
+
+    // Auto-heal unique viewer & view breakdown metrics if they are 0 or out-of-sync with ContentView collection
+    if (authUniques === 0 || anonUniques === 0 || (authViews === 0 && anonViews === 0 && (updatedContent?.views || 0) > 0)) {
+        const [actualAuthUniques, actualAnonUniques] = await Promise.all([
+            ContentView.countDocuments({ contentId: contentRecord._id, viewerType: 'authenticated' }),
+            ContentView.countDocuments({ contentId: contentRecord._id, viewerType: 'anonymous' }),
+        ]);
+
+        if (actualAuthUniques > authUniques) {
+            authUniques = actualAuthUniques;
+        }
+        if (actualAnonUniques > anonUniques) {
+            anonUniques = actualAnonUniques;
+        }
+        if (authViews < authUniques) {
+            authViews = authUniques;
+        }
+        if (anonViews < anonUniques) {
+            anonViews = anonUniques;
+        }
+
+        if (authUniques !== (updatedContent?.authenticatedUniqueViewers || 0)) contentUpdates.authenticatedUniqueViewers = authUniques;
+        if (anonUniques !== (updatedContent?.anonymousUniqueViewers || 0)) contentUpdates.anonymousUniqueViewers = anonUniques;
+        if (authViews !== (updatedContent?.authenticatedViews || 0)) contentUpdates.authenticatedViews = authViews;
+        if (anonViews !== (updatedContent?.anonymousViews || 0)) contentUpdates.anonymousViews = anonViews;
+    }
+
     if (avgCompletion !== null && avgCompletion !== updatedContent?.completionRate) {
         contentUpdates.completionRate = avgCompletion;
         contentUpdates.averageWatchPercent = avgCompletion;
@@ -429,6 +461,15 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         success: true,
         duplicate: false,
         viewCounted,
-        content: { ...updatedContent, completionRate: avgCompletion ?? updatedContent?.completionRate, averageWatchTime: avgWatchTime },
+        content: { 
+            ...updatedContent, 
+            ...contentUpdates,
+            completionRate: avgCompletion ?? updatedContent?.completionRate, 
+            averageWatchTime: avgWatchTime,
+            authenticatedUniqueViewers: authUniques,
+            anonymousUniqueViewers: anonUniques,
+            authenticatedViews: authViews,
+            anonymousViews: anonViews,
+        },
     };
 }
