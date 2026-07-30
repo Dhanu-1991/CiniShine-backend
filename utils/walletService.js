@@ -387,6 +387,7 @@ export async function executeRecharge(userId, amount, orderId) {
                     idempotencyKey: `recharge_${orderId}`
                 }], { session });
             }
+        });
         // Trigger automated email notification asynchronously
         sendWalletRechargeEmail({ userId, amount, orderId }).catch(err => {
             console.error('[WalletService] Failed to send recharge confirmation email:', err);
