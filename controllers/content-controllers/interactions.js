@@ -6,9 +6,11 @@
  * Watch time tracking delegated to shared watchAnalytics.js helper.
  */
 import mongoose from "mongoose";
+import crypto from "crypto";
 import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
+import ContentShare from "../../models/contentShare.model.js";
 import { recordWatchSignal } from "../../utils/watchAnalytics.js";
 
 export const likeVideo = async (req, res) => {
@@ -233,5 +235,66 @@ export const subscribeToUser = async (req, res) => {
     } catch (error) {
         console.error("Error subscribing:", error);
         res.status(500).json({ message: "Internal server error" });
+    }
+};
+
+export const shareContent = async (req, res) => {
+    try {
+        const contentId = req.params.id;
+        if (!contentId || !mongoose.Types.ObjectId.isValid(contentId)) {
+            return res.status(400).json({ message: "Invalid content ID" });
+        }
+
+        const contentRecord = await Content.findById(contentId);
+        if (!contentRecord) {
+            return res.status(404).json({ message: "Content not found" });
+        }
+
+        const userId = req.user?.id || null;
+        let anonymousViewerId = null;
+
+        if (!userId) {
+            const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
+            const ua = req.get('User-Agent') || '';
+            const lang = req.get('Accept-Language') || '';
+            anonymousViewerId = crypto.createHash('sha256').update(`${ip}|${ua}|${lang}`).digest('hex');
+        }
+
+        const query = userId
+            ? { contentId: contentRecord._id, userId }
+            : { contentId: contentRecord._id, anonymousViewerId };
+
+        let shareRecorded = false;
+        try {
+            const existingShare = await ContentShare.findOne(query);
+            if (!existingShare) {
+                await ContentShare.create({
+                    contentId: contentRecord._id,
+                    userId,
+                    anonymousViewerId,
+                });
+
+                await Content.updateOne(
+                    { _id: contentRecord._id },
+                    { $inc: { shareCount: 1 } }
+                );
+                shareRecorded = true;
+            }
+        } catch (err) {
+            if (err?.code !== 11000) {
+                throw err;
+            }
+            // Duplicate share attempt from same user/viewer -> safe no-op
+        }
+
+        const freshContent = await Content.findById(contentRecord._id).select("shareCount").lean();
+        return res.json({
+            message: shareRecorded ? "Share recorded" : "Already shared",
+            shareCount: freshContent?.shareCount || 0,
+            shareRecorded,
+        });
+    } catch (error) {
+        console.error("Error tracking share:", error);
+        return res.status(500).json({ message: "Internal server error" });
     }
 };

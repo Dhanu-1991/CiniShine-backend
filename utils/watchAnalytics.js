@@ -14,9 +14,9 @@ const resolveAnonymousViewerId = (req, event) => {
     const supplied = event.anonymousViewerId || event.viewerId || event.sessionId || event.watchSessionId;
     if (supplied) return String(supplied);
 
-    const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
-    const ua = req.get('User-Agent') || '';
-    const lang = req.get('Accept-Language') || '';
+    const ip = req?.ip || req?.headers?.['x-forwarded-for'] || req?.connection?.remoteAddress || 'unknown';
+    const ua = typeof req?.get === 'function' ? req.get('User-Agent') : (req?.headers?.['user-agent'] || '');
+    const lang = typeof req?.get === 'function' ? req.get('Accept-Language') : (req?.headers?.['accept-language'] || '');
     return crypto.createHash('sha256').update(`${ip}|${ua}|${lang}`).digest('hex');
 };
 
@@ -248,7 +248,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 firstViewedAt: now,
                 weekBucket: dateBucket?.slice(0, 7) || undefined,
                 monthBucket,
-                ipAddress: watcherIsAuthenticated ? undefined : (req.ip || req.headers['x-forwarded-for'] || ''),
+                ipAddress: watcherIsAuthenticated ? undefined : (req?.ip || req?.headers?.['x-forwarded-for'] || ''),
             },
         };
 
@@ -286,7 +286,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                             firstViewedAt: now,
                             weekBucket: dateBucket?.slice(0, 7) || undefined,
                             monthBucket,
-                            ipAddress: watcherIsAuthenticated ? undefined : (req.ip || req.headers['x-forwarded-for'] || ''),
+                            ipAddress: watcherIsAuthenticated ? undefined : (req?.ip || req?.headers?.['x-forwarded-for'] || ''),
                         },
                     };
                     await ContentView.updateOne(viewerQuery, newViewerUpdate, { upsert: true });
@@ -328,7 +328,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                         firstViewedAt: now,
                         weekBucket: dateBucket?.slice(0, 7) || undefined,
                         monthBucket,
-                        ipAddress: watcherIsAuthenticated ? undefined : (req.ip || req.headers['x-forwarded-for'] || ''),
+                        ipAddress: watcherIsAuthenticated ? undefined : (req?.ip || req?.headers?.['x-forwarded-for'] || ''),
                     },
                 },
                 { upsert: true }

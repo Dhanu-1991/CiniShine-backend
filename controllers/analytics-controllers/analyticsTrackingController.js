@@ -272,7 +272,7 @@ export const batchTrack = async (req, res) => {
                     const content = await Content.findById(evt.contentId).lean();
                     if (content) {
                         contentResults.push(recordWatchSignal({
-                            req: { ...req, user: req.user },
+                            req,
                             content,
                             contentId: evt.contentId,
                             event: {

@@ -162,7 +162,7 @@ export const getUserContent = async (req, res) => {
             _id: content._id, contentType: content.contentType, title: content.title,
             description: content.description, status: content.status, createdAt: content.createdAt,
             thumbnailUrl: getCfUrl(content.thumbnailKey),
-            views: content.views, likeCount: content.likeCount
+            views: content.views, likeCount: content.likeCount, shareCount: content.shareCount || 0
         })));
 
         res.json({

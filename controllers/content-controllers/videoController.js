@@ -564,7 +564,7 @@ export const getMyContent = async (req, res) => {
 
         const videos = await Content.find({ userId: userObjectId, contentType: 'video' })
             .sort({ createdAt: -1 })
-            .select('title description duration status thumbnailKey renditions createdAt tags');
+            .select('title description duration status thumbnailKey renditions createdAt tags shareCount views likeCount dislikeCount');
 
         console.log("✅ Videos found:", videos.length);
 
@@ -580,6 +580,10 @@ export const getMyContent = async (req, res) => {
                 thumbnailUrl,
                 tags: video.tags,
                 createdAt: video.createdAt,
+                shareCount: video.shareCount || 0,
+                views: video.views || 0,
+                likeCount: video.likeCount || 0,
+                dislikeCount: video.dislikeCount || 0,
                 renditions: video.renditions || [],
                 adaptiveStreaming: video.status === 'completed',
                 prefferedRendition: video.prefferedRendition || 'Auto'

@@ -756,6 +756,8 @@ export const getContentAnalytics = async (req, res) => {
                 anonymousViews: (content.anonymousViews || 0) > 0 ? content.anonymousViews : anonymousUniqueViewers,
                 likes,
                 dislikes,
+                shares: content.shareCount || 0,
+                shareCount: content.shareCount || 0,
                 commentCount,
                 averageWatchTime: content.averageWatchTime || 0,
                 totalWatchTime: content.totalWatchTime || 0,

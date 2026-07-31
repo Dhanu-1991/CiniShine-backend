@@ -25,7 +25,8 @@ import {
 } from "../../controllers/content-controllers/videoController.js";
 import { getRentalRecommendations } from "../../controllers/content-controllers/rentalRecommendationController.js";
 import { getMixedFeed, getRecommendationsWithShorts, getCategoryTags, getCategoryFeed, getCategoryTrending } from "../../controllers/content-controllers/feedController.js";
-import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime } from "../../controllers/content-controllers/interactions.js";
+import { likeVideo, dislikeVideo, subscribeToUser, updateWatchTime, shareContent } from "../../controllers/content-controllers/interactions.js";
+
 import { searchVideos, getSearchSuggestions, clearSearchHistory, unifiedSearch } from "../../controllers/content-controllers/search.js";
 import { multipartInit, multipartComplete, multipartAbort } from "../../controllers/content-controllers/multipartUploadController.js";
 import { universalTokenVerifier, optionalTokenVerifier } from "../../controllers/auth-controllers/universalTokenVerifier.js";
@@ -43,6 +44,9 @@ const upload = multer({
 });
 
 const router = express.Router();
+
+// Share tracking
+router.post("/:id/share", optionalTokenVerifier, shareContent);
 
 // CRITICAL: Route order matters! Most specific first, general last
 
