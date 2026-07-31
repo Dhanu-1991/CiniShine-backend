@@ -128,19 +128,24 @@ app.get("/api/health", (req, res) => {
 
 app.use(errorHandlingMiddleware);
 
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => {
+const port = process.env.PORT || 5000;
+app.listen(port, () =>
+  console.log(`✅ Express Server listening on port ${port}`)
+);
+
+const connectWithRetry = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      serverSelectionTimeoutMS: 15000,
+    });
     console.log("✅ MongoDB connected successfully");
     startViewCountFlusher();
-    app.listen(process.env.PORT, () =>
-      console.log(`✅ Server running on port ${process.env.PORT}`)
-    );
-  })
-  .catch((err) => {
-    console.error("❌ DB connection failed:", err);
-    process.exit(1);
-  });
+  } catch (err) {
+    console.error("❌ DB connection attempt failed, retrying in 3s...", err.message);
+    setTimeout(connectWithRetry, 3000);
+  }
+};
+connectWithRetry();
 
 // Graceful shutdown: flush pending view counts
 process.on('SIGTERM', async () => {
