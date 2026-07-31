@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import Content from '../models/content.model.js';
 import ContentView from '../models/contentView.model.js';
 import ContentWatchtime from '../models/contentWatchtime.model.js';
@@ -49,6 +50,10 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         throw new Error('content is required');
     }
 
+    if (contentId && !mongoose.Types.ObjectId.isValid(contentId)) {
+        return { success: false, reason: 'invalid-content-id' };
+    }
+
     const contentRecord = content || await Content.findById(contentId);
     if (!contentRecord) {
         return { success: false, reason: 'content-not-found' };
@@ -62,12 +67,14 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const eventType = event.eventType || 'heartbeat';
     const rawActivePlay = Number(event.activePlayTime) || 0;
     const normalizedPlayTime = rawActivePlay > 500 ? rawActivePlay / 1000 : rawActivePlay;
-    const maxSessionPlayTime = contentDuration > 0 ? Math.round(contentDuration * 2) : 14400;
-    const activePlayTime = Math.min(Math.max(normalizedPlayTime, 0), maxSessionPlayTime);
+
     const playheadSeconds = resolvePlayheadSeconds(event);
     const contentDuration = Number.isFinite(Number(event.contentDuration)) && Number(event.contentDuration) > 0
         ? Number(event.contentDuration)
         : Number(contentRecord.duration) || 0;
+
+    const maxSessionPlayTime = contentDuration > 0 ? Math.round(contentDuration * 2) : 14400;
+    const activePlayTime = Math.min(Math.max(normalizedPlayTime, 0), maxSessionPlayTime);
     const completed = !!event.completed || eventType === 'ended' || (contentDuration > 0 && playheadSeconds >= contentDuration);
 
     const existingEvent = await ContentWatchtime.findOne({ eventId }).lean();

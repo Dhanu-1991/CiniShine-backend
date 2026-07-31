@@ -162,7 +162,7 @@ export const updateContent = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
-        const { title, description, visibility, price, trailerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
+        const { title, description, visibility, price, trailerContentId, spoilerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
 
         // Extract 24-char MongoDB ID from a full watchinit URL or raw ID
         const extractId = (val) => {
@@ -170,7 +170,8 @@ export const updateContent = async (req, res) => {
             const match = val.match(/([a-f\d]{24})$/i);
             return match ? match[1] : null;
         };
-        const parsedTrailerId = extractId(trailerContentId);
+        const rawTrailerId = trailerContentId || spoilerContentId;
+        const parsedTrailerId = extractId(rawTrailerId);
 
         // Validate trailer content exists and is publicly visible
         if (parsedTrailerId) {
@@ -195,13 +196,17 @@ export const updateContent = async (req, res) => {
                     return res.status(400).json({ error: 'Price is required and must be at least ₹1 for Pay Per View content' });
                 }
                 update.price = numPrice;
-                if (trailerContentId !== undefined) update.trailerContentId = parsedTrailerId;
+                if (rawTrailerId !== undefined) {
+                    update.trailerContentId = parsedTrailerId;
+                    update.spoilerContentId = parsedTrailerId;
+                }
                 if (spoilerText !== undefined) update.spoilerText = spoilerText;
             } else {
                 // When switching away from PPV, clear the price
                 // Existing purchases remain valid until their expiry
                 update.price = null;
                 update.trailerContentId = null;
+                update.spoilerContentId = null;
                 update.spoilerText = '';
             }
         } else if (content.visibility === 'pay_per_view') {
@@ -213,7 +218,10 @@ export const updateContent = async (req, res) => {
                 }
                 update.price = numPrice;
             }
-            if (trailerContentId !== undefined) update.trailerContentId = parsedTrailerId;
+            if (rawTrailerId !== undefined) {
+                update.trailerContentId = parsedTrailerId;
+                update.spoilerContentId = parsedTrailerId;
+            }
             if (spoilerText !== undefined) update.spoilerText = spoilerText;
         }
         if (typeof commentsEnabled === 'boolean') update.commentsEnabled = commentsEnabled;
@@ -232,6 +240,7 @@ export const updateContent = async (req, res) => {
                 visibility: updated.visibility,
                 price: updated.price,
                 trailerContentId: updated.trailerContentId,
+                spoilerContentId: updated.spoilerContentId || updated.trailerContentId,
                 spoilerText: updated.spoilerText,
                 commentsEnabled: updated.commentsEnabled,
                 tags: updated.tags,
@@ -732,6 +741,9 @@ export const getContentAnalytics = async (req, res) => {
                 status: content.status,
                 visibility: content.visibility,
                 price: content.price,
+                trailerContentId: content.trailerContentId || content.spoilerContentId || null,
+                spoilerContentId: content.spoilerContentId || content.trailerContentId || null,
+                spoilerText: content.spoilerText || '',
                 tags: content.tags,
                 category: content.category,
                 createdAt: content.createdAt,

@@ -449,8 +449,8 @@ export const updateFeedWatchTime = async (req, res) => {
 
         const { contentId, watchTime, duration: clientDuration } = req.body;
         const watchTimeMs = Number(watchTime);
-        if (!contentId || !Number.isFinite(watchTimeMs) || watchTimeMs <= 0) {
-            return res.status(400).json({ error: 'contentId and positive watchTime required' });
+        if (!contentId || !mongoose.Types.ObjectId.isValid(contentId) || !Number.isFinite(watchTimeMs) || watchTimeMs <= 0) {
+            return res.status(400).json({ error: 'Valid contentId and positive watchTime required' });
         }
 
         const content = await Content.findById(contentId);

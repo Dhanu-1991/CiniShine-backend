@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import PageUsage from '../../models/pageUsage.model.js';
 import ContentWatchtime from '../../models/contentWatchtime.model.js';
 import UserSession from '../../models/userSession.model.js';
@@ -195,6 +196,9 @@ export const trackContentWatchtime = async (req, res) => {
                 message: 'sessionId, contentId, contentType, eventId required',
             });
         }
+        if (!mongoose.Types.ObjectId.isValid(contentId)) {
+            return res.status(400).json({ success: false, message: 'Invalid contentId' });
+        }
         const { dateBucket, monthBucket } = getBuckets();
         const device = getDevice(req.headers['user-agent']);
 
@@ -264,20 +268,22 @@ export const batchTrack = async (req, res) => {
                     });
                 }
             } else if (evt.type === 'content_watchtime') {
-                const content = await Content.findById(evt.contentId).lean();
-                if (content) {
-                    contentResults.push(recordWatchSignal({
-                        req: { ...req, user: req.user },
-                        content,
-                        contentId: evt.contentId,
-                        event: {
-                            ...evt,
-                            sessionId,
-                        },
-                        device,
-                        dateBucket,
-                        monthBucket,
-                    }));
+                if (evt.contentId && mongoose.Types.ObjectId.isValid(evt.contentId)) {
+                    const content = await Content.findById(evt.contentId).lean();
+                    if (content) {
+                        contentResults.push(recordWatchSignal({
+                            req: { ...req, user: req.user },
+                            content,
+                            contentId: evt.contentId,
+                            event: {
+                                ...evt,
+                                sessionId,
+                            },
+                            device,
+                            dateBucket,
+                            monthBucket,
+                        }));
+                    }
                 }
             }
         }

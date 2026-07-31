@@ -5,6 +5,7 @@
  * Supports both authenticated (userId) and anonymous (IP+fingerprint) viewers.
  * Watch time tracking delegated to shared watchAnalytics.js helper.
  */
+import mongoose from "mongoose";
 import Content from "../../models/content.model.js";
 import User from "../../models/user.model.js";
 import VideoReaction from "../../models/videoReaction.model.js";
@@ -135,6 +136,9 @@ export const dislikeVideo = async (req, res) => {
 export const updateWatchTime = async (req, res) => {
     try {
         const videoId = req.params.id;
+        if (!mongoose.Types.ObjectId.isValid(videoId)) {
+            return res.status(400).json({ message: "Invalid video ID" });
+        }
         const watchTimeRaw = Number(req.body.watchTime);
 
         if (!Number.isFinite(watchTimeRaw) || watchTimeRaw <= 0) {
