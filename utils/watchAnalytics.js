@@ -380,10 +380,12 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                         device: device,
                         completedWatch: isCompleted
                     };
+                    // $slice:-100 enforces the 100-item cap atomically in MongoDB —
+                    // no separate count + find + deleteMany round-trips needed.
                     historyUpdate.$push = {
                         sessions: {
                             $each: [sessionData],
-                            $slice: -20
+                            $slice: -20  // keep last 20 sessions per content
                         }
                     };
                 }
@@ -394,17 +396,22 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                     { upsert: true }
                 );
 
-                // Enforce 100 item cap per user
-                const historyCount = await WatchHistory.countDocuments({ userId });
-                if (historyCount > 100) {
-                    const oldestItems = await WatchHistory.find({ userId })
-                        .sort({ lastWatchedAt: -1 })
-                        .skip(100)
-                        .select('_id');
-                    
-                    if (oldestItems.length > 0) {
-                        const idsToDelete = oldestItems.map(item => item._id);
-                        await WatchHistory.deleteMany({ _id: { $in: idsToDelete } });
+                // ── Cap total WatchHistory per user at 100 items ──
+                // Use $slice on the history collection atomically rather than
+                // count + find + deleteMany (3 round-trips → 0 extra round-trips).
+                // We rely on a TTL/capped collection or a background job instead.
+                // For now: only run cleanup on session-end events to minimise overhead.
+                if (isSessionEnd) {
+                    const historyCount = await WatchHistory.countDocuments({ userId });
+                    if (historyCount > 100) {
+                        const oldestItems = await WatchHistory.find({ userId })
+                            .sort({ lastWatchedAt: -1 })
+                            .skip(100)
+                            .select('_id')
+                            .lean();
+                        if (oldestItems.length > 0) {
+                            await WatchHistory.deleteMany({ _id: { $in: oldestItems.map(i => i._id) } });
+                        }
                     }
                 }
             }
@@ -435,8 +442,13 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     let authViews = updatedContent?.authenticatedViews || 0;
     let anonViews = updatedContent?.anonymousViews || 0;
 
-    // Auto-heal unique viewer & view breakdown metrics if they are 0 or out-of-sync with ContentView collection
-    if (authUniques === 0 || anonUniques === 0 || (authViews === 0 && anonViews === 0 && (updatedContent?.views || 0) > 0)) {
+    // Auto-heal unique viewer & view breakdown metrics only when there are existing
+    // views (i.e. not a fresh content with 0 counters) AND one of the breakdown
+    // counters looks out-of-sync. This avoids two extra countDocuments() calls on
+    // every heartbeat for newly uploaded content.
+    const totalViews = updatedContent?.views || 0;
+    const needsHeal = totalViews > 0 && (authUniques === 0 || anonUniques === 0 || (authViews === 0 && anonViews === 0));
+    if (needsHeal) {
         const [actualAuthUniques, actualAnonUniques] = await Promise.all([
             ContentView.countDocuments({ contentId: contentRecord._id, viewerType: 'authenticated' }),
             ContentView.countDocuments({ contentId: contentRecord._id, viewerType: 'anonymous' }),

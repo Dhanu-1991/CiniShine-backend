@@ -113,8 +113,10 @@ export const endSession = async (req, res) => {
                 $set: {
                     endedAt: new Date(),
                     lastActiveAt: new Date(),
-                    totalDuration: duration,
                 },
+                // Use $max so that a late-arriving sendBeacon doesn't overwrite
+                // the totalDuration that was already incremented by heartbeats.
+                $max: { totalDuration: duration },
             }
         );
 
@@ -246,7 +248,19 @@ export const batchTrack = async (req, res) => {
         const device = getDevice(req.headers['user-agent']);
         const userId = req.user?.id || null;
 
+        // ── Pre-fetch all content records in one query (avoid N serial DB reads) ──
+        const watchtimeEvents = safeEvents.filter(
+            evt => evt.type === 'content_watchtime' && evt.contentId && mongoose.Types.ObjectId.isValid(evt.contentId)
+        );
+        const uniqueContentIds = [...new Set(watchtimeEvents.map(e => e.contentId))];
+        let contentMap = {};
+        if (uniqueContentIds.length > 0) {
+            const contents = await Content.find({ _id: { $in: uniqueContentIds } }).lean();
+            contents.forEach(c => { contentMap[c._id.toString()] = c; });
+        }
+
         const pageOps = [];
+        const sessionPageVisits = [];
         const contentResults = [];
 
         for (const evt of safeEvents) {
@@ -266,30 +280,46 @@ export const batchTrack = async (req, res) => {
                         monthBucket,
                         device,
                     });
+                    sessionPageVisits.push({ pageName: evt.pageName, timeSpent, visitedAt: new Date() });
                 }
             } else if (evt.type === 'content_watchtime') {
-                if (evt.contentId && mongoose.Types.ObjectId.isValid(evt.contentId)) {
-                    const content = await Content.findById(evt.contentId).lean();
-                    if (content) {
-                        contentResults.push(recordWatchSignal({
-                            req,
-                            content,
-                            contentId: evt.contentId,
-                            event: {
-                                ...evt,
-                                sessionId,
-                            },
-                            device,
-                            dateBucket,
-                            monthBucket,
-                        }));
-                    }
+                const content = contentMap[evt.contentId];
+                if (content) {
+                    contentResults.push(recordWatchSignal({
+                        req,
+                        content,
+                        contentId: evt.contentId,
+                        event: {
+                            ...evt,
+                            sessionId,
+                        },
+                        device,
+                        dateBucket,
+                        monthBucket,
+                    }));
                 }
             }
         }
 
         const ops = [];
         if (pageOps.length > 0) ops.push(PageUsage.insertMany(pageOps, { ordered: false }));
+        // Batch update session page visits in one operation instead of per-event
+        if (sessionPageVisits.length > 0) {
+            ops.push(
+                UserSession.findOneAndUpdate(
+                    { sessionId },
+                    {
+                        $push: {
+                            pagesVisited: {
+                                $each: sessionPageVisits,
+                                $slice: -50,
+                            },
+                        },
+                        $set: { lastActiveAt: new Date() },
+                    }
+                )
+            );
+        }
         if (contentResults.length > 0) ops.push(Promise.all(contentResults));
         if (ops.length > 0) await Promise.all(ops);
 
