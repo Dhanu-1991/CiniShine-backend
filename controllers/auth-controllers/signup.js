@@ -26,11 +26,13 @@ const Signup = async (req, res, next) => {
         session.endSession();
 
         // Set httpOnly auth cookies
-        setAuthCookies(res, newUser[0]);
+        const { accessToken, refreshToken } = setAuthCookies(res, newUser[0]);
 
         res.status(200).json({
             success: true,
             message: "Signup Successful",
+            accessToken,
+            refreshToken,
             user: newUser[0],
         });
     } catch (error) {

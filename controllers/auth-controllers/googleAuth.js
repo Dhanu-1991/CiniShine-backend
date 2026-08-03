@@ -155,11 +155,13 @@ const googleAuth = async (req, res) => {
     }
 
     // Set httpOnly auth cookies
-    setAuthCookies(res, user);
+    const { accessToken, refreshToken } = setAuthCookies(res, user);
 
     return res.status(200).json({
       success: true,
       message: "Google authentication successful",
+      accessToken,
+      refreshToken,
       user: sanitizeUser(user),
       data: {
         authProvider: "google",

@@ -26,11 +26,14 @@ const signIn = async (req, res, next) => {
     await user.save();
 
     // 4. Set httpOnly auth cookies
-    setAuthCookies(res, user);
+    const { accessToken, refreshToken } = setAuthCookies(res, user);
 
     return res.status(200).json({
       success: true,
       message: "Signin successful",
+      accessToken,
+      refreshToken,
+      user,
     });
 
   } catch (error) {

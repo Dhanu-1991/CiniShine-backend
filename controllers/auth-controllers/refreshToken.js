@@ -57,11 +57,13 @@ export const refreshToken = async (req, res) => {
         }
 
         // Issue fresh cookie pair (token rotation)
-        setAuthCookies(res, user);
+        const { accessToken, refreshToken } = setAuthCookies(res, user);
 
         return res.status(200).json({
             success: true,
             message: "Token refreshed",
+            accessToken,
+            refreshToken,
         });
     } catch (error) {
         console.error("Refresh token error:", error);
