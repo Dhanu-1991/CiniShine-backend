@@ -785,10 +785,19 @@ export const getCreatorStudio = async (req, res) => {
             archiveMap = Object.fromEntries(archives.map(a => [a.content_id.toString(), a]));
         }
 
+        // Fetch comments count for all content
+        const allContentIds = contents.map(c => c._id);
+        const commentCounts = await Comment.aggregate([
+            { $match: { contentId: { $in: allContentIds } } },
+            { $group: { _id: '$contentId', count: { $sum: 1 } } }
+        ]);
+        const commentMap = Object.fromEntries(commentCounts.map(c => [c._id.toString(), c.count]));
+
         const enrichedContents = contents.map(c => ({
             ...c,
             archive: archiveMap[c._id.toString()] || null,
-            ppvRevenue: ppvRevenueMap[c._id.toString()] || 0
+            ppvRevenue: ppvRevenueMap[c._id.toString()] || 0,
+            commentCount: commentMap[c._id.toString()] || 0
         }));
 
         return res.status(200).json({
