@@ -733,6 +733,10 @@ export const listUsers = async (req, res) => {
                     completed: contentStats.completedCount,
                     failed: contentStats.failedCount
                 },
+                contentUploading: contentStats.uploadingCount,
+                contentProcessing: contentStats.processingCount,
+                contentCompleted: contentStats.completedCount,
+                contentFailed: contentStats.failedCount,
                 totalWatchTime: contentStats.totalWatchTime,
                 totalWatchCount: 0,
                 wallet1Balance: pWalletMap.get(key) || 0,

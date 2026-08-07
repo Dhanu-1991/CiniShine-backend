@@ -1573,12 +1573,14 @@ export const listAllContent = async (req, res) => {
         const enrichedContents = contents.map(c => {
             const cId = c._id.toString();
             const thumbKey = c.thumbnailKey || c.imageKey || c.thumbnailUrl || c.thumbnail;
+            const mediaKey = c.mediaKey || c.videoKey || c.s3Key;
             const pInfo = purchaseMap[cId] || { count: 0, revenue: 0 };
             const uInfo = c.userId || {};
             
             return {
                 ...c,
                 thumbnailUrl: getCfUrl(thumbKey),
+                videoUrl: mediaKey ? getCfUrl(mediaKey) : (c.videoUrl || c.mediaUrl || null),
                 hlsMasterUrl: c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null,
                 creator: {
                     userName: uInfo.userName,

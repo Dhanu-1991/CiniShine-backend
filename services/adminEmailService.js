@@ -211,7 +211,7 @@ const templates = {
                     <div style="background: #2a2a3e; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 4px; margin: 16px 0;">
                         <p style="margin: 0; color: #e0e0e0;"><strong>Amount to be Credited:</strong> ₹${netAmount}</p>
                         <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Partial Amount Processed: ₹${grossAmount}</p>
-                        <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Remaining Wallet Balance: ₹${remainingBalance}</p>
+                        <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Remaining Wallet Balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}</p>
                     </div>
                     <div style="background: #2a2a3e; border-left: 4px solid #ef4444; padding: 16px; border-radius: 4px; margin: 16px 0;">
                         <p style="margin: 0; color: #fca5a5; font-size: 14px;"><strong>Reason for Partial Payout:</strong></p>
@@ -222,7 +222,7 @@ const templates = {
                     <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
-        text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining balance: ₹${remainingBalance}. If you have any queries, please contact support@watchinit.com.`
+        text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}. If you have any queries, please contact support@watchinit.com.`
     }),
 
     payoutCompleted: ({ creatorName, userName, payoutMonth }) => ({

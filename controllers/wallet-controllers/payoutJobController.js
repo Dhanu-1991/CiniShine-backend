@@ -713,7 +713,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                             grossAmount: createdPayout.grossAmount,
                             payoutMonth,
                             reason: partialReason,
-                            remainingBalance: freshWallet.balance - grossAmount,
+                            remainingBalance: Math.round((freshWallet.balance - grossAmount) * 100) / 100,
                         });
                     } else {
                         await sendAdminEmail('payoutInitiated', creatorEmail, {
