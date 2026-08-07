@@ -10,18 +10,21 @@ import {
     hideContent, removeContent, restoreContent, deleteContent,
     listArchive, getContentDetails, getCreatorAnalytics, searchCreators,
     getCreatorProfile, getCreatorStudio, banChannel, unbanChannel, requestBanChannel,
-    updateContentStats, updateCreatorStats, listPpvContent
+    updateContentStats, updateCreatorStats, listPpvContent,
+    listAllContent, getContentDetailedAnalytics
 } from '../../controllers/admin-controllers/adminContentController.js';
 import {
     getDashboard, listReports, resolveReport, listFeedbacks, listEnquiries,
     replyToEnquiry, toggleEnquiryStatus,
-    listAuditLogs, listNotifications, markNotificationRead, listUsers, adminSendEmailHandler
+    listAuditLogs, listNotifications, markNotificationRead, listUsers, adminSendEmailHandler,
+    getUserDetailedAnalytics
 } from '../../controllers/admin-controllers/adminDashboardController.js';
 import { getAnalytics } from '../../controllers/admin-controllers/adminAnalyticsController.js';
 import {
     getPlatformAnalytics, getContentAnalytics, getUserAnalytics,
     searchUsersForAnalytics, runAggregation
 } from '../../controllers/admin-controllers/adminAdvancedAnalyticsController.js';
+import { issueCloudFrontCookies } from '../../config/cloudfront.js';
 import {
     adminSendMessage, adminGetMessages, adminGetConversations
 } from '../../controllers/admin-controllers/adminChatController.js';
@@ -72,6 +75,10 @@ adminRouter.get('/enquiries', listEnquiries);
 adminRouter.post('/enquiries/:id/reply', auditLog('enquiry_reply', 'enquiry'), replyToEnquiry);
 adminRouter.patch('/enquiries/:id/status', auditLog('enquiry_status_change', 'enquiry'), toggleEnquiryStatus);
 
+// Content Hub
+adminRouter.get('/content/list', listAllContent);
+adminRouter.get('/content/:id/detailed-analytics', getContentDetailedAnalytics);
+
 // Content management & PPV
 adminRouter.get('/ppv/list', listPpvContent);
 adminRouter.get('/content/:id', getContentDetails);
@@ -79,6 +86,9 @@ adminRouter.post('/content/:id/hide', auditLog('content_hide', 'content'), hideC
 adminRouter.post('/content/:id/remove', auditLog('content_remove', 'content'), removeContent);
 adminRouter.post('/content/:id/restore', auditLog('content_restore', 'content'), restoreContent);
 adminRouter.delete('/content/:id', deleteContent);
+
+// Admin CloudFront cookies (for admin video player)
+adminRouter.get('/cloudfront-cookies', (req, res) => issueCloudFrontCookies(req, res));
 
 // Archive
 adminRouter.get('/archive', listArchive);
@@ -109,6 +119,7 @@ adminRouter.post('/notifications/:id/read', markNotificationRead);
 
 // User management
 adminRouter.get('/users', listUsers);
+adminRouter.get('/users/:userId/detailed-analytics', getUserDetailedAnalytics);
 adminRouter.post('/send-email', auditLog('email_sent', 'user'), adminSendEmailHandler);
 
 // Admin requests (signup approvals, forgot-password activations)

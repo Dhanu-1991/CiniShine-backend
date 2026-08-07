@@ -569,7 +569,7 @@ export const getPayoutReport = async (req, res) => {
  */
 export const runSingleCreatorPayout = async (req, res) => {
     try {
-        const { userId } = req.body;
+        const { userId, amount: partialAmount, reason: partialReason, payoutType = 'full' } = req.body;
         console.log(`\n=================== [PAYOUT_JOB_SINGLE_INIT] ===================`);
         console.log(`Target User ID: ${userId}`);
 
@@ -598,6 +598,18 @@ export const runSingleCreatorPayout = async (req, res) => {
             return res.status(400).json({ error: "Creator has no withdrawable secondary wallet balance" });
         }
 
+        if (payoutType === 'partial') {
+            if (!partialAmount || partialAmount <= 0) {
+                return res.status(400).json({ error: 'Partial payout amount must be greater than 0' });
+            }
+            if (partialAmount > wallet.balance) {
+                return res.status(400).json({ error: `Partial amount (₹${partialAmount}) exceeds wallet balance (₹${wallet.balance})` });
+            }
+            if (!partialReason || !partialReason.trim()) {
+                return res.status(400).json({ error: 'Reason is required for partial payout' });
+            }
+        }
+
         const now = new Date();
         const payoutMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_MANUAL_${Date.now()}`;
 
@@ -610,13 +622,14 @@ export const runSingleCreatorPayout = async (req, res) => {
                     throw new Error("Wallet balance is zero");
                 }
 
-                const grossAmount = freshWallet.balance;
+                const grossAmount = payoutType === 'partial' ? partialAmount : freshWallet.balance;
                 const feeAmount = Math.round(grossAmount * MAINTENANCE_FEE_PERCENT * 100) / 100;
                 const netAmount = Math.round((grossAmount - feeAmount) * 100) / 100;
 
+                const newBalance = payoutType === 'partial' ? (freshWallet.balance - grossAmount) : 0;
                 await SecondaryWallet.findOneAndUpdate(
                     { _id: freshWallet._id },
-                    { $set: { balance: 0 } },
+                    { $set: { balance: newBalance } },
                     { session }
                 );
 
@@ -626,7 +639,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                     walletType: 'secondary',
                     type: 'payout',
                     amount: grossAmount,
-                    balanceAfter: 0,
+                    balanceAfter: payoutType === 'partial' ? (freshWallet.balance - grossAmount) : 0,
                     status: 'completed',
                     idempotencyKey,
                 }], { session });
@@ -685,17 +698,31 @@ export const runSingleCreatorPayout = async (req, res) => {
                     bankName: bankName,
                     status: 'pending_settlement',
                     payoutMonth,
+                    payoutType,
+                    partialReason: payoutType === 'partial' ? partialReason : null,
+                    partialAmount: payoutType === 'partial' ? partialAmount : null,
                     scheduledFor: new Date(),
                 }], { session });
 
                 // Send email INSIDE transaction scope — if mail fails, throw error so MongoDB transaction rolls back balance!
                 try {
-                    await sendAdminEmail('payoutInitiated', creatorEmail, {
-                        creatorName: user.channelName || user.userName || 'Creator',
-                        netAmount: createdPayout.netAmount,
-                        grossAmount: createdPayout.grossAmount,
-                        payoutMonth
-                    });
+                    if (payoutType === 'partial') {
+                        await sendAdminEmail('partialPayoutInitiated', creatorEmail, {
+                            creatorName: user.channelName || user.userName || 'Creator',
+                            netAmount: createdPayout.netAmount,
+                            grossAmount: createdPayout.grossAmount,
+                            payoutMonth,
+                            reason: partialReason,
+                            remainingBalance: freshWallet.balance - grossAmount,
+                        });
+                    } else {
+                        await sendAdminEmail('payoutInitiated', creatorEmail, {
+                            creatorName: user.channelName || user.userName || 'Creator',
+                            netAmount: createdPayout.netAmount,
+                            grossAmount: createdPayout.grossAmount,
+                            payoutMonth
+                        });
+                    }
                     console.log(`✅ [PAYOUT_EMAIL_GUARD] Single payout initiation email sent successfully to ${creatorEmail}`);
                 } catch (mailErr) {
                     console.error(`❌ [PAYOUT_EMAIL_GUARD] Email sending failed to ${creatorEmail}:`, mailErr);
@@ -705,17 +732,6 @@ export const runSingleCreatorPayout = async (req, res) => {
                 console.log(`✅ [PAYOUT_SINGLE_SUCCESS] Created Payout ${createdPayout._id} | User: ${userId} | Gross: ₹${grossAmount} | Net: ₹${netAmount}`);
             });
 
-            // Send notification email to creator
-            const user = await User.findById(userId).select('contact email userName channelName').lean();
-            const creatorEmail = user?.contact || user?.email;
-            if (creatorEmail) {
-                sendAdminEmail('payoutInitiated', creatorEmail, {
-                    creatorName: user.channelName || user.userName || 'Creator',
-                    netAmount: createdPayout.netAmount,
-                    grossAmount: createdPayout.grossAmount,
-                    payoutMonth
-                }).catch(e => console.error('Single payout email error:', e));
-            }
 
             console.log(`=================== [PAYOUT_JOB_SINGLE_END] ===================\n`);
             res.json({

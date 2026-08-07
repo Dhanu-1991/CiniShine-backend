@@ -197,6 +197,34 @@ const templates = {
         text: `Hi ${creatorName}, your payout of ₹${netAmount} for ${payoutMonth} has been initiated and will be credited within 24 hours.`
     }),
 
+    partialPayoutInitiated: ({ creatorName, netAmount, grossAmount, payoutMonth, reason, remainingBalance }) => ({
+        subject: `[${PLATFORM_NAME}] Partial Payout Initiated: ₹${netAmount}`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #fbbf24; margin-top: 0;">Partial Payout Initiated</h2>
+                    <p>Hi <strong>${creatorName}</strong>,</p>
+                    <p>A partial payout for <strong>${payoutMonth}</strong> has been initiated for your account.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #e0e0e0;"><strong>Amount to be Credited:</strong> ₹${netAmount}</p>
+                        <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Partial Amount Processed: ₹${grossAmount}</p>
+                        <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Remaining Wallet Balance: ₹${remainingBalance}</p>
+                    </div>
+                    <div style="background: #2a2a3e; border-left: 4px solid #ef4444; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #fca5a5; font-size: 14px;"><strong>Reason for Partial Payout:</strong></p>
+                        <p style="margin: 4px 0 0; color: #e0e0e0;">${reason}</p>
+                    </div>
+                    <p>Your partial payout amount will be credited to your bank account within 24 hours.</p>
+                    <p style="color: #9ca3af; font-size: 13px;">If you have any queries regarding this partial payout, please contact us at <a href="mailto:support@watchinit.com" style="color: #818cf8;">support@watchinit.com</a>.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining balance: ₹${remainingBalance}. If you have any queries, please contact support@watchinit.com.`
+    }),
+
     payoutCompleted: ({ creatorName, userName, payoutMonth }) => ({
         subject: `[${PLATFORM_NAME}] Payout Settlement Processed: ${payoutMonth}`,
         html: `
@@ -322,7 +350,7 @@ async function sendEmail(to, subject, html, text, attachments = []) {
 
 /**
  * Send a templated email to a creator.
- * @param {string} templateName — one of: contentRemoved, channelBanned, channelUnbanned, warning, custom, payoutInitiated, payoutCompleted
+ * @param {string} templateName — one of: contentRemoved, channelBanned, channelUnbanned, warning, custom, payoutInitiated, partialPayoutInitiated, payoutCompleted
  * @param {string} recipientEmail — creator's email address
  * @param {Object} data — template data (creatorName, reason, contentTitle, etc.)
  * @returns {Promise<boolean>}

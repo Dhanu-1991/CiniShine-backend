@@ -11,6 +11,9 @@ import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import ContentWatchtime from '../../models/contentWatchtime.model.js';
+import PrimaryWallet from '../../models/primaryWallet.model.js';
+import SecondaryWallet from '../../models/secondaryWallet.model.js';
+import UserSession from '../../models/userSession.model.js';
 import { getCfUrl } from '../../config/cloudfront.js';
 import { sendCustomEmail } from '../../services/adminEmailService.js';
 
@@ -595,7 +598,10 @@ export const listUsers = async (req, res) => {
             createdAt: 'createdAt',
             fans: 'fanCount',
             watchtime: 'totalWatchTime',
-            removedContent: 'removedContentCount'
+            removedContent: 'removedContentCount',
+            wallet1Balance: 'wallet1Balance',
+            wallet2Balance: 'wallet2Balance',
+            contentUploads: 'totalContent'
         };
         const normalizedSortBy = sortFieldMap[sortBy] ? sortBy : 'createdAt';
         const sortDirection = sortOrder === 'asc' ? 1 : -1;
@@ -642,7 +648,7 @@ export const listUsers = async (req, res) => {
 
         const userIds = users.map((user) => user._id);
 
-        const [fanAgg, contentAgg, kycDocs] = await Promise.all([
+        const [fanAgg, contentAgg, kycDocs, primaryWallets, secondaryWallets] = await Promise.all([
             User.aggregate([
                 { $match: { subscriptions: { $in: userIds } } },
                 { $unwind: '$subscriptions' },
@@ -656,18 +662,24 @@ export const listUsers = async (req, res) => {
                         _id: '$userId',
                         totalContent: { $sum: 1 },
                         removedContentCount: {
-                            $sum: {
-                                $cond: [{ $in: ['$status', ['removed', 'hidden']] }, 1, 0]
-                            }
+                            $sum: { $cond: [{ $in: ['$status', ['removed', 'hidden']] }, 1, 0] }
                         },
+                        uploadingCount: { $sum: { $cond: [{ $eq: ['$status', 'uploading'] }, 1, 0] } },
+                        processingCount: { $sum: { $cond: [{ $eq: ['$status', 'processing'] }, 1, 0] } },
+                        completedCount: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+                        failedCount: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
                         totalWatchTime: { $sum: { $ifNull: ['$totalWatchTime', 0] } }
                     }
                 }
             ]),
-            KycDetails.find({ userId: { $in: userIds } }).select('userId isGstHolder gstNumber').lean()
+            KycDetails.find({ userId: { $in: userIds } }).select('userId isGstHolder gstNumber').lean(),
+            PrimaryWallet.find({ userId: { $in: userIds } }).select('userId balance').lean(),
+            SecondaryWallet.find({ userId: { $in: userIds } }).select('userId balance').lean()
         ]);
 
         const kycMap = new Map(kycDocs.map(k => [k.userId.toString(), k]));
+        const pWalletMap = new Map(primaryWallets.map(w => [w.userId.toString(), w.balance]));
+        const sWalletMap = new Map(secondaryWallets.map(w => [w.userId.toString(), w.balance]));
 
         const fanMap = new Map(
             fanAgg.map((entry) => [entry._id.toString(), entry.fanCount || 0])
@@ -678,6 +690,10 @@ export const listUsers = async (req, res) => {
                 {
                     totalContent: entry.totalContent || 0,
                     removedContentCount: entry.removedContentCount || 0,
+                    uploadingCount: entry.uploadingCount || 0,
+                    processingCount: entry.processingCount || 0,
+                    completedCount: entry.completedCount || 0,
+                    failedCount: entry.failedCount || 0,
                     totalWatchTime: entry.totalWatchTime || 0
                 }
             ])
@@ -688,6 +704,10 @@ export const listUsers = async (req, res) => {
             const contentStats = contentMap.get(key) || {
                 totalContent: 0,
                 removedContentCount: 0,
+                uploadingCount: 0,
+                processingCount: 0,
+                completedCount: 0,
+                failedCount: 0,
                 totalWatchTime: 0
             };
             const joinedAt = resolveJoinedAt(user);
@@ -707,8 +727,16 @@ export const listUsers = async (req, res) => {
                 fanCount: fanMap.get(key) || 0,
                 totalContent: contentStats.totalContent,
                 removedContentCount: contentStats.removedContentCount,
+                contentUploadBreakdown: {
+                    uploading: contentStats.uploadingCount,
+                    processing: contentStats.processingCount,
+                    completed: contentStats.completedCount,
+                    failed: contentStats.failedCount
+                },
                 totalWatchTime: contentStats.totalWatchTime,
                 totalWatchCount: 0,
+                wallet1Balance: pWalletMap.get(key) || 0,
+                wallet2Balance: sWalletMap.get(key) || 0,
                 isGstHolder: kycMap.get(key)?.isGstHolder || false,
                 gstNumber: kycMap.get(key)?.gstNumber || null,
             };
@@ -821,3 +849,104 @@ export const adminSendEmailHandler = async (req, res) => {
     }
 };
 
+/**
+ * GET /admin/users/:userId/detailed-analytics
+ * Returns deep analytics for a specific user.
+ */
+export const getUserDetailedAnalytics = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const user = await User.findById(userId).select('userName channelName contact email createdAt lastLoginAt profilePicture channelPicture status').lean();
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        user.profilePicture = getCfUrl(user.profilePicture || user.channelPicture);
+
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        const [loginSessions, sessionStats, contentPerformance, commentsPosted, likesGiven, wallet1, wallet2] = await Promise.all([
+            UserSession.aggregate([
+                { $match: { userId: user._id, startedAt: { $gte: thirtyDaysAgo } } },
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$startedAt" } },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]),
+            UserSession.aggregate([
+                { $match: { userId: user._id } },
+                {
+                    $group: {
+                        _id: null,
+                        avgDuration: { $avg: '$totalDuration' },
+                        peakHours: { $push: { $hour: '$startedAt' } },
+                        devices: { $push: '$device' }
+                    }
+                }
+            ]),
+            Content.aggregate([
+                { $match: { userId: user._id } },
+                {
+                    $group: {
+                        _id: null,
+                        totalViews: { $sum: '$views' },
+                        totalLikes: { $sum: '$likeCount' },
+                        totalWatchTime: { $sum: '$totalWatchTime' },
+                        totalContent: { $sum: 1 }
+                    }
+                }
+            ]),
+            import('../../models/comment.model.js').then(m => m.default.countDocuments({ userId: user._id })),
+            import('../../models/videoReaction.model.js').then(m => m.default.countDocuments({ userId: user._id, type: 'like' })),
+            PrimaryWallet.findOne({ userId: user._id }).lean(),
+            SecondaryWallet.findOne({ userId: user._id }).lean()
+        ]);
+
+        const sessionAgg = sessionStats[0] || { avgDuration: 0, peakHours: [], devices: [] };
+        
+        // Compute peak active hours
+        const hourCounts = {};
+        sessionAgg.peakHours.forEach(h => {
+            if (h !== null && h !== undefined) {
+                hourCounts[h] = (hourCounts[h] || 0) + 1;
+            }
+        });
+        const peakActiveHours = Object.entries(hourCounts).map(([hour, count]) => ({ _id: parseInt(hour), count })).sort((a, b) => a._id - b._id);
+
+        // Compute device distribution
+        const deviceCounts = {};
+        sessionAgg.devices.forEach(d => {
+            const dev = d || 'Unknown';
+            deviceCounts[dev] = (deviceCounts[dev] || 0) + 1;
+        });
+        const deviceDistribution = Object.entries(deviceCounts).map(([device, count]) => ({ _id: device, count }));
+
+        const contentPerf = contentPerformance[0] || { totalViews: 0, totalLikes: 0, totalWatchTime: 0, totalContent: 0 };
+
+        return res.status(200).json({
+            success: true,
+            user,
+            loginSessions,
+            avgSessionDuration: sessionAgg.avgDuration,
+            peakActiveHours,
+            deviceDistribution,
+            contentPerformance: contentPerf,
+            engagementGiven: {
+                commentsPosted,
+                likesGiven
+            },
+            walletInfo: {
+                wallet1Balance: wallet1 ? wallet1.balance : 0,
+                wallet2Balance: wallet2 ? wallet2.balance : 0
+            }
+        });
+    } catch (error) {
+        console.error('User detailed analytics error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};

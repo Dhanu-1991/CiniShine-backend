@@ -11,6 +11,8 @@ import CommunityMember from '../../models/communityMember.model.js';
 import Comment from '../../models/comment.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
+import ContentWatchtime from '../../models/contentWatchtime.model.js';
+import Purchase from '../../models/purchase.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import Payout from '../../models/payout.model.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
@@ -693,26 +695,87 @@ export const getCreatorProfile = async (req, res) => {
 export const getCreatorStudio = async (req, res) => {
     try {
         const { id } = req.params;
-        const { page = 1, limit = 20, contentType, status } = req.query;
+        const { page = 1, limit = 20, contentType, status, sort, search } = req.query;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
         }
 
-        const filter = { userId: id };
+        const filter = { userId: new mongoose.Types.ObjectId(id) };
         if (contentType) filter.contentType = contentType;
         if (status) filter.status = status;
+        if (search) {
+            filter.title = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        const [contents, total] = await Promise.all([
-            Content.find(filter)
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-            Content.countDocuments(filter)
-        ]);
+        let sortObj = { createdAt: -1 };
+        let needsAggregation = false;
+        
+        if (sort === 'watchTime') sortObj = { totalWatchTime: -1 };
+        else if (sort === 'duration') sortObj = { duration: -1 };
+        else if (sort === 'views') sortObj = { views: -1 };
+        else if (sort === 'engagement') needsAggregation = true;
+        else if (sort === 'completionRate') sortObj = { completionRate: -1 };
+        else if (sort === 'ppvPrice') {
+            filter.visibility = 'pay_per_view';
+            sortObj = { price: -1 };
+        } else if (sort === 'ppvEarnings') needsAggregation = true;
+
+        let contents, total;
+        
+        if (needsAggregation) {
+            const pipeline = [{ $match: filter }];
+            if (sort === 'engagement') {
+                pipeline.push({ $addFields: { totalEngagement: { $add: [{ $ifNull: ['$likeCount', 0] }, { $ifNull: ['$shareCount', 0] }] } } });
+                pipeline.push({ $sort: { totalEngagement: -1 } });
+            } else if (sort === 'ppvEarnings') {
+                filter.visibility = 'pay_per_view';
+                pipeline[0] = { $match: filter };
+                pipeline.push({
+                    $lookup: {
+                        from: 'purchases',
+                        localField: '_id',
+                        foreignField: 'contentId',
+                        as: 'purchases'
+                    }
+                });
+                pipeline.push({
+                    $addFields: {
+                        ppvRevenueRaw: { $sum: '$purchases.creatorPayout' }
+                    }
+                });
+                pipeline.push({ $sort: { ppvRevenueRaw: -1 } });
+            }
+            
+            pipeline.push({ $skip: skip }, { $limit: parseInt(limit) });
+            
+            [contents, total] = await Promise.all([
+                Content.aggregate(pipeline),
+                Content.countDocuments(filter)
+            ]);
+        } else {
+            [contents, total] = await Promise.all([
+                Content.find(filter)
+                    .sort(sortObj)
+                    .skip(skip)
+                    .limit(parseInt(limit))
+                    .lean(),
+                Content.countDocuments(filter)
+            ]);
+        }
+
+        // PPV Revenue aggregation for individual items
+        const ppvContentIds = contents.filter(c => c.visibility === 'pay_per_view').map(c => c._id);
+        let ppvRevenueMap = {};
+        if (ppvContentIds.length > 0) {
+            const revAgg = await Purchase.aggregate([
+                { $match: { contentId: { $in: ppvContentIds }, status: { $in: ['active', 'expired'] } } },
+                { $group: { _id: '$contentId', revenue: { $sum: '$creatorPayout' } } }
+            ]);
+            ppvRevenueMap = Object.fromEntries(revAgg.map(r => [r._id.toString(), r.revenue]));
+        }
 
         // Check archive status for removed content
         const removedIds = contents.filter(c => c.status === 'removed').map(c => c._id);
@@ -724,7 +787,8 @@ export const getCreatorStudio = async (req, res) => {
 
         const enrichedContents = contents.map(c => ({
             ...c,
-            archive: archiveMap[c._id.toString()] || null
+            archive: archiveMap[c._id.toString()] || null,
+            ppvRevenue: ppvRevenueMap[c._id.toString()] || 0
         }));
 
         return res.status(200).json({
@@ -1365,6 +1429,7 @@ export const listPpvContent = async (req, res) => {
             }
         ]);
 
+
         const summary = summaryAgg[0] || { totalPpvCount: 0, totalViews: 0, totalWatchTime: 0 };
 
         return res.status(200).json({
@@ -1385,5 +1450,333 @@ export const listPpvContent = async (req, res) => {
     } catch (err) {
         console.error('Error fetching PPV content for admin:', err);
         return res.status(500).json({ success: false, message: err.message || 'Server error fetching PPV content' });
+    }
+};
+
+/**
+ * GET /admin/content/list
+ * Returns ALL platform content with rich filtering, sorting, and search.
+ * Query params: page, limit, status, visibility, contentType, sort, search
+ */
+export const listAllContent = async (req, res) => {
+    try {
+        const { page = 1, limit = 20, status, visibility, contentType, sort = 'newest', search } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const filter = {};
+        if (status) filter.status = status;
+        if (visibility) filter.visibility = visibility;
+        if (contentType) filter.contentType = contentType;
+        if (search) {
+            filter.title = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        }
+
+        let needsAggregation = false;
+        let sortObj = { createdAt: -1 };
+
+        if (sort === 'oldest') sortObj = { createdAt: 1 };
+        else if (sort === 'views') sortObj = { views: -1 };
+        else if (sort === 'watchTime') sortObj = { totalWatchTime: -1 };
+        else if (sort === 'completionRate') sortObj = { completionRate: -1 };
+        else if (sort === 'duration') sortObj = { duration: -1 };
+        else if (sort === 'ppvPrice') {
+            filter.visibility = 'pay_per_view';
+            sortObj = { price: -1 };
+        } else if (sort === 'interactions' || sort === 'creatorFans' || sort === 'revenue' || sort === 'mostEarned') {
+            needsAggregation = true;
+        }
+
+        let contents, total;
+
+        if (needsAggregation) {
+            const pipeline = [{ $match: filter }];
+            
+            if (sort === 'interactions') {
+                pipeline.push({ $addFields: { interactions: { $add: [{ $ifNull: ['$likeCount', 0] }, { $ifNull: ['$shareCount', 0] }] } } });
+                pipeline.push({ $sort: { interactions: -1 } });
+            } else if (sort === 'creatorFans') {
+                pipeline.push({
+                    $lookup: {
+                        from: 'users',
+                        localField: 'userId',
+                        foreignField: '_id',
+                        as: 'creator'
+                    }
+                });
+                pipeline.push({ $unwind: { path: '$creator', preserveNullAndEmptyArrays: true } });
+                pipeline.push({ $sort: { 'creator.subscriberCount': -1 } });
+            } else if (sort === 'revenue' || sort === 'mostEarned') {
+                filter.visibility = 'pay_per_view';
+                pipeline[0] = { $match: filter }; // update match
+                pipeline.push({
+                    $lookup: {
+                        from: 'purchases',
+                        localField: '_id',
+                        foreignField: 'contentId',
+                        as: 'purchases'
+                    }
+                });
+                pipeline.push({
+                    $addFields: {
+                        ppvRevenueRaw: { $sum: '$purchases.creatorPayout' }
+                    }
+                });
+                pipeline.push({ $sort: { ppvRevenueRaw: -1 } });
+            }
+            
+            pipeline.push({ $skip: skip }, { $limit: parseInt(limit) });
+
+            [contents, total] = await Promise.all([
+                Content.aggregate(pipeline),
+                Content.countDocuments(filter)
+            ]);
+            
+            // Re-populate creator if not already done in aggregation
+            if (sort !== 'creatorFans') {
+                await Content.populate(contents, { path: 'userId', select: 'userName channelName channelHandle channelPicture subscriberCount' });
+            } else {
+                contents = contents.map(c => {
+                    c.userId = c.creator;
+                    delete c.creator;
+                    return c;
+                });
+            }
+        } else {
+            [contents, total] = await Promise.all([
+                Content.find(filter)
+                    .sort(sortObj)
+                    .skip(skip)
+                    .limit(parseInt(limit))
+                    .populate('userId', 'userName channelName channelHandle channelPicture subscriberCount')
+                    .lean(),
+                Content.countDocuments(filter)
+            ]);
+        }
+
+        const contentIds = contents.map(c => c._id);
+
+        // Fetch counts for each content
+        const [commentCounts, purchaseAgg] = await Promise.all([
+            Comment.aggregate([
+                { $match: { contentId: { $in: contentIds } } },
+                { $group: { _id: '$contentId', count: { $sum: 1 } } }
+            ]),
+            Purchase.aggregate([
+                { $match: { contentId: { $in: contentIds }, status: { $in: ['active', 'expired'] } } },
+                { $group: { _id: '$contentId', purchases: { $sum: 1 }, revenue: { $sum: '$creatorPayout' } } }
+            ])
+        ]);
+
+        const commentMap = Object.fromEntries(commentCounts.map(c => [c._id.toString(), c.count]));
+        const purchaseMap = Object.fromEntries(purchaseAgg.map(p => [p._id.toString(), { count: p.purchases, revenue: p.revenue }]));
+
+        const enrichedContents = contents.map(c => {
+            const cId = c._id.toString();
+            const thumbKey = c.thumbnailKey || c.imageKey || c.thumbnailUrl || c.thumbnail;
+            const pInfo = purchaseMap[cId] || { count: 0, revenue: 0 };
+            const uInfo = c.userId || {};
+            
+            return {
+                ...c,
+                thumbnailUrl: getCfUrl(thumbKey),
+                hlsMasterUrl: c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null,
+                creator: {
+                    userName: uInfo.userName,
+                    channelName: uInfo.channelName,
+                    channelHandle: uInfo.channelHandle,
+                    subscriberCount: uInfo.subscriberCount || 0,
+                    channelPicture: getCfUrl(uInfo.channelPicture || uInfo.profilePicture)
+                },
+                commentCount: commentMap[cId] || 0,
+                purchaseCount: pInfo.count,
+                ppvRevenue: pInfo.revenue
+            };
+        });
+
+        // Summary Stats
+        const statsAgg = await Content.aggregate([
+            {
+                $group: {
+                    _id: null,
+                    totalCount: { $sum: 1 },
+                    totalViews: { $sum: '$views' },
+                    totalWatchTime: { $sum: '$totalWatchTime' },
+                    uploading: { $sum: { $cond: [{ $eq: ['$status', 'uploading'] }, 1, 0] } },
+                    processing: { $sum: { $cond: [{ $eq: ['$status', 'processing'] }, 1, 0] } },
+                    completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+                    failed: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+                    removed: { $sum: { $cond: [{ $eq: ['$status', 'removed'] }, 1, 0] } },
+                    ppvCount: { $sum: { $cond: [{ $eq: ['$visibility', 'pay_per_view'] }, 1, 0] } }
+                }
+            }
+        ]);
+        
+        const overallPpvRevAgg = await Purchase.aggregate([
+            { $match: { status: { $in: ['active', 'expired'] } } },
+            { $group: { _id: null, totalPpvRevenue: { $sum: '$creatorPayout' } } }
+        ]);
+
+        const stats = statsAgg[0] || { totalCount: 0, totalViews: 0, totalWatchTime: 0, uploading: 0, processing: 0, completed: 0, failed: 0, removed: 0, ppvCount: 0 };
+        const totalPpvRevenue = overallPpvRevAgg[0] ? overallPpvRevAgg[0].totalPpvRevenue : 0;
+
+        return res.status(200).json({
+            success: true,
+            contents: enrichedContents,
+            summary: {
+                totalCount: stats.totalCount,
+                totalViews: stats.totalViews,
+                totalWatchTime: stats.totalWatchTime,
+                statusBreakdown: {
+                    uploading: stats.uploading,
+                    processing: stats.processing,
+                    completed: stats.completed,
+                    failed: stats.failed,
+                    removed: stats.removed
+                },
+                ppvCount: stats.ppvCount,
+                totalPpvRevenue
+            },
+            pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+        });
+    } catch (error) {
+        console.error('List all content error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * GET /admin/content/:id/detailed-analytics
+ * Returns deep analytics for a specific content item.
+ */
+export const getContentDetailedAnalytics = async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid content ID' });
+        }
+
+        const content = await Content.findById(id).populate('userId', 'userName channelName channelHandle channelPicture subscriberCount').lean();
+        if (!content) {
+            return res.status(404).json({ success: false, message: 'Content not found' });
+        }
+
+        const thumbKey = content.thumbnailKey || content.imageKey || content.thumbnailUrl || content.thumbnail;
+        content.thumbnailUrl = getCfUrl(thumbKey);
+        if (content.userId) {
+            content.userId.channelPicture = getCfUrl(content.userId.channelPicture || content.userId.profilePicture);
+        }
+
+        // Daily views over last 30 days
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        const viewsAgg = await ContentView.aggregate([
+            { $match: { contentId: new mongoose.Types.ObjectId(id), firstViewedAt: { $gte: thirtyDaysAgo } } },
+            {
+                $group: {
+                    _id: { $dateToString: { format: "%Y-%m-%d", date: "$firstViewedAt" } },
+                    views: { $sum: 1 }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ]);
+
+        const peakHoursAgg = await ContentView.aggregate([
+            { $match: { contentId: new mongoose.Types.ObjectId(id) } },
+            {
+                $group: {
+                    _id: { $hour: "$firstViewedAt" },
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { _id: 1 } }
+        ]);
+
+        const totalComments = await Comment.countDocuments({ contentId: id });
+        const likeToViewRatio = content.views > 0 ? ((content.likeCount || 0) / content.views) : 0;
+
+        const engagementMetrics = {
+            totalLikes: content.likeCount || 0,
+            totalDislikes: content.dislikeCount || 0,
+            totalShares: content.shareCount || 0,
+            totalComments,
+            likeToViewRatio
+        };
+
+        const watchHistories = await WatchHistory.aggregate([
+            { $match: { contentId: new mongoose.Types.ObjectId(id) } },
+            {
+                $group: {
+                    _id: null,
+                    sumPercent: { $sum: '$completionPercentage' },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        const completionSessionCount = watchHistories[0] ? watchHistories[0].count : 0;
+        const completionSumPercent = watchHistories[0] ? watchHistories[0].sumPercent : 0;
+        const avgCompletion = completionSessionCount > 0 ? (completionSumPercent / completionSessionCount) : 0;
+
+        const completionData = {
+            avgCompletion,
+            completionRate: content.completionRate || 0,
+            completionSumPercent,
+            completionSessionCount
+        };
+
+        let ppvEarnings = null;
+        let buyers = 0;
+        
+        if (content.visibility === 'pay_per_view') {
+            const pAgg = await Purchase.aggregate([
+                { $match: { contentId: new mongoose.Types.ObjectId(id), status: { $in: ['active', 'expired'] } } },
+                {
+                    $group: {
+                        _id: null,
+                        totalRevenue: { $sum: '$creatorPayout' },
+                        totalPurchases: { $sum: 1 },
+                        avgPrice: { $avg: '$amount' },
+                        uniqueBuyers: { $addToSet: '$userId' }
+                    }
+                }
+            ]);
+
+            const pOverTime = await Purchase.aggregate([
+                { $match: { contentId: new mongoose.Types.ObjectId(id), status: { $in: ['active', 'expired'] }, purchasedAt: { $gte: thirtyDaysAgo } } },
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$purchasedAt" } },
+                        revenue: { $sum: '$creatorPayout' }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]);
+
+            if (pAgg.length > 0) {
+                ppvEarnings = {
+                    totalRevenue: pAgg[0].totalRevenue,
+                    totalPurchases: pAgg[0].totalPurchases,
+                    avgPrice: pAgg[0].avgPrice,
+                    earningsOverTime: pOverTime
+                };
+                buyers = pAgg[0].uniqueBuyers.length;
+            } else {
+                ppvEarnings = { totalRevenue: 0, totalPurchases: 0, avgPrice: 0, earningsOverTime: [] };
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            content,
+            viewsOverTime: viewsAgg,
+            peakViewingHours: peakHoursAgg,
+            engagementMetrics,
+            completionData,
+            ppvEarnings: content.visibility === 'pay_per_view' ? ppvEarnings : null,
+            buyers: content.visibility === 'pay_per_view' ? buyers : null
+        });
+    } catch (error) {
+        console.error('Content detailed analytics error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };

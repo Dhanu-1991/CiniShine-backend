@@ -39,6 +39,9 @@ const payoutSchema = new mongoose.Schema({
         default: 'pending_settlement'
     },
     payoutMonth: { type: String, required: true },   // '2026-07' format
+    payoutType: { type: String, enum: ['full', 'partial'], default: 'full' },
+    partialReason: { type: String, default: null },
+    partialAmount: { type: Number, default: null },
     invoiceS3Key: { type: String, default: null },
     invoiceUrl: { type: String, default: null },
     scheduledFor: { type: Date, default: null },
