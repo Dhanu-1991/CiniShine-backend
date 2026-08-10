@@ -22,7 +22,7 @@ const OtpSessionSchema = new mongoose.Schema({
     },
     purpose: {
         type: String,
-        enum: ['login', 'signup', 'forgot_password', 'bulk_payout'],
+        enum: ['login', 'signup', 'forgot_password', 'bulk_payout', 'engagement_payout'],
         required: true
     },
     attempts: {

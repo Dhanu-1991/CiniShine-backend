@@ -173,7 +173,7 @@ export const runEngagementPayout = async (req, res) => {
         console.log(`\n=================== [ENGAGEMENT_PAYOUT_INIT] ===================`);
         console.log(`Month: ${month}, Min Views: ${minViews}, Selective: ${isSelective}`);
 
-        const filterQuery = { status: { $ne: 'removed' }, contentType: { $ne: 'post' }, views: { $gte: Math.max(minViews, 1) } };
+        const filterQuery = { status: { $ne: 'removed' }, contentType: { $in: ['video', 'audio'] }, views: { $gte: Math.max(minViews, 1) } };
         if (Array.isArray(selectedContentIds) && selectedContentIds.length > 0) {
             filterQuery._id = { $in: selectedContentIds.map(id => new mongoose.Types.ObjectId(id)) };
         } else if (Array.isArray(selectedCreatorIds) && selectedCreatorIds.length > 0) {
@@ -327,7 +327,7 @@ export const previewEngagementPayout = async (req, res) => {
         const { minViews: minViewsQuery, creatorId } = req.query;
         const minViews = minViewsQuery !== undefined ? parseInt(minViewsQuery) : 0;
         
-        const query = { status: { $ne: 'removed' }, contentType: { $ne: 'post' }, views: { $gte: Math.max(minViews, 1) } };
+        const query = { status: { $ne: 'removed' }, contentType: { $in: ['video', 'audio'] }, views: { $gte: Math.max(minViews, 1) } };
         if (creatorId && mongoose.Types.ObjectId.isValid(creatorId)) {
             query.userId = new mongoose.Types.ObjectId(creatorId);
         }
@@ -418,7 +418,7 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
             return res.status(400).json({ error: "Creator not found or banned" });
         }
 
-        const allContent = await Content.find({ userId, status: { $ne: 'removed' }, contentType: { $ne: 'post' }, views: { $gte: Math.max(minViews, 1) } }).populate('userId', 'userName channelName channelBanned').lean();
+        const allContent = await Content.find({ userId, status: { $ne: 'removed' }, contentType: { $in: ['video', 'audio'] }, views: { $gte: Math.max(minViews, 1) } }).populate('userId', 'userName channelName channelBanned').lean();
         
         const contentPayouts = [];
         let totalPayout = 0;
