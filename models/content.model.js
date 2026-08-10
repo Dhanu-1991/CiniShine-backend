@@ -138,6 +138,14 @@ const ContentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    paidViews: {
+        type: Number,
+        default: 0
+    },
+    lastPayoutAt: {
+        type: Date,
+        default: null
+    },
     authenticatedViews: {
         type: Number,
         default: 0

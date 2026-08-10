@@ -22,21 +22,23 @@ function mapRange(val, inMin, inMax, outMin, outMax) {
 
 // Helper to compute engagement metrics and payout for a single content
 async function calculateContentPayout(content, baseCpm = 0.25) {
-    const views = content.views || 0;
+    const totalViews = content.views || 0;
+    const paidViews = content.paidViews || 0;
+    const unpaidViews = Math.max(totalViews - paidViews, 0);
+
     const avgWatchPctMultiplier = mapRange(content.averageWatchPercent || 0, 0, 100, 0.5, 1.5);
     const completionMultiplier = mapRange(content.completionRate || 0, 0, 100, 0.5, 1.5);
     
     const likes = content.likeCount || 0;
-    // Enhanced Like Rate: Likes relative to total views (capped at 10% like-to-view ratio)
-    const likeRate = Math.min(likes / Math.max(views, 1), 0.1) / 0.1;
+    const likeRate = Math.min(likes / Math.max(totalViews, 1), 0.1) / 0.1;
     const likeMultiplier = mapRange(likeRate, 0, 1, 0.8, 1.3);
     
     const comments = await Comment.countDocuments({ videoId: content._id });
-    const commentRate = Math.min(comments / Math.max(views, 1), 0.1) / 0.1;
+    const commentRate = Math.min(comments / Math.max(totalViews, 1), 0.1) / 0.1;
     const commentMultiplier = mapRange(commentRate, 0, 1, 0.9, 1.2);
     
     const shares = content.shareCount || 0;
-    const shareRate = Math.min(shares / Math.max(views, 1), 0.05) / 0.05;
+    const shareRate = Math.min(shares / Math.max(totalViews, 1), 0.05) / 0.05;
     const shareMultiplier = mapRange(shareRate, 0, 1, 0.9, 1.2);
 
     const engagementMultiplier = avgWatchPctMultiplier * 0.35 
@@ -45,14 +47,20 @@ async function calculateContentPayout(content, baseCpm = 0.25) {
                                + commentMultiplier * 0.15 
                                + shareMultiplier * 0.10;
 
-    const payoutAmount = views * baseCpm * engagementMultiplier;
+    // Payout is calculated on UNPAID views
+    const payoutAmount = unpaidViews * baseCpm * engagementMultiplier;
 
     return {
-        engagementScore: engagementMultiplier * 100, // as a percentage roughly
+        unpaidViews,
+        paidViews,
+        totalViews,
+        engagementScore: engagementMultiplier * 100,
         engagementMultiplier,
         payoutAmount,
         metrics: {
-            views,
+            views: totalViews,
+            unpaidViews,
+            paidViews,
             totalWatchTime: content.totalWatchTime || 0,
             avgWatchPercent: content.averageWatchPercent || 0,
             completionRate: content.completionRate || 0,
@@ -230,7 +238,7 @@ export const runEngagementPayout = async (req, res) => {
                 wallet.balance += group.totalPayout;
                 await wallet.save({ session });
 
-                // Create transactions per content
+                // Create transactions per content & mark views as paid
                 for (const item of group.contents) {
                     const balanceAfter = wallet.balance; // Simplified balance calculation
                     const txn = new WalletTransaction({
@@ -244,6 +252,12 @@ export const runEngagementPayout = async (req, res) => {
                         idempotencyKey: `eng_${month}_${item.contentId}_${new Date().getTime()}`
                     });
                     await txn.save({ session });
+
+                    // Mark content views as paid
+                    await Content.updateOne(
+                        { _id: item.contentId },
+                        { $set: { paidViews: item.metrics.views, lastPayoutAt: new Date() } }
+                    ).session(session);
                 }
                 
                 await session.commitTransaction();
@@ -397,7 +411,7 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
         }
 
         const now = new Date();
-        const month = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_${userId}`;
+        const month = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_single_${userId}_${now.getTime()}`;
 
         const creatorUser = await User.findById(userId).lean();
         if (!creatorUser || creatorUser.channelBanned) {
@@ -456,6 +470,12 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
                     idempotencyKey: `eng_single_${month}_${item.contentId}_${new Date().getTime()}`
                 });
                 await txn.save({ session });
+
+                // Mark content views as paid
+                await Content.updateOne(
+                    { _id: item.contentId },
+                    { $set: { paidViews: item.metrics.views, lastPayoutAt: new Date() } }
+                ).session(session);
             }
             
             await session.commitTransaction();
