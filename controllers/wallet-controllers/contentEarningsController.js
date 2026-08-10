@@ -19,7 +19,7 @@ export const getContentEarnings = async (req, res) => {
             return res.status(400).json({ error: 'Invalid content ID' });
         }
 
-        const content = await Content.findById(contentId).select('userId visibility title contentType').lean();
+        const content = await Content.findById(contentId).select('userId visibility title contentType price isPayPerView').lean();
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) {
             return res.status(403).json({ error: 'Not authorized to view earnings for this content' });
@@ -32,8 +32,9 @@ export const getContentEarnings = async (req, res) => {
         let ppvLifetime = { grossRevenue: 0, netEarnings: 0, totalPurchases: 0 };
         let ppvFiltered = { grossRevenue: 0, netEarnings: 0, totalPurchases: 0 };
         let ppvMonthlyChart = [];
+        const isPpvContent = content.visibility === 'pay_per_view' || content.visibility === 'ppv' || Boolean(content.isPayPerView) || Boolean(content.price && content.price > 0);
 
-        if (content.visibility === 'pay_per_view') {
+        if (isPpvContent) {
             // Lifetime PPV
             const lifetimePpv = await Purchase.aggregate([
                 { $match: { contentId: new mongoose.Types.ObjectId(contentId), status: { $in: ['active', 'expired'] } } },
@@ -138,6 +139,7 @@ export const getContentEarnings = async (req, res) => {
             contentId,
             contentTitle: content.title,
             contentType: content.contentType,
+            isPpv: isPpvContent,
             ppv: {
                 lifetime: ppvLifetime,
                 filtered: ppvFiltered,

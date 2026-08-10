@@ -639,7 +639,7 @@ export const getContentAnalytics = async (req, res) => {
         const isAdmin = await isAdminUser(userId);
         if (!isAdmin && content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
-        const isPpv = content.visibility === 'pay_per_view';
+        const isPpv = content.visibility === 'pay_per_view' || content.visibility === 'ppv' || Boolean(content.isPayPerView) || Boolean(content.price && content.price > 0);
 
         // Parallel fetch: comments, reactions, watch history, signed URLs, unique viewers, viewer breakdown, PPV purchases
         const [commentCount, likes, dislikes, watchEntries, uniqueViewers, signedInUniquesCount, anonymousUniquesCount, thumbnailUrl, imageUrl, ppvData] = await Promise.all([
