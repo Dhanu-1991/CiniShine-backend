@@ -390,40 +390,11 @@ export const getEngagementPayoutReport = async (req, res) => {
 
 export const runSingleCreatorEngagementPayout = async (req, res) => {
     try {
-        const { userId, otp, minViews = 0 } = req.body;
+        const { userId, minViews = 0 } = req.body;
         
         if (!userId) {
             return res.status(400).json({ error: "User ID is required" });
         }
-
-        if (!otp) {
-            return res.status(400).json({ error: "Admin OTP is required to initiate engagement payout" });
-        }
-
-        const contact = req.admin?.contact;
-        if (!contact) {
-            return res.status(401).json({ error: "Admin contact details missing" });
-        }
-
-        const otpSession = await OtpSession.findOne({
-            contact,
-            purpose: 'engagement_payout',
-            expires_at: { $gt: new Date() }
-        });
-
-        if (!otpSession) {
-            return res.status(400).json({ error: "OTP expired or not requested. Please request a new OTP." });
-        }
-
-        const otpHash = crypto.createHash('sha256').update(String(otp).trim()).digest('hex');
-        if (otpSession.otp_hash !== otpHash) {
-            otpSession.attempts = (otpSession.attempts || 0) + 1;
-            await otpSession.save();
-            return res.status(400).json({ error: "Invalid OTP provided" });
-        }
-
-        // OTP verified — clear session
-        await OtpSession.deleteOne({ _id: otpSession._id });
 
         const now = new Date();
         const month = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_${userId}`;
