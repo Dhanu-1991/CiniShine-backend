@@ -658,7 +658,12 @@ export const getCreatorProfile = async (req, res) => {
         const isKycVerified = Boolean(
             creator.isKycVerified ||
             creator.kycStatus === 'verified' ||
-            (kycDetails && (kycDetails.status === 'verified' || kycDetails.status === 'approved'))
+            (kycDetails && (
+                kycDetails.kycStatus === 'verified' ||
+                kycDetails.kycStatus === 'approved' ||
+                kycDetails.status === 'verified' ||
+                kycDetails.status === 'approved'
+            ))
         );
 
         return res.status(200).json({
