@@ -655,6 +655,12 @@ export const getCreatorProfile = async (req, res) => {
         creatorObj.profilePicture = getCfUrl(creatorObj.profilePicture || creatorObj.channelPicture);
         creatorObj.channelPicture = getCfUrl(creatorObj.channelPicture || creatorObj.profilePicture);
 
+        const isKycVerified = Boolean(
+            creator.isKycVerified ||
+            creator.kycStatus === 'verified' ||
+            (kycDetails && (kycDetails.status === 'verified' || kycDetails.status === 'approved'))
+        );
+
         return res.status(200).json({
             success: true,
             creator: creatorObj,
@@ -662,6 +668,8 @@ export const getCreatorProfile = async (req, res) => {
             contentCount,
             communities: communities.map(cm => cm.communityId).filter(Boolean),
             payoutStatus: {
+                kycVerified: isKycVerified,
+                kycStatus: isKycVerified ? 'verified' : (kycDetails ? kycDetails.status : 'not_submitted'),
                 hasPending: Boolean(pendingPayout),
                 pendingPayout: pendingPayout ? {
                     _id: pendingPayout._id,
