@@ -238,22 +238,33 @@ export const runEngagementPayout = async (req, res) => {
                 wallet.balance += group.totalPayout;
                 await wallet.save({ session });
 
-                // Create transactions per content & mark views as paid
-                for (const item of group.contents) {
-                    const balanceAfter = wallet.balance; // Simplified balance calculation
-                    const txn = new WalletTransaction({
-                        walletId: wallet._id,
-                        walletType: 'secondary',
-                        type: 'engagement_earning_credit',
-                        amount: item.payoutAmount,
-                        balanceAfter,
-                        relatedContentId: item.contentId,
-                        status: 'completed',
-                        idempotencyKey: `eng_${month}_${item.contentId}_${new Date().getTime()}`
-                    });
-                    await txn.save({ session });
+                // Create 1 single aggregated transaction for this creator for this payout run
+                const aggTxn = new WalletTransaction({
+                    walletId: wallet._id,
+                    walletType: 'secondary',
+                    type: 'engagement_earning_credit',
+                    amount: group.totalPayout,
+                    balanceAfter: wallet.balance,
+                    status: 'completed',
+                    description: `Engagement Earnings Payout (${group.contents.length} content item${group.contents.length > 1 ? 's' : ''})`,
+                    metadata: {
+                        contentCount: group.contents.length,
+                        contentBreakdown: group.contents.map(item => ({
+                            contentId: item.contentId,
+                            contentTitle: item.contentTitle,
+                            contentType: item.contentType,
+                            payoutAmount: item.payoutAmount,
+                            engagementScore: item.engagementScore,
+                            engagementMultiplier: item.engagementMultiplier,
+                            metrics: item.metrics,
+                        }))
+                    },
+                    idempotencyKey: `eng_run_${month}_${creatorId}`
+                });
+                await aggTxn.save({ session });
 
-                    // Mark content views as paid
+                // Mark content views as paid
+                for (const item of group.contents) {
                     await Content.updateOne(
                         { _id: item.contentId },
                         { $set: { paidViews: item.metrics.views, lastPayoutAt: new Date() } }
@@ -389,13 +400,11 @@ export const previewEngagementPayout = async (req, res) => {
 export const getEngagementPayoutReport = async (req, res) => {
     try {
         const { month } = req.params;
-        const report = await EngagementPayout.findOne({ payoutMonth: month }).lean();
+        // Match any payoutMonth starting with the requested month (e.g. '2026-08', '2026-08_single_...', etc.)
+        const regex = new RegExp(`^${month}`);
+        const payouts = await EngagementPayout.find({ payoutMonth: regex }).sort({ createdAt: -1 }).lean();
         
-        if (!report) {
-            return res.json({ success: true, payouts: [] });
-        }
-        
-        return res.json({ success: true, payouts: [report] });
+        return res.json({ success: true, payouts });
     } catch (error) {
         console.error('❌ Error getting engagement payout report:', error);
         return res.status(500).json({ error: 'Failed to fetch report' });
@@ -458,20 +467,33 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
             wallet.balance += totalPayout;
             await wallet.save({ session });
 
-            for (const item of contentPayouts) {
-                const txn = new WalletTransaction({
-                    walletId: wallet._id,
-                    walletType: 'secondary',
-                    type: 'engagement_earning_credit',
-                    amount: item.payoutAmount,
-                    balanceAfter: wallet.balance,
-                    relatedContentId: item.contentId,
-                    status: 'completed',
-                    idempotencyKey: `eng_single_${month}_${item.contentId}_${new Date().getTime()}`
-                });
-                await txn.save({ session });
+            // Create 1 single aggregated transaction for the creator
+            const aggTxn = new WalletTransaction({
+                walletId: wallet._id,
+                walletType: 'secondary',
+                type: 'engagement_earning_credit',
+                amount: totalPayout,
+                balanceAfter: wallet.balance,
+                status: 'completed',
+                description: `Engagement Earnings Payout (${contentPayouts.length} content item${contentPayouts.length > 1 ? 's' : ''})`,
+                metadata: {
+                    contentCount: contentPayouts.length,
+                    contentBreakdown: contentPayouts.map(item => ({
+                        contentId: item.contentId,
+                        contentTitle: item.contentTitle,
+                        contentType: item.contentType,
+                        payoutAmount: item.payoutAmount,
+                        engagementScore: item.engagementScore,
+                        engagementMultiplier: item.engagementMultiplier,
+                        metrics: item.metrics,
+                    }))
+                },
+                idempotencyKey: `eng_single_${month}_${userId}`
+            });
+            await aggTxn.save({ session });
 
-                // Mark content views as paid
+            // Mark content views as paid
+            for (const item of contentPayouts) {
                 await Content.updateOne(
                     { _id: item.contentId },
                     { $set: { paidViews: item.metrics.views, lastPayoutAt: new Date() } }

@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import Purchase from '../../models/purchase.model.js';
+import SecondaryWallet from '../../models/secondaryWallet.model.js';
+import WalletTransaction from '../../models/walletTransaction.model.js';
 import { isAdminUser } from '../../utils/ppvGuard.js';
 
 /**
@@ -184,6 +186,32 @@ export const getCreatorEarnings = async (req, res) => {
             };
         });
 
+        // 4. Query engagement earnings from SecondaryWallet
+        const secondaryWallet = await SecondaryWallet.findOne({ userId: targetCreatorId }).select('_id').lean();
+        let lifetimeEngagementEarnings = 0;
+        let monthlyEngagementEarnings = 0;
+
+        if (secondaryWallet) {
+            const lifetimeEngAgg = await WalletTransaction.aggregate([
+                { $match: { walletId: secondaryWallet._id, type: 'engagement_earning_credit', status: 'completed' } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]);
+            if (lifetimeEngAgg[0]) lifetimeEngagementEarnings = lifetimeEngAgg[0].total;
+
+            const monthlyEngAgg = await WalletTransaction.aggregate([
+                { 
+                    $match: { 
+                        walletId: secondaryWallet._id, 
+                        type: 'engagement_earning_credit', 
+                        status: 'completed',
+                        createdAt: { $gte: monthStart, $lt: monthEnd }
+                    } 
+                },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]);
+            if (monthlyEngAgg[0]) monthlyEngagementEarnings = monthlyEngAgg[0].total;
+        }
+
         const lData = lifetimeAgg[0] || {};
         const lGross = lData.grossSold || 0;
         const lComm = lData.platformCommission || 0;
@@ -208,6 +236,8 @@ export const getCreatorEarnings = async (req, res) => {
                 grossSold: parseFloat(lGross.toFixed(2)),
                 totalCuts: parseFloat(lCuts.toFixed(2)),
                 netEarnings: parseFloat(lNet.toFixed(2)),
+                engagementEarnings: parseFloat(lifetimeEngagementEarnings.toFixed(2)),
+                totalCreatorEarnings: parseFloat((lNet + lifetimeEngagementEarnings).toFixed(2)),
                 totalUnlocks: lData.totalUnlocks || 0,
                 platformCommission: parseFloat(lComm.toFixed(2)),
                 gstOnCommission: parseFloat(lGstComm.toFixed(2)),
@@ -219,6 +249,8 @@ export const getCreatorEarnings = async (req, res) => {
                 grossSold: parseFloat(mGross.toFixed(2)),
                 totalCuts: parseFloat(mCuts.toFixed(2)),
                 netEarnings: parseFloat(mNet.toFixed(2)),
+                engagementEarnings: parseFloat(monthlyEngagementEarnings.toFixed(2)),
+                totalCreatorEarnings: parseFloat((mNet + monthlyEngagementEarnings).toFixed(2)),
                 totalUnlocks: mData.totalUnlocks || 0,
                 platformCommission: parseFloat(mComm.toFixed(2)),
                 gstOnCommission: parseFloat(mGstComm.toFixed(2)),
