@@ -13,7 +13,9 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import mongoose from "mongoose";
-import Content from "../../models/content.model.js"; import ContentToCommunity from '../../models/contentToCommunity.model.js';
+import Content from "../../models/content.model.js"; 
+import User from '../../models/user.model.js';
+import ContentToCommunity from '../../models/contentToCommunity.model.js';
 import Community from '../../models/community.model.js';
 import CommunityMember from '../../models/communityMember.model.js'; import { createUploadNotifications } from "../notification-controllers/notificationController.js";
 
@@ -86,6 +88,12 @@ export const multipartInit = async (req, res) => {
         const userId = req.user?.id;
         if (!userId) {
             return res.status(401).json({ error: "User not authenticated" });
+        }
+
+        // Check if creator's channel is banned
+        const uploadUser = await User.findById(userId).select('channelBanned').lean();
+        if (uploadUser?.channelBanned) {
+            return res.status(403).json({ error: 'Your channel has been banned. You cannot upload new content.' });
         }
 
         if (!fileName || !fileType || !fileSize) {

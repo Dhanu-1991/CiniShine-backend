@@ -41,6 +41,7 @@ const walletTransactionSchema = new mongoose.Schema({
             'transfer_to_primary',   // Primary: credit from settlement transfer
             'transfer_from_settlement', // Secondary: debit for transfer
             'adjustment',            // Manual adjustment (admin)
+            'engagement_earning_credit', // Secondary: creator receives engagement payout
         ],
         required: true,
     },

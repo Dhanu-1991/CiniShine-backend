@@ -250,6 +250,87 @@ const templates = {
             </div>`,
         text: `Dear ${creatorName || userName || 'Creator'}, your payouts for ${payoutMonth} have been processed. Please find the details in the attached PDF invoice below.`
     }),
+
+    engagementPayoutCredited: ({ creatorName, totalAmount, contentCount, payoutMonth, contentBreakdown = [] }) => {
+        const formattedAmount = Number(totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const dateTimeStr = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+        const FRONTEND_URL = process.env.FRONTEND_URL || "https://watchinit.com";
+
+        const topContentsHtml = (contentBreakdown || []).slice(0, 5).map(c => `
+            <tr>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #1e293b; color: #f8fafc; font-size: 13px;">${c.contentTitle || 'Untitled'}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #1e293b; color: #94a3b8; font-size: 13px; text-align: right;">${c.metrics?.views?.toLocaleString() || 0}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #1e293b; color: #10b981; font-size: 13px; font-weight: 600; text-align: right;">₹${Number(c.payoutAmount || 0).toFixed(2)}</td>
+            </tr>
+        `).join('');
+
+        return {
+            subject: `[${PLATFORM_NAME}] ✨ Engagement Earnings Credited: ₹${formattedAmount}`,
+            html: `
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #0f172a; color: #f8fafc; border-radius: 16px; overflow: hidden; border: 1px solid #1e293b;">
+                    <div style="background: linear-gradient(135deg, #059669 0%, #0d9488 100%); padding: 28px 32px;">
+                        <h1 style="color: white; margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0.5px;">${PLATFORM_NAME}</h1>
+                        <p style="color: #a7f3d0; margin: 6px 0 0 0; font-size: 13px; font-weight: 600;">Engagement Revenue Distribution (${payoutMonth})</p>
+                    </div>
+                    <div style="padding: 32px;">
+                        <h2 style="color: #34d399; margin-top: 0; font-size: 20px;">₹${formattedAmount} Credited to Your Secondary Wallet ✨</h2>
+                        <p style="font-size: 15px; color: #cbd5e1; line-height: 1.6;">Hi <strong>${creatorName}</strong>,</p>
+                        <p style="font-size: 14px; color: #94a3b8; line-height: 1.6;">
+                            We are pleased to inform you that your engagement-based content earnings for <strong>${payoutMonth}</strong> have been calculated and successfully credited to your <strong>Secondary Wallet (Wallet 2)</strong>.
+                        </p>
+
+                        <div style="background: #1e293b; border: 1px solid #334155; padding: 20px; border-radius: 12px; margin: 24px 0;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                                <tr>
+                                    <td style="padding: 8px 0; color: #94a3b8;">Total Amount Credited:</td>
+                                    <td style="padding: 8px 0; color: #34d399; font-weight: 700; text-align: right; font-size: 16px;">₹${formattedAmount}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px 0; color: #94a3b8;">Eligible Content Items:</td>
+                                    <td style="padding: 8px 0; color: #f8fafc; text-align: right;">${contentCount} content(s)</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px 0; color: #94a3b8;">Credited Wallet:</td>
+                                    <td style="padding: 8px 0; color: #f8fafc; text-align: right;">Secondary Wallet (Wallet 2)</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px 0; color: #94a3b8;">Credit Date:</td>
+                                    <td style="padding: 8px 0; color: #f8fafc; text-align: right;">${dateTimeStr}</td>
+                                </tr>
+                            </table>
+                        </div>
+
+                        ${contentBreakdown && contentBreakdown.length > 0 ? `
+                        <div style="margin: 24px 0;">
+                            <h3 style="color: #f8fafc; font-size: 14px; font-weight: 600; margin-bottom: 12px;">Top Earning Content Breakdown</h3>
+                            <table style="width: 100%; border-collapse: collapse; background: #0f172a; border-radius: 8px; overflow: hidden; border: 1px solid #334155;">
+                                <thead>
+                                    <tr style="background: #1e293b;">
+                                        <th style="padding: 8px 12px; text-align: left; color: #94a3b8; font-size: 12px; font-weight: 600;">Title</th>
+                                        <th style="padding: 8px 12px; text-align: right; color: #94a3b8; font-size: 12px; font-weight: 600;">Views</th>
+                                        <th style="padding: 8px 12px; text-align: right; color: #94a3b8; font-size: 12px; font-weight: 600;">Earnings</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${topContentsHtml}
+                                </tbody>
+                            </table>
+                        </div>
+                        ` : ''}
+
+                        <div style="text-align: center; margin-top: 28px;">
+                            <a href="${FRONTEND_URL}/wallet" style="display: inline-block; background: linear-gradient(135deg, #059669 0%, #0d9488 100%); color: white; text-decoration: none; padding: 12px 28px; border-radius: 9999px; font-weight: 700; font-size: 14px;">View Wallet & Transactions</a>
+                        </div>
+
+                        <p style="color: #64748b; font-size: 12px; margin-top: 32px; border-top: 1px solid #1e293b; padding-top: 20px; text-align: center;">
+                            This is an automated operational credit notification from ${PLATFORM_NAME}. Your earnings are calculated dynamically based on total watch time, view completion rate, and audience engagement metrics.
+                        </p>
+                    </div>
+                </div>
+            `,
+            text: `${PLATFORM_NAME} - Engagement Earnings Credited\n\nHi ${creatorName},\n\n₹${formattedAmount} has been credited to your Secondary Wallet for ${payoutMonth}.\n\nView details in your wallet: ${FRONTEND_URL}/wallet`
+        };
+    },
 };
 
 // Pre-built quick templates for admin UI

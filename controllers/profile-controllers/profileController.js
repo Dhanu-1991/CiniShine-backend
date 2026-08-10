@@ -162,6 +162,17 @@ export const updateContent = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
 
+        // Guard: Block updates if content is removed
+        if (content.status === 'removed') {
+            return res.status(403).json({ error: 'This content has been removed. Settings cannot be modified.' });
+        }
+
+        // Guard: Block updates if creator's channel is banned
+        const creatorUser = await User.findById(userId).select('channelBanned').lean();
+        if (creatorUser?.channelBanned) {
+            return res.status(403).json({ error: 'Your channel has been banned. Content settings cannot be modified.' });
+        }
+
         const { title, description, visibility, price, trailerContentId, spoilerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
 
         // Extract 24-char MongoDB ID from a full watchinit URL or raw ID

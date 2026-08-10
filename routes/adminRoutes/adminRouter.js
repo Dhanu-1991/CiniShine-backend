@@ -39,6 +39,10 @@ import {
 } from '../../controllers/wallet-controllers/payoutJobController.js';
 import { getCreatorEarnings } from '../../controllers/wallet-controllers/earningsController.js';
 import {
+    sendEngagementPayoutOtp, runEngagementPayout, previewEngagementPayout,
+    getEngagementPayoutReport, runSingleCreatorEngagementPayout
+} from '../../controllers/wallet-controllers/engagementPayoutController.js';
+import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
 
@@ -142,6 +146,12 @@ adminRouter.post('/payouts/:payoutId/complete', completePayoutSettlement);
 adminRouter.post('/payouts/:payoutId/resend-email', resendSettlementEmail);
 adminRouter.get('/payouts/:payoutId/invoice-pdf', getPayoutInvoicePdf);
 
+// ─── Engagement Payout routes ────────────────────────────────────────────────
+adminRouter.post('/engagement-payouts/send-otp', sendEngagementPayoutOtp);
+adminRouter.post('/engagement-payouts/run', runEngagementPayout);
+adminRouter.get('/engagement-payouts/preview', previewEngagementPayout);
+adminRouter.get('/engagement-payouts/:month', getEngagementPayoutReport);
+
 // Ledger & Live Transfers
 adminRouter.get('/ledger/daily', getDailyLedger);
 adminRouter.get('/ledger/live', getLiveTransfers);
@@ -159,5 +169,6 @@ adminRouter.patch('/creator/:id/stats', requireSuperAdmin, updateCreatorStats);
 adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
 adminRouter.post('/analytics/aggregate', requireSuperAdmin, runAggregation);
 adminRouter.post('/payouts/run-single', requireSuperAdmin, auditLog('single_payout', 'payout'), runSingleCreatorPayout);
+adminRouter.post('/engagement-payouts/run-single', requireSuperAdmin, auditLog('single_engagement_payout', 'payout'), runSingleCreatorEngagementPayout);
 
 export default adminRouter;

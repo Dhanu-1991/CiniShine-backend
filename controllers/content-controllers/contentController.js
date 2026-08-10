@@ -62,6 +62,11 @@ export const shortUploadInit = async (req, res) => {
             return res.status(401).json({ error: 'User not authenticated' });
         }
 
+        const uploadUser = await User.findById(userId).select('channelBanned').lean();
+        if (uploadUser?.channelBanned) {
+            return res.status(403).json({ error: 'Your channel has been banned. You cannot upload new content.' });
+        }
+
         if (!fileName || !fileType) {
             return res.status(400).json({ error: 'fileName and fileType are required' });
         }
@@ -182,6 +187,11 @@ export const audioUploadInit = async (req, res) => {
 
         if (!userId) {
             return res.status(401).json({ error: 'User not authenticated' });
+        }
+
+        const uploadUser = await User.findById(userId).select('channelBanned').lean();
+        if (uploadUser?.channelBanned) {
+            return res.status(403).json({ error: 'Your channel has been banned. You cannot upload new content.' });
         }
 
         if (!fileName || !fileType) {
@@ -310,6 +320,11 @@ export const postImageInit = async (req, res) => {
             return res.status(401).json({ error: 'User not authenticated' });
         }
 
+        const uploadUser = await User.findById(userId).select('channelBanned').lean();
+        if (uploadUser?.channelBanned) {
+            return res.status(403).json({ error: 'Your channel has been banned. You cannot upload new content.' });
+        }
+
         if (!hasImage) {
             return res.json({ uploadUrl: null, fileId: null });
         }
@@ -353,6 +368,11 @@ export const createPost = async (req, res) => {
 
         if (!userId) {
             return res.status(401).json({ error: 'User not authenticated' });
+        }
+
+        const uploadUser = await User.findById(userId).select('channelBanned').lean();
+        if (uploadUser?.channelBanned) {
+            return res.status(403).json({ error: 'Your channel has been banned. You cannot upload new content.' });
         }
 
         if (!title || !title.trim()) {

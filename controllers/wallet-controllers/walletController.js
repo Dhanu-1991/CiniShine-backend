@@ -163,6 +163,8 @@ export const getWalletTransactions = async (req, res) => {
                 query.type = 'ppv_purchase_debit';
             } else if (filter === 'ppv_earning') {
                 query.type = 'ppv_earning_credit';
+            } else if (filter === 'engagement_earning') {
+                query.type = 'engagement_earning_credit';
             } else {
                 query.type = filter;
             }
