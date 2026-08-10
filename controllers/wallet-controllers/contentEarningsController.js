@@ -83,45 +83,73 @@ export const getContentEarnings = async (req, res) => {
         let engagementMonthlyChart = [];
 
         if (wallet) {
-            // Lifetime engagement earnings for this content
-            const lifetimeEng = await WalletTransaction.aggregate([
-                { $match: { walletId: wallet._id, type: 'engagement_earning_credit', relatedContentId: new mongoose.Types.ObjectId(contentId), status: 'completed' } },
-                { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-            ]);
-            if (lifetimeEng[0]) {
-                engagementLifetime = { totalEarnings: lifetimeEng[0].total, totalPayouts: lifetimeEng[0].count };
+            const contentObjId = new mongoose.Types.ObjectId(contentId);
+            const contentStrId = contentId.toString();
+
+            // Query all engagement credit transactions for this wallet
+            const engTxns = await WalletTransaction.find({
+                walletId: wallet._id,
+                type: 'engagement_earning_credit',
+                status: 'completed',
+                $or: [
+                    { relatedContentId: contentObjId },
+                    { 'metadata.contentBreakdown.contentId': contentObjId },
+                    { 'metadata.contentBreakdown.contentId': contentStrId }
+                ]
+            }).sort({ createdAt: -1 }).lean();
+
+            let lifetimeTotal = 0;
+            let lifetimeCount = 0;
+            let filteredTotal = 0;
+            let filteredCount = 0;
+            const monthlyMap = new Map();
+
+            for (const txn of engTxns) {
+                let earnedForThisContent = 0;
+                if (txn.metadata?.contentBreakdown && Array.isArray(txn.metadata.contentBreakdown)) {
+                    const item = txn.metadata.contentBreakdown.find(
+                        c => c.contentId?.toString() === contentStrId
+                    );
+                    if (item) {
+                        earnedForThisContent = Number(item.payoutAmount || 0);
+                    }
+                } else if (txn.relatedContentId?.toString() === contentStrId) {
+                    earnedForThisContent = Number(txn.amount || 0);
+                }
+
+                if (earnedForThisContent > 0) {
+                    lifetimeTotal += earnedForThisContent;
+                    lifetimeCount += 1;
+
+                    const txnDateObj = new Date(txn.createdAt);
+                    const mKey = `${txnDateObj.getUTCFullYear()}-${String(txnDateObj.getUTCMonth() + 1).padStart(2, '0')}`;
+                    monthlyMap.set(mKey, (monthlyMap.get(mKey) || 0) + earnedForThisContent);
+
+                    // Check if txn falls within selected filtered month/date
+                    let isFilteredMatch = false;
+                    if (selectedDate) {
+                        const start = new Date(`${selectedDate}T00:00:00.000+05:30`);
+                        const end = new Date(`${selectedDate}T23:59:59.999+05:30`);
+                        if (txnDateObj >= start && txnDateObj <= end) isFilteredMatch = true;
+                    } else if (selectedMonth) {
+                        if (mKey === selectedMonth) isFilteredMatch = true;
+                    }
+
+                    if (isFilteredMatch) {
+                        filteredTotal += earnedForThisContent;
+                        filteredCount += 1;
+                    }
+                }
             }
 
-            // Monthly chart
-            engagementMonthlyChart = await WalletTransaction.aggregate([
-                { $match: { walletId: wallet._id, type: 'engagement_earning_credit', relatedContentId: new mongoose.Types.ObjectId(contentId), status: 'completed' } },
-                { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
-                { $sort: { _id: -1 } },
-                { $limit: 12 },
-                { $project: { month: '$_id', totalEarnings: '$total', payoutCount: '$count', _id: 0 } }
-            ]);
+            engagementLifetime = { totalEarnings: parseFloat(lifetimeTotal.toFixed(2)), totalPayouts: lifetimeCount };
+            engagementFiltered = { totalEarnings: parseFloat(filteredTotal.toFixed(2)), totalPayouts: filteredCount };
 
-            // Filtered engagement
-            if (selectedMonth || selectedDate) {
-                let dateMatch = {};
-                if (selectedDate) {
-                    const start = new Date(`${selectedDate}T00:00:00.000+05:30`);
-                    const end = new Date(`${selectedDate}T23:59:59.999+05:30`);
-                    dateMatch = { createdAt: { $gte: start, $lte: end } };
-                } else if (selectedMonth) {
-                    const [y, m] = selectedMonth.split('-');
-                    const start = new Date(Date.UTC(parseInt(y), parseInt(m) - 1, 1));
-                    const end = new Date(Date.UTC(parseInt(y), parseInt(m), 1));
-                    dateMatch = { createdAt: { $gte: start, $lt: end } };
-                }
-                const filteredEng = await WalletTransaction.aggregate([
-                    { $match: { walletId: wallet._id, type: 'engagement_earning_credit', relatedContentId: new mongoose.Types.ObjectId(contentId), status: 'completed', ...dateMatch } },
-                    { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
-                ]);
-                if (filteredEng[0]) {
-                    engagementFiltered = { totalEarnings: filteredEng[0].total, totalPayouts: filteredEng[0].count };
-                }
-            }
+            engagementMonthlyChart = Array.from(monthlyMap.entries()).map(([month, totalEarnings]) => ({
+                month,
+                totalEarnings: parseFloat(totalEarnings.toFixed(2)),
+                payoutCount: 1
+            })).sort((a, b) => b.month.localeCompare(a.month)).slice(0, 12);
         }
 
         // Available months
