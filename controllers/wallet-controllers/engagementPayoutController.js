@@ -154,16 +154,10 @@ export const runEngagementPayout = async (req, res) => {
         await OtpSession.deleteOne({ _id: otpSession._id });
 
         const now = new Date();
-        const month = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const baseMonth = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const month = `${baseMonth}_bulk_${now.getTime()}`;
 
-        // Check if already run for this month (unless selective run)
         const isSelective = (Array.isArray(selectedContentIds) && selectedContentIds.length > 0) || (Array.isArray(selectedCreatorIds) && selectedCreatorIds.length > 0);
-        if (!isSelective) {
-            const existing = await EngagementPayout.findOne({ payoutMonth: month });
-            if (existing && existing.status === 'completed') {
-                return res.status(400).json({ error: `Engagement payout already completed for month ${month}` });
-            }
-        }
 
         // Find periodStart from the last successful run
         const lastPayout = await EngagementPayout.findOne({ status: 'completed' }).sort({ createdAt: -1 });
