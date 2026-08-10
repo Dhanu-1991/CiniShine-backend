@@ -115,6 +115,14 @@ export function getOtpEmailContent(otp, purposeInput = 'default') {
       badgeColor: "#059669",
       headerGradient: "linear-gradient(135deg, #059669 0%, #047857 100%)",
     },
+    engagement_payout: {
+      title: "Engagement Payout Verification",
+      subject: `[${PLATFORM_NAME}] Action Required - Engagement Payout Security OTP`,
+      heading: "Authorize Engagement Payout Execution",
+      message: "An administrative request to calculate and release engagement-based content earnings was initiated. Please use the One-Time Password (OTP) below to authorize the engagement payout batch execution:",
+      badgeColor: "#059669",
+      headerGradient: "linear-gradient(135deg, #059669 0%, #0d9488 100%)",
+    },
     admin_login: {
       title: "Admin Portal Security Code",
       subject: `[${PLATFORM_NAME}] Security Code - Admin Access Authentication`,
