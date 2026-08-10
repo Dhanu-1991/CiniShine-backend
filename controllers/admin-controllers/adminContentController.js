@@ -12,15 +12,14 @@ import Comment from '../../models/comment.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import WatchHistory from '../../models/watchHistory.model.js';
 import ContentWatchtime from '../../models/contentWatchtime.model.js';
-import Purchase from '../../models/purchase.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
+import KycDetails from '../../models/kycDetails.model.js';
 import Payout from '../../models/payout.model.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 const ARCHIVE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
 const s3 = new S3Client({ region: process.env.AWS_REGION });
 const BUCKET = process.env.S3_BUCKET;
 
@@ -637,7 +636,7 @@ export const getCreatorProfile = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
 
-        const [subscriberCount, contentCount, communities, wallet, pendingPayout, allPayouts] = await Promise.all([
+        const [subscriberCount, contentCount, communities, wallet, pendingPayout, allPayouts, kycDetails] = await Promise.all([
             creator.subscriberCountOverride !== null && creator.subscriberCountOverride !== undefined
                 ? Promise.resolve(creator.subscriberCountOverride)
                 : User.countDocuments({ subscriptions: id }),
@@ -648,6 +647,7 @@ export const getCreatorProfile = async (req, res) => {
             SecondaryWallet.findOne({ userId: id }).lean(),
             Payout.findOne({ userId: id, status: 'pending_settlement' }).lean(),
             Payout.find({ userId: id }).sort({ createdAt: -1 }).lean(),
+            KycDetails.findOne({ userId: id }).lean(),
         ]);
 
         // Transform profile picture through CloudFront

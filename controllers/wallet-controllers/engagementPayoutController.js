@@ -22,16 +22,16 @@ function mapRange(val, inMin, inMax, outMin, outMax) {
 
 // Helper to compute engagement metrics and payout for a single content
 async function calculateContentPayout(content, baseCpm = 0.25) {
+    const views = content.views || 0;
     const avgWatchPctMultiplier = mapRange(content.averageWatchPercent || 0, 0, 100, 0.5, 1.5);
     const completionMultiplier = mapRange(content.completionRate || 0, 0, 100, 0.5, 1.5);
     
     const likes = content.likeCount || 0;
-    const dislikes = content.dislikeCount || 0;
-    const likeRatio = likes / Math.max(likes + dislikes, 1);
-    const likeMultiplier = mapRange(likeRatio, 0, 1, 0.8, 1.3);
+    // Enhanced Like Rate: Likes relative to total views (capped at 10% like-to-view ratio)
+    const likeRate = Math.min(likes / Math.max(views, 1), 0.1) / 0.1;
+    const likeMultiplier = mapRange(likeRate, 0, 1, 0.8, 1.3);
     
     const comments = await Comment.countDocuments({ videoId: content._id });
-    const views = content.views || 0;
     const commentRate = Math.min(comments / Math.max(views, 1), 0.1) / 0.1;
     const commentMultiplier = mapRange(commentRate, 0, 1, 0.9, 1.2);
     
@@ -57,7 +57,7 @@ async function calculateContentPayout(content, baseCpm = 0.25) {
             avgWatchPercent: content.averageWatchPercent || 0,
             completionRate: content.completionRate || 0,
             likes,
-            dislikes,
+            dislikes: content.dislikeCount || 0,
             shares,
             comments
         }
@@ -108,7 +108,7 @@ export const sendEngagementPayoutOtp = async (req, res) => {
 
 export const runEngagementPayout = async (req, res) => {
     try {
-        const { otp, minViews = 10 } = req.body;
+        const { otp, minViews = 0, selectedContentIds, selectedCreatorIds } = req.body;
         
         if (!otp) {
             return res.status(400).json({ error: "Admin OTP is required to initiate engagement payout" });
@@ -142,10 +142,13 @@ export const runEngagementPayout = async (req, res) => {
         const now = new Date();
         const month = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-        // Check if already run for this month
-        const existing = await EngagementPayout.findOne({ payoutMonth: month });
-        if (existing && existing.status === 'completed') {
-            return res.status(400).json({ error: `Engagement payout already completed for month ${month}` });
+        // Check if already run for this month (unless selective run)
+        const isSelective = (Array.isArray(selectedContentIds) && selectedContentIds.length > 0) || (Array.isArray(selectedCreatorIds) && selectedCreatorIds.length > 0);
+        if (!isSelective) {
+            const existing = await EngagementPayout.findOne({ payoutMonth: month });
+            if (existing && existing.status === 'completed') {
+                return res.status(400).json({ error: `Engagement payout already completed for month ${month}` });
+            }
         }
 
         // Find periodStart from the last successful run
@@ -154,9 +157,16 @@ export const runEngagementPayout = async (req, res) => {
         const periodEnd = now;
 
         console.log(`\n=================== [ENGAGEMENT_PAYOUT_INIT] ===================`);
-        console.log(`Month: ${month}, Min Views: ${minViews}`);
+        console.log(`Month: ${month}, Min Views: ${minViews}, Selective: ${isSelective}`);
 
-        const allContent = await Content.find({ status: { $ne: 'removed' }, views: { $gte: minViews } }).populate('userId', 'userName channelName channelBanned').lean();
+        const filterQuery = { status: { $ne: 'removed' }, views: { $gte: Math.max(minViews, 1) } };
+        if (Array.isArray(selectedContentIds) && selectedContentIds.length > 0) {
+            filterQuery._id = { $in: selectedContentIds.map(id => new mongoose.Types.ObjectId(id)) };
+        } else if (Array.isArray(selectedCreatorIds) && selectedCreatorIds.length > 0) {
+            filterQuery.userId = { $in: selectedCreatorIds.map(id => new mongoose.Types.ObjectId(id)) };
+        }
+
+        const allContent = await Content.find(filterQuery).populate('userId', 'userName channelName channelBanned').lean();
         
         const contentPayouts = [];
         let totalPool = 0;
@@ -294,9 +304,9 @@ export const runEngagementPayout = async (req, res) => {
 
 export const previewEngagementPayout = async (req, res) => {
     try {
-        const minViews = parseInt(req.query.minViews) || 10;
+        const minViews = req.query.minViews !== undefined ? parseInt(req.query.minViews) : 0;
         
-        const allContent = await Content.find({ status: { $ne: 'removed' }, views: { $gte: minViews } }).populate('userId', 'userName channelName channelBanned').lean();
+        const allContent = await Content.find({ status: { $ne: 'removed' }, views: { $gte: Math.max(minViews, 1) } }).populate('userId', 'userName channelName channelBanned').lean();
         
         const contentPayouts = [];
         let totalPool = 0;
@@ -367,7 +377,7 @@ export const getEngagementPayoutReport = async (req, res) => {
 
 export const runSingleCreatorEngagementPayout = async (req, res) => {
     try {
-        const { userId, otp, minViews = 10 } = req.body;
+        const { userId, otp, minViews = 0 } = req.body;
         
         if (!userId) {
             return res.status(400).json({ error: "User ID is required" });
@@ -410,7 +420,7 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
             return res.status(400).json({ error: "Creator not found or banned" });
         }
 
-        const allContent = await Content.find({ userId, status: { $ne: 'removed' }, views: { $gte: minViews } }).populate('userId', 'userName channelName channelBanned').lean();
+        const allContent = await Content.find({ userId, status: { $ne: 'removed' }, views: { $gte: Math.max(minViews, 1) } }).populate('userId', 'userName channelName channelBanned').lean();
         
         const contentPayouts = [];
         let totalPayout = 0;
