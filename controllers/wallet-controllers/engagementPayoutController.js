@@ -57,7 +57,13 @@ function bayesianRate(observed, sampleSize, priorRate, priorWeight = BAYESIAN_PR
  */
 function calculateContentPayout(content, commentCount, shareCount, baseCpm = BASE_CPM) {
     const totalViews = content.views || 0;
-    const previousPaidViews = content.lastEngagementPayoutViews || content.paidViews || 0;
+    // Number.isFinite covers both undefined and null — MongoDB does NOT backfill defaults
+    // to existing documents, so lastEngagementPayoutViews is undefined (not 0) on old content.
+    // If undefined → first-ever payout → all current views count as delta (baseline = 0).
+    // If 0 explicitly stored → content was checked before but had 0 views → still 0 baseline.
+    const previousPaidViews = Number.isFinite(content.lastEngagementPayoutViews)
+        ? content.lastEngagementPayoutViews
+        : 0;
     const deltaViews = Math.max(totalViews - previousPaidViews, 0);
 
     // ── Skip guards ──────────────────────────────────────────────────────
@@ -66,7 +72,9 @@ function calculateContentPayout(content, commentCount, shareCount, baseCpm = BAS
     }
 
     const avgWatchPercent = content.averageWatchPercent || 0;
-    if (avgWatchPercent < MIN_WATCH_PERCENT) {
+    // Only skip on very low watch percent if content has significant views (>100)
+    // For small view counts, watch percent data can be unreliable
+    if (avgWatchPercent < MIN_WATCH_PERCENT && deltaViews > 100) {
         return { skip: true, reason: `Average watch % too low (${avgWatchPercent.toFixed(1)}% < ${MIN_WATCH_PERCENT}% minimum)`, deltaViews };
     }
 
@@ -497,6 +505,7 @@ export const runEngagementPayout = async (req, res) => {
                         contentType: item.contentType,
                         creatorId: item.creatorId,
                         creatorName: item.creatorName,
+                        amount: item.payoutAmount,
                         error: error.message,
                     });
                 }
@@ -587,6 +596,7 @@ export const previewEngagementPayout = async (req, res) => {
                 skippedContents.push({
                     contentId: content._id,
                     contentTitle: content.title || 'Untitled',
+                    creatorName: creator ? (creator.channelName || creator.userName || 'Unknown') : 'Unknown',
                     reason: !creator ? 'Creator not found' : 'Channel banned',
                     views: content.views || 0,
                 });
@@ -654,8 +664,11 @@ export const previewEngagementPayout = async (req, res) => {
 export const getEngagementPayoutReport = async (req, res) => {
     try {
         const { month } = req.params;
-        const regex = new RegExp(`^${month}`);
-        const payouts = await EngagementPayout.find({ payoutMonth: regex })
+        let filter = {};
+        if (month && month !== 'all') {
+            filter.payoutMonth = { $regex: new RegExp(`^${month}`) };
+        }
+        const payouts = await EngagementPayout.find(filter)
             .sort({ createdAt: -1 })
             .lean();
         

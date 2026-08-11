@@ -94,7 +94,7 @@ export const getContentEarnings = async (req, res) => {
 
         // 1. Query EngagementPayout records (strongly typed contentPayouts array)
         const engPayouts = await EngagementPayout.find({
-            status: 'completed',
+            status: { $in: ['completed', 'partial'] },
             $or: [
                 { 'contentPayouts.contentId': contentObjId },
                 { 'contentPayouts.contentId': contentStrId }
