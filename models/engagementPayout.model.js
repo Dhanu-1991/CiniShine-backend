@@ -36,13 +36,22 @@ const engagementPayoutSchema = new mongoose.Schema({
   },
   baseCpm: {
     type: Number,
-    default: 0.25,
+    default: 0.13, // ₹0.13/view = ₹130/1K views floor
+  },
+  maxCpm: {
+    type: Number,
+    default: 0.175, // ₹0.175/view = ₹175/1K views ceiling
   },
   status: {
     type: String,
-    enum: ['completed', 'failed'],
+    enum: ['completed', 'failed', 'partial'],
     default: 'completed',
   },
+  skippedPayouts: [{
+    contentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Content' },
+    contentTitle: String,
+    reason: String,
+  }],
   initiatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',
@@ -53,18 +62,21 @@ const engagementPayoutSchema = new mongoose.Schema({
     contentType: String,
     creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     creatorName: String,
-    engagementScore: Number,
-    engagementMultiplier: Number,
+    engagementScore: Number,   // 0-100 EQS score
+    engagementMultiplier: Number, // e.g. 1.0x – 1.35x
     payoutAmount: Number,
     metrics: {
       views: Number,
+      newViews: Number,
+      paidViews: Number,
       totalWatchTime: Number,
       avgWatchPercent: Number,
       completionRate: Number,
       likes: Number,
       dislikes: Number,
       shares: Number,
-      comments: Number
+      comments: Number,
+      duration: Number,
     }
   }],
   periodStart: Date,

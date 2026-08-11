@@ -54,6 +54,10 @@ const walletTransactionSchema = new mongoose.Schema({
     relatedBuyerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     // Detailed Tax & Revenue breakdown snapshot for PPV transactions
     taxBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
+    // Human-readable description of the transaction
+    description: { type: String, default: null },
+    // Flexible metadata: e.g. contentBreakdown for engagement earnings
+    metadata: { type: mongoose.Schema.Types.Mixed, default: null },
     status: {
         type: String,
         enum: ['pending', 'completed', 'failed', 'abandoned'],
