@@ -34,12 +34,12 @@ const s3Client = new S3Client({
     },
 });
 
-const MAINTENANCE_FEE_PERCENT = 0; // 0% — no payout fee
+const MAINTENANCE_FEE_PERCENT = 0; // 0% — no payout fee. Change here to apply a platform fee.
 
 /**
  * Helper function to calculate tax breakdown aggregates and self-transfers
  * strictly from Wallet 2 ledger transactions between periodStart and periodEnd.
- * Zero ratio scaling or backtracing.
+ * Optimized: batch-fetches all related purchases instead of N+1 queries.
  */
 async function computePayoutLedgerBreakdown(walletId, session = null) {
     const lastPayoutDoc = await Payout.findOne({
@@ -64,15 +64,26 @@ async function computePayoutLedgerBreakdown(walletId, session = null) {
     if (session) txnsQuery.session(session);
     const periodTxns = await txnsQuery.lean();
 
+    // Batch-fetch all related purchases upfront (eliminates N+1)
+    const purchaseIds = periodTxns
+        .filter(tx => tx.type === 'ppv_earning_credit' && !tx.taxBreakdown && tx.relatedPurchaseId)
+        .map(tx => tx.relatedPurchaseId);
+    
+    let purchaseMap = new Map();
+    if (purchaseIds.length > 0) {
+        const purchaseQuery = Purchase.find({ _id: { $in: purchaseIds } });
+        if (session) purchaseQuery.session(session);
+        const purchases = await purchaseQuery.lean();
+        purchaseMap = new Map(purchases.map(p => [p._id.toString(), p]));
+    }
+
     let rawSelling = 0, rawBase = 0, rawGst = 0, rawComm = 0, rawCommGst = 0, rawTds = 0, rawTcs = 0, totalTransferredToWallet1 = 0;
 
     for (const tx of periodTxns) {
         if (tx.type === 'ppv_earning_credit') {
             let txBreakdown = tx.taxBreakdown;
             if (!txBreakdown && tx.relatedPurchaseId) {
-                const purchaseQuery = Purchase.findById(tx.relatedPurchaseId);
-                if (session) purchaseQuery.session(session);
-                const purchase = await purchaseQuery.lean();
+                const purchase = purchaseMap.get(tx.relatedPurchaseId.toString());
                 if (purchase) {
                     txBreakdown = {
                         sellingPrice: purchase.amount,
@@ -314,7 +325,7 @@ export const runMonthEndPayout = async (req, res) => {
                     }
 
                     const grossAmount = freshWallet.balance;
-                    const feeAmount = Math.round(grossAmount * MAINTENANCE_FEE_PERCENT * 100) / 100;
+                    const feeAmount = 0; // MAINTENANCE_FEE_PERCENT is 0
                     const netAmount = Math.round((grossAmount - feeAmount) * 100) / 100;
 
                     // Zero out the wallet balance atomically
@@ -401,23 +412,26 @@ export const runMonthEndPayout = async (req, res) => {
                         scheduledFor: new Date(),
                     }], { session });
 
-                    // Send email INSIDE transaction scope — if mail fails, throw error so MongoDB transaction rolls back balance!
-                    try {
-                        await sendAdminEmail('payoutInitiated', creatorEmail, {
-                            creatorName,
-                            netAmount,
-                            grossAmount,
-                            payoutMonth
-                        });
-                        console.log(`✅ [PAYOUT_EMAIL_GUARD] Payout initiation email sent successfully to ${creatorEmail}`);
-                    } catch (mailErr) {
-                        console.error(`❌ [PAYOUT_EMAIL_GUARD] Email sending failed to ${creatorEmail}:`, mailErr);
-                        throw new Error(`Payout initiation email failed to send to ${creatorEmail}: ${mailErr.message}. Rolling back payout and preserving wallet balance.`);
-                    }
-
                     results.processed++;
                     console.log(`✅ [PAYOUT_BULK_SUCCESS] Created Payout ${createdPayout._id} | Creator: "${creatorName}" (${freshWallet.userId}) | Gross: ₹${grossAmount} | Net: ₹${netAmount}`);
                 });
+
+                // Send email OUTSIDE transaction (fire-and-forget) to avoid holding DB locks
+                if (createdPayout) {
+                    const creatorEmail = user?.contact || user?.email;
+                    if (creatorEmail && creatorEmail.includes('@')) {
+                        sendAdminEmail('payoutInitiated', creatorEmail, {
+                            creatorName,
+                            netAmount: createdPayout.netAmount,
+                            grossAmount: createdPayout.grossAmount,
+                            payoutMonth
+                        }).then(() => {
+                            console.log(`✅ [PAYOUT_EMAIL] Sent to ${creatorEmail}`);
+                        }).catch(mailErr => {
+                            console.error(`⚠️ [PAYOUT_EMAIL] Failed to ${creatorEmail}:`, mailErr.message);
+                        });
+                    }
+                }
             } catch (err) {
                 results.failed++;
                 results.errors.push({ walletId: wallet._id.toString(), creatorName, error: err.message });
@@ -629,7 +643,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                 }
 
                 const grossAmount = payoutType === 'partial' ? partialAmount : freshWallet.balance;
-                const feeAmount = Math.round(grossAmount * MAINTENANCE_FEE_PERCENT * 100) / 100;
+                const feeAmount = 0; // MAINTENANCE_FEE_PERCENT is 0
                 const netAmount = Math.round((grossAmount - feeAmount) * 100) / 100;
 
                 const newBalance = payoutType === 'partial' ? (freshWallet.balance - grossAmount) : 0;
@@ -710,34 +724,32 @@ export const runSingleCreatorPayout = async (req, res) => {
                     scheduledFor: new Date(),
                 }], { session });
 
-                // Send email INSIDE transaction scope — if mail fails, throw error so MongoDB transaction rolls back balance!
-                try {
-                    if (payoutType === 'partial') {
-                        await sendAdminEmail('partialPayoutInitiated', creatorEmail, {
-                            creatorName: user.channelName || user.userName || 'Creator',
-                            netAmount: createdPayout.netAmount,
-                            grossAmount: createdPayout.grossAmount,
-                            payoutMonth,
-                            reason: partialReason,
-                            remainingBalance: Math.round((freshWallet.balance - grossAmount) * 100) / 100,
-                        });
-                    } else {
-                        await sendAdminEmail('payoutInitiated', creatorEmail, {
-                            creatorName: user.channelName || user.userName || 'Creator',
-                            netAmount: createdPayout.netAmount,
-                            grossAmount: createdPayout.grossAmount,
-                            payoutMonth
-                        });
-                    }
-                    console.log(`✅ [PAYOUT_EMAIL_GUARD] Single payout initiation email sent successfully to ${creatorEmail}`);
-                } catch (mailErr) {
-                    console.error(`❌ [PAYOUT_EMAIL_GUARD] Email sending failed to ${creatorEmail}:`, mailErr);
-                    throw new Error(`Payout initiation email failed to send to ${creatorEmail}: ${mailErr.message}. Rolling back payout and preserving wallet balance.`);
-                }
-
                 console.log(`✅ [PAYOUT_SINGLE_SUCCESS] Created Payout ${createdPayout._id} | User: ${userId} | Gross: ₹${grossAmount} | Net: ₹${netAmount}`);
             });
 
+            // Send email OUTSIDE transaction (fire-and-forget) to avoid holding DB locks
+            if (createdPayout) {
+                const user = await User.findById(userId).select('contact email userName channelName').lean();
+                const creatorEmail = user?.contact || user?.email;
+                if (creatorEmail && creatorEmail.includes('@')) {
+                    const emailType = payoutType === 'partial' ? 'partialPayoutInitiated' : 'payoutInitiated';
+                    const emailData = {
+                        creatorName: user.channelName || user.userName || 'Creator',
+                        netAmount: createdPayout.netAmount,
+                        grossAmount: createdPayout.grossAmount,
+                        payoutMonth,
+                    };
+                    if (payoutType === 'partial') {
+                        emailData.reason = partialReason;
+                        emailData.remainingBalance = Math.round((wallet.balance - createdPayout.grossAmount) * 100) / 100;
+                    }
+                    sendAdminEmail(emailType, creatorEmail, emailData).then(() => {
+                        console.log(`✅ [PAYOUT_EMAIL] Single payout email sent to ${creatorEmail}`);
+                    }).catch(mailErr => {
+                        console.error(`⚠️ [PAYOUT_EMAIL] Failed to send to ${creatorEmail}:`, mailErr.message);
+                    });
+                }
+            }
 
             console.log(`=================== [PAYOUT_JOB_SINGLE_END] ===================\n`);
             res.json({

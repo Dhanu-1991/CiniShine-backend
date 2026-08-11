@@ -4,6 +4,7 @@ import User from '../../models/user.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import WalletTransaction from '../../models/walletTransaction.model.js';
 import Comment from '../../models/comment.model.js';
+import ContentShare from '../../models/contentShare.model.js';
 import EngagementPayout from '../../models/engagementPayout.model.js';
 import OtpSession from '../../models/adminOtpSession.model.js';
 import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
@@ -11,146 +12,209 @@ import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js'
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import crypto from 'crypto';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const BASE_CPM = 0.13;        // ₹0.13/view = ₹130/1K views (floor)
-const MAX_CPM  = 0.175;       // ₹0.175/view = ₹175/1K views (ceiling)
-const CPM_BOOST = MAX_CPM - BASE_CPM; // ₹0.045 available to earn via engagement
-const MIN_NEW_VIEWS = 5;      // must have at least 5 new views to be eligible
+// ─── Constants ───────────────────────────────────────────────────────────────
+const BASE_CPM = 200;           // ₹200 per 1K views (max theoretical rate)
+const MIN_VIEWS_FOR_PAYOUT = 10; // Minimum delta views to qualify
+const MIN_WATCH_PERCENT = 5;     // Minimum avg watch % to qualify
+const BAYESIAN_PRIOR_WEIGHT = 100; // Smoothing factor for rate estimation
+const MAX_PAYOUT_PER_CONTENT = 50000; // ₹50K cap per content per cycle
+
+// Expected baseline rates for Bayesian smoothing
+const PRIOR_LIKE_RATE = 0.03;    // 3% is a normal like rate
+const PRIOR_COMMENT_RATE = 0.01; // 1% is a normal comment rate
+const PRIOR_SHARE_RATE = 0.005;  // 0.5% is a normal share rate
+
+// Quality score thresholds for normalization (what score = 1.0)
+const FULL_WATCH_PERCENT = 70;    // 70% avg watch = perfect score
+const FULL_COMPLETION_RATE = 80;  // 80% completion = perfect score
+const FULL_LIKE_RATE = 0.05;      // 5% adj. like rate = perfect score
+const FULL_COMMENT_RATE = 0.02;   // 2% adj. comment rate = perfect score
+const FULL_SHARE_RATE = 0.01;     // 1% adj. share rate = perfect score
+const FULL_DURATION_MINUTES = 10; // 10+ minute content = full duration score
 
 function clamp(val, min, max) {
     return Math.min(Math.max(val, min), max);
 }
 
 /**
- * Compute a normalised 0-1 Engagement Quality Score (EQS) from content metrics.
- *
- * Weights (must sum to 1.0):
- *   Watch-time completion  35% — most important signal of genuine viewership
- *   Completion rate        25% — how many viewers finish the content
- *   Like rate              15% — active positive engagement
- *   Comment rate           10% — high-effort engagement
- *   Freshness factor       10% — proportion of views that are new (growth signal)
- *   Share rate              5% — viral distribution
+ * Bayesian-smoothed rate estimation.
+ * Prevents edge cases where low sample sizes produce extreme rates.
+ * E.g., 5 views + 5 likes = 100% like rate → smoothed to ~5.7% with prior weight 100.
  */
-function computeEqs(metrics) {
-    const { views, newViews, avgWatchPercent, completionRate, likes, comments, shares } = metrics;
-    const safeViews = Math.max(views, 1);
-
-    // Watch-time: 65% avg watch = perfect score
-    const watchScore = clamp(avgWatchPercent / 65, 0, 1);
-
-    // Completion: 55% full completion = perfect score
-    const completionScore = clamp(completionRate / 55, 0, 1);
-
-    // Like rate: 5% like-to-view ratio = perfect (anti-spam capped)
-    const rawLikeRate = likes / safeViews;
-    const likeScore = clamp(rawLikeRate / 0.05, 0, 1);
-
-    // Comment rate: 2% comment-to-view = perfect
-    const commentScore = clamp((comments / safeViews) / 0.02, 0, 1);
-
-    // Freshness: what fraction of total views are "new" (since last payout)
-    const freshnessScore = clamp(newViews / safeViews, 0, 1);
-
-    // Share rate: 1% share-to-view = perfect
-    const shareScore = clamp((shares / safeViews) / 0.01, 0, 1);
-
-    const eqs =
-        watchScore      * 0.35 +
-        completionScore * 0.25 +
-        likeScore       * 0.15 +
-        commentScore    * 0.10 +
-        freshnessScore  * 0.10 +
-        shareScore      * 0.05;
-
-    return clamp(eqs, 0, 1);
+function bayesianRate(observed, sampleSize, priorRate, priorWeight = BAYESIAN_PRIOR_WEIGHT) {
+    return (observed + priorRate * priorWeight) / (sampleSize + priorWeight);
 }
 
 /**
- * Compute payout for a single content item.
- * Uses newViews (views since last payout) to prevent double-paying old data.
- * Returns null if not eligible.
+ * Compute engagement quality score and payout for a single content item.
+ * Uses delta-based views (only new views since last payout).
+ * 
+ * @param {Object} content - Content document with engagement metrics
+ * @param {number} commentCount - Pre-fetched comment count
+ * @param {number} shareCount - Pre-fetched share count (from ContentShare)
+ * @param {number} baseCpm - Base CPM in ₹ per 1K views (default 200)
+ * @returns {Object} Payout calculation result
  */
-function computeContentPayout(content, commentCount) {
+function calculateContentPayout(content, commentCount, shareCount, baseCpm = BASE_CPM) {
     const totalViews = content.views || 0;
-    const paidViews  = content.paidViews || 0;
-    const newViews   = Math.max(totalViews - paidViews, 0);
+    const previousPaidViews = content.lastEngagementPayoutViews || content.paidViews || 0;
+    const deltaViews = Math.max(totalViews - previousPaidViews, 0);
 
-    if (newViews < MIN_NEW_VIEWS) return null;
-
-    const metrics = {
-        views: totalViews,
-        newViews,
-        paidViews,
-        avgWatchPercent: content.averageWatchPercent || 0,
-        completionRate:  content.completionRate || 0,
-        likes:    content.likeCount || 0,
-        dislikes: content.dislikeCount || 0,
-        comments: commentCount,
-        shares:   content.shareCount || 0,
-        totalWatchTime: content.totalWatchTime || 0,
-        duration: content.duration || 0,
-    };
-
-    const eqs = computeEqs(metrics);
-    const effectiveCpm = BASE_CPM + eqs * CPM_BOOST;
-
-    // Growth factor: bonus for content with rapidly growing views
-    let growthFactor = 1.0;
-    if (totalViews > 0) {
-        const newViewRatio = newViews / totalViews;
-        if (newViewRatio >= 0.60) growthFactor = 1.10;      // 60%+ new views = viral
-        else if (newViewRatio >= 0.30) growthFactor = 1.05; // 30%+ = growing
+    // ── Skip guards ──────────────────────────────────────────────────────
+    if (deltaViews < MIN_VIEWS_FOR_PAYOUT) {
+        return { skip: true, reason: `Insufficient new views (${deltaViews} < ${MIN_VIEWS_FOR_PAYOUT} minimum)`, deltaViews };
     }
 
-    const payoutAmount = newViews * effectiveCpm * growthFactor;
+    const avgWatchPercent = content.averageWatchPercent || 0;
+    if (avgWatchPercent < MIN_WATCH_PERCENT) {
+        return { skip: true, reason: `Average watch % too low (${avgWatchPercent.toFixed(1)}% < ${MIN_WATCH_PERCENT}% minimum)`, deltaViews };
+    }
+
+    const duration = content.duration || 0;
+    // Skip non-short content under 10 seconds (likely spam/error uploads)
+    if (duration > 0 && duration < 10 && content.contentType !== 'short') {
+        return { skip: true, reason: `Content too short (${duration}s, non-short type)`, deltaViews };
+    }
+
+    // ── Bayesian-smoothed engagement rates ───────────────────────────────
+    const likes = content.likeCount || 0;
+    const adjLikeRate = bayesianRate(likes, totalViews, PRIOR_LIKE_RATE);
+
+    const adjCommentRate = bayesianRate(commentCount, totalViews, PRIOR_COMMENT_RATE);
+
+    const adjShareRate = bayesianRate(shareCount, totalViews, PRIOR_SHARE_RATE);
+
+    // ── Quality score components (each 0.0 to 1.0) ──────────────────────
+    const watchTimeScore = clamp(avgWatchPercent / FULL_WATCH_PERCENT, 0, 1);
+    const completionScore = clamp((content.completionRate || 0) / FULL_COMPLETION_RATE, 0, 1);
+    const likeScore = clamp(adjLikeRate / FULL_LIKE_RATE, 0, 1);
+    const commentScore = clamp(adjCommentRate / FULL_COMMENT_RATE, 0, 1);
+    const shareScore = clamp(adjShareRate / FULL_SHARE_RATE, 0, 1);
+
+    // Duration factor: longer content gets slight bonus (more creator effort)
+    const durationMinutes = duration / 60;
+    const durationScore = clamp(durationMinutes / FULL_DURATION_MINUTES, 0.3, 1.0);
+
+    // ── Weighted Quality Score (0.2 – 1.0 range) ────────────────────────
+    const qualityScore = watchTimeScore * 0.30
+                       + completionScore * 0.25
+                       + likeScore * 0.15
+                       + commentScore * 0.10
+                       + shareScore * 0.10
+                       + durationScore * 0.10;
+
+    // ── Engagement Multiplier ────────────────────────────────────────────
+    // Maps qualityScore to a multiplier that yields ~₹125-150 for normal engagement
+    // Normal engagement ≈ qualityScore ~0.65 → multiplier ~0.955 → ₹191/1K
+    // But with baseCpm=200, at multiplier 0.65: 200*0.65 = ₹130/1K ✓
+    // Let's use: multiplier = qualityScore directly (0.2 to 1.0)
+    // Normal: 0.65 * 200 = ₹130/1K ✓
+    // Excellent: 0.9 * 200 = ₹180/1K
+    // Poor: 0.35 * 200 = ₹70/1K
+    const engagementMultiplier = qualityScore;
+
+    // ── Calculate payout amount ──────────────────────────────────────────
+    let payoutAmount = (deltaViews / 1000) * baseCpm * engagementMultiplier;
+
+    // Apply per-content cap
+    payoutAmount = Math.min(payoutAmount, MAX_PAYOUT_PER_CONTENT);
+
+    // Round to 2 decimal places
+    payoutAmount = Math.round(payoutAmount * 100) / 100;
 
     return {
-        newViews,
-        paidViews,
+        skip: false,
+        deltaViews,
+        previousPaidViews,
         totalViews,
-        eqs: Math.round(eqs * 100),        // 0-100 score
-        engagementMultiplier: effectiveCpm / BASE_CPM, // e.g. 1.0x – 1.35x
-        effectiveCpm,
-        growthFactor,
+        engagementScore: qualityScore * 100,
+        engagementMultiplier,
         payoutAmount,
-        metrics,
+        metrics: {
+            views: totalViews,
+            deltaViews,
+            previousPaidViews,
+            totalWatchTime: content.totalWatchTime || 0,
+            avgWatchPercent,
+            completionRate: content.completionRate || 0,
+            duration,
+            likes,
+            dislikes: content.dislikeCount || 0,
+            shares: shareCount,
+            comments: commentCount,
+        }
     };
 }
 
-// ─── Batch fetch comment counts (eliminates N+1 queries) ────────────────────
-async function batchCommentCounts(contentIds) {
-    if (!contentIds.length) return {};
-    const results = await Comment.aggregate([
-        { $match: { videoId: { $in: contentIds } } },
-        { $group: { _id: '$videoId', count: { $sum: 1 } } },
-    ]);
-    const map = {};
-    for (const r of results) {
-        map[r._id.toString()] = r.count;
-    }
-    return map;
+/**
+ * Compute growth factor for content based on recent vs historical view velocity.
+ * Content that's gaining views faster than its historical average gets a bonus.
+ * 
+ * @param {Object} content - Content document
+ * @param {Date} periodStart - Start of the current payout period
+ * @returns {number} Growth factor (0.8 – 1.3)
+ */
+function computeGrowthFactor(content, periodStart) {
+    const totalViews = content.views || 0;
+    const previousPaidViews = content.lastEngagementPayoutViews || content.paidViews || 0;
+    const deltaViews = Math.max(totalViews - previousPaidViews, 0);
+    
+    const now = new Date();
+    const publishedAt = content.publishedAt || content.createdAt || now;
+    const totalDays = Math.max(1, (now - publishedAt) / (1000 * 60 * 60 * 24));
+    const periodDays = Math.max(1, (now - (periodStart || publishedAt)) / (1000 * 60 * 60 * 24));
+    
+    const historicalDailyVelocity = totalViews / totalDays;
+    const recentDailyVelocity = deltaViews / periodDays;
+    
+    if (historicalDailyVelocity <= 0) return 1.0;
+    
+    const growthRatio = recentDailyVelocity / historicalDailyVelocity;
+    return clamp(growthRatio, 0.8, 1.3);
 }
 
-// ─── OTP: Send engagement payout OTP ────────────────────────────────────────
+/**
+ * Batch-fetch comment and share counts for multiple content IDs.
+ * Eliminates N+1 query problem.
+ */
+async function batchFetchEngagementCounts(contentIds) {
+    const [commentAgg, shareAgg] = await Promise.all([
+        Comment.aggregate([
+            { $match: { videoId: { $in: contentIds } } },
+            { $group: { _id: '$videoId', count: { $sum: 1 } } }
+        ]),
+        ContentShare.aggregate([
+            { $match: { contentId: { $in: contentIds } } },
+            { $group: { _id: '$contentId', count: { $sum: 1 } } }
+        ])
+    ]);
+
+    const commentMap = new Map(commentAgg.map(c => [c._id.toString(), c.count]));
+    const shareMap = new Map(shareAgg.map(s => [s._id.toString(), s.count]));
+    return { commentMap, shareMap };
+}
+
+// ─── OTP ─────────────────────────────────────────────────────────────────────
+
 export const sendEngagementPayoutOtp = async (req, res) => {
     try {
         const contact = req.admin?.contact;
         if (!contact) {
-            return res.status(401).json({ error: 'Admin authentication required or contact details missing' });
+            return res.status(401).json({ error: "Admin authentication required or contact details missing" });
         }
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const channel = contact.includes('@') ? 'email' : 'sms';
 
         await OtpSession.deleteMany({ contact, purpose: 'engagement_payout' });
+
         await OtpSession.create({
             admin_id: req.admin._id,
             contact,
             otp_hash: crypto.createHash('sha256').update(otp).digest('hex'),
             channel,
             purpose: 'engagement_payout',
-            expires_at: new Date(Date.now() + 5 * 60 * 1000),
+            expires_at: new Date(Date.now() + 5 * 60 * 1000)
         });
 
         let sent = false;
@@ -161,7 +225,7 @@ export const sendEngagementPayoutOtp = async (req, res) => {
                 sent = await sendOtpToPhone(contact, otp);
             }
         } catch (emailErr) {
-            console.error('⚠️ OTP dispatch error:', emailErr.message);
+            console.error('⚠️ OTP email dispatch error:', emailErr.message);
         }
 
         console.log(`\n=================== [ADMIN_ENGAGEMENT_OTP] ===================`);
@@ -170,9 +234,9 @@ export const sendEngagementPayoutOtp = async (req, res) => {
 
         return res.json({
             success: true,
-            message: sent
+            message: sent 
                 ? `OTP sent successfully to admin contact (${contact})`
-                : `OTP generated for admin (${contact}): ${otp}`,
+                : `OTP generated for admin (${contact}): ${otp}`
         });
     } catch (error) {
         console.error('❌ Error sending engagement payout OTP:', error);
@@ -180,133 +244,83 @@ export const sendEngagementPayoutOtp = async (req, res) => {
     }
 };
 
-// ─── Preview: estimate payout without executing ──────────────────────────────
-export const previewEngagementPayout = async (req, res) => {
-    try {
-        const { minViews: minViewsQuery, creatorId } = req.query;
-        const minViews = minViewsQuery !== undefined ? parseInt(minViewsQuery, 10) : 0;
+// ─── BULK ENGAGEMENT PAYOUT ──────────────────────────────────────────────────
 
-        const query = {
-            status: { $ne: 'removed' },
-            contentType: { $in: ['video', 'audio'] },
-            views: { $gt: minViews },
-        };
-        if (creatorId && mongoose.Types.ObjectId.isValid(creatorId)) {
-            query.userId = new mongoose.Types.ObjectId(creatorId);
-        }
-
-        const allContent = await Content.find(query)
-            .populate('userId', 'userName channelName channelBanned')
-            .lean();
-
-        // Batch comment counts — single DB round-trip
-        const contentIds = allContent.map(c => c._id);
-        const commentMap = await batchCommentCounts(contentIds);
-
-        const contentBreakdown = [];
-        let totalPool = 0;
-        const creatorSet = new Set();
-        const skipped = [];
-
-        for (const content of allContent) {
-            const creator = content.userId;
-            if (!creator || creator.channelBanned) {
-                skipped.push({ contentId: content._id, reason: 'creator_banned' });
-                continue;
-            }
-
-            const commentCount = commentMap[content._id.toString()] || 0;
-            const calc = computeContentPayout(content, commentCount);
-            if (!calc) {
-                skipped.push({ contentId: content._id, contentTitle: content.title, reason: `new_views < ${MIN_NEW_VIEWS}` });
-                continue;
-            }
-
-            totalPool += calc.payoutAmount;
-            creatorSet.add(creator._id.toString());
-
-            contentBreakdown.push({
-                contentId: content._id,
-                contentTitle: content.title,
-                contentType: content.contentType,
-                creatorId: creator._id,
-                creatorName: creator.channelName || creator.userName || 'Unknown',
-                views: calc.totalViews,
-                newViews: calc.newViews,
-                paidViews: calc.paidViews,
-                eqs: calc.eqs,
-                engagementMultiplier: parseFloat(calc.engagementMultiplier.toFixed(4)),
-                effectiveCpm: parseFloat(calc.effectiveCpm.toFixed(6)),
-                growthFactor: calc.growthFactor,
-                payoutAmount: parseFloat(calc.payoutAmount.toFixed(4)),
-                metrics: calc.metrics,
-            });
-        }
-
-        return res.json({
-            success: true,
-            totalContent: contentBreakdown.length,
-            totalProjectedPayout: totalPool,
-            totalCreators: creatorSet.size,
-            minViewsThreshold: minViews,
-            baseCpmPerView: BASE_CPM,
-            maxCpmPerView: MAX_CPM,
-            formula: `₹${BASE_CPM * 1000}–₹${MAX_CPM * 1000}/1K new views, based on EQS (watch time, completion, likes, comments, freshness, shares)`,
-            skippedCount: skipped.length,
-            contentBreakdown,
-        });
-    } catch (error) {
-        console.error('❌ Error previewing engagement payout:', error);
-        return res.status(500).json({ error: 'Failed to preview engagement payout' });
-    }
-};
-
-// ─── Bulk run: execute payout for all eligible creators ─────────────────────
 export const runEngagementPayout = async (req, res) => {
     try {
-        const { otp, minViews = 0, selectedContentIds, selectedCreatorIds } = req.body;
-
+        const { otp, minViews = MIN_VIEWS_FOR_PAYOUT, selectedContentIds, selectedCreatorIds } = req.body;
+        
         if (!otp) {
-            return res.status(400).json({ error: 'Admin OTP is required to initiate engagement payout' });
+            return res.status(400).json({ error: "Admin OTP is required to initiate engagement payout" });
         }
 
         const contact = req.admin?.contact;
         if (!contact) {
-            return res.status(401).json({ error: 'Admin contact details missing' });
+            return res.status(401).json({ error: "Admin contact details missing" });
         }
 
+        // ── Verify OTP ───────────────────────────────────────────────────
         const otpSession = await OtpSession.findOne({
             contact,
             purpose: 'engagement_payout',
-            expires_at: { $gt: new Date() },
+            expires_at: { $gt: new Date() }
         });
+
         if (!otpSession) {
-            return res.status(400).json({ error: 'OTP expired or not requested. Please request a new OTP.' });
+            return res.status(400).json({ error: "OTP expired or not requested. Please request a new OTP." });
         }
 
         const otpHash = crypto.createHash('sha256').update(String(otp).trim()).digest('hex');
         if (otpSession.otp_hash !== otpHash) {
             otpSession.attempts = (otpSession.attempts || 0) + 1;
             await otpSession.save();
-            return res.status(400).json({ error: 'Invalid OTP provided' });
+            return res.status(400).json({ error: "Invalid OTP provided" });
         }
+
         await OtpSession.deleteOne({ _id: otpSession._id });
 
-        const now = new Date();
-        const runId = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_bulk_${now.getTime()}`;
+        // ── Duplicate prevention: Check for in-progress payout ───────────
+        const inProgress = await EngagementPayout.findOne({ status: 'processing' });
+        if (inProgress) {
+            return res.status(409).json({ 
+                error: "Another engagement payout is already in progress. Please wait for it to complete.",
+                existingPayoutId: inProgress._id
+            });
+        }
 
-        const isSelective =
-            (Array.isArray(selectedContentIds) && selectedContentIds.length > 0) ||
-            (Array.isArray(selectedCreatorIds) && selectedCreatorIds.length > 0);
+        const now = new Date();
+        const baseMonth = req.body.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const payoutRunId = `${baseMonth}_${now.getTime()}`;
+
+        // ── Find period start from last successful payout ────────────────
+        const lastPayout = await EngagementPayout.findOne({ 
+            status: { $in: ['completed', 'partial'] } 
+        }).sort({ createdAt: -1 });
+        const periodStart = lastPayout ? lastPayout.periodEnd : new Date(0);
+        const periodEnd = now;
+
+        // ── Create payout record immediately with 'processing' status ────
+        const payoutRecord = await EngagementPayout.create({
+            payoutMonth: payoutRunId,
+            status: 'processing',
+            initiatedBy: req.admin?._id,
+            periodStart,
+            periodEnd,
+            baseCpmUsed: BASE_CPM,
+            growthFactorEnabled: true,
+            minViewsThreshold: Math.max(minViews, MIN_VIEWS_FOR_PAYOUT),
+        });
 
         console.log(`\n=================== [ENGAGEMENT_PAYOUT_INIT] ===================`);
-        console.log(`Run ID: ${runId}, Min Views: ${minViews}, Selective: ${isSelective}`);
+        console.log(`PayoutID: ${payoutRecord._id} | Month: ${payoutRunId} | Min Views: ${minViews}`);
 
-        const filterQuery = {
-            status: { $ne: 'removed' },
-            contentType: { $in: ['video', 'audio'] },
-            views: { $gt: Math.max(minViews, 0) },
+        // ── Fetch eligible content ───────────────────────────────────────
+        const filterQuery = { 
+            status: { $ne: 'removed' }, 
+            contentType: { $in: ['video', 'audio', 'short'] }, 
+            views: { $gte: Math.max(minViews, 1) } 
         };
+        
         if (Array.isArray(selectedContentIds) && selectedContentIds.length > 0) {
             filterQuery._id = { $in: selectedContentIds.map(id => new mongoose.Types.ObjectId(id)) };
         } else if (Array.isArray(selectedCreatorIds) && selectedCreatorIds.length > 0) {
@@ -316,77 +330,117 @@ export const runEngagementPayout = async (req, res) => {
         const allContent = await Content.find(filterQuery)
             .populate('userId', 'userName channelName channelBanned')
             .lean();
-
-        // Batch comment counts — single round-trip
+        
+        // ── Batch-fetch engagement counts (eliminates N+1) ───────────────
         const contentIds = allContent.map(c => c._id);
-        const commentMap = await batchCommentCounts(contentIds);
+        const { commentMap, shareMap } = await batchFetchEngagementCounts(contentIds);
 
-        const payoutsByCreator = new Map();
-        const allContentPayouts = [];
+        // ── Process each content item ────────────────────────────────────
+        const contentPayouts = [];
+        const skippedContents = [];
         let totalPool = 0;
-        const skippedItems = [];
+        const payoutsByCreator = new Map();
 
         for (const content of allContent) {
             const creator = content.userId;
-            if (!creator || creator.channelBanned) {
-                skippedItems.push({ contentId: content._id, reason: 'creator_banned' });
+            if (!creator) {
+                skippedContents.push({
+                    contentId: content._id,
+                    contentTitle: content.title || 'Untitled',
+                    contentType: content.contentType,
+                    reason: 'Creator not found',
+                    views: content.views || 0,
+                });
+                continue;
+            }
+            if (creator.channelBanned) {
+                skippedContents.push({
+                    contentId: content._id,
+                    contentTitle: content.title || 'Untitled',
+                    contentType: content.contentType,
+                    creatorId: creator._id,
+                    creatorName: creator.channelName || creator.userName || 'Unknown',
+                    reason: 'Creator channel is banned',
+                    views: content.views || 0,
+                });
                 continue;
             }
 
-            const commentCount = commentMap[content._id.toString()] || 0;
-            const calc = computeContentPayout(content, commentCount);
-            if (!calc) {
-                skippedItems.push({ contentId: content._id, contentTitle: content.title, reason: `new_views < ${MIN_NEW_VIEWS}` });
+            const comments = commentMap.get(content._id.toString()) || 0;
+            const shares = shareMap.get(content._id.toString()) || (content.shareCount || 0);
+
+            const calc = calculateContentPayout(content, comments, shares, BASE_CPM);
+
+            if (calc.skip) {
+                skippedContents.push({
+                    contentId: content._id,
+                    contentTitle: content.title || 'Untitled',
+                    contentType: content.contentType,
+                    creatorId: creator._id,
+                    creatorName: creator.channelName || creator.userName || 'Unknown',
+                    reason: calc.reason,
+                    views: content.views || 0,
+                });
                 continue;
             }
 
-            totalPool += calc.payoutAmount;
+            if (calc.payoutAmount <= 0) continue;
+
+            // Apply growth factor
+            const growthFactor = computeGrowthFactor(content, periodStart);
+            const adjustedPayout = Math.round(calc.payoutAmount * growthFactor * 100) / 100;
+
+            totalPool += adjustedPayout;
 
             const item = {
                 contentId: content._id,
-                contentTitle: content.title,
+                contentTitle: content.title || 'Untitled',
                 contentType: content.contentType,
                 creatorId: creator._id,
                 creatorName: creator.channelName || creator.userName || 'Unknown',
-                engagementScore: calc.eqs,
+                engagementScore: calc.engagementScore,
                 engagementMultiplier: calc.engagementMultiplier,
-                payoutAmount: calc.payoutAmount,
+                growthFactor,
+                payoutAmount: adjustedPayout,
+                deltaViews: calc.deltaViews,
                 metrics: calc.metrics,
             };
-            allContentPayouts.push(item);
+            contentPayouts.push(item);
 
-            const key = creator._id.toString();
-            if (!payoutsByCreator.has(key)) {
-                payoutsByCreator.set(key, { creatorId: creator._id, totalPayout: 0, contents: [] });
+            const creatorKey = creator._id.toString();
+            if (!payoutsByCreator.has(creatorKey)) {
+                payoutsByCreator.set(creatorKey, {
+                    creatorId: creator._id,
+                    creatorName: creator.channelName || creator.userName || 'Unknown',
+                    totalPayout: 0,
+                    contents: [],
+                });
             }
-            const group = payoutsByCreator.get(key);
-            group.totalPayout += calc.payoutAmount;
+            const group = payoutsByCreator.get(creatorKey);
+            group.totalPayout += adjustedPayout;
             group.contents.push(item);
         }
 
-        console.log(`📊 Eligible: ${allContentPayouts.length} items across ${payoutsByCreator.size} creators. Skipped: ${skippedItems.length}`);
+        console.log(`Evaluating ${allContent.length} content → ${contentPayouts.length} eligible, ${skippedContents.length} skipped`);
 
-        // Execute per-creator transactions
-        const txErrors = [];
+        // ── Execute transactions per creator ─────────────────────────────
+        const failedContents = [];
+        let creatorsProcessed = 0;
+
         for (const [creatorId, group] of payoutsByCreator.entries()) {
-            const idempotencyKey = `eng_run_${runId}_${creatorId}`;
-            const existing = await WalletTransaction.findOne({ idempotencyKey }).lean();
-            if (existing) {
-                console.warn(`⚠️ Duplicate payout skipped for creator ${creatorId}`);
-                continue;
-            }
-
             const session = await mongoose.startSession();
             try {
                 session.startTransaction();
-
+                
                 let wallet = await SecondaryWallet.findOne({ userId: creatorId }).session(session);
                 if (!wallet) {
-                    wallet = new SecondaryWallet({ userId: creatorId, balance: 0, status: 'active' });
+                    wallet = new SecondaryWallet({ userId: creatorId, balance: 0 });
                 }
+
                 wallet.balance += group.totalPayout;
                 await wallet.save({ session });
 
+                // Single aggregated transaction per creator
                 const aggTxn = new WalletTransaction({
                     walletId: wallet._id,
                     walletType: 'secondary',
@@ -394,173 +448,385 @@ export const runEngagementPayout = async (req, res) => {
                     amount: group.totalPayout,
                     balanceAfter: wallet.balance,
                     status: 'completed',
-                    description: `Engagement Earnings (${group.contents.length} content item${group.contents.length > 1 ? 's' : ''})`,
+                    description: `Engagement Payout (${group.contents.length} content)`,
                     metadata: {
+                        payoutRunId: payoutRecord._id,
                         contentCount: group.contents.length,
                         contentBreakdown: group.contents.map(item => ({
                             contentId: item.contentId,
                             contentTitle: item.contentTitle,
                             contentType: item.contentType,
                             payoutAmount: item.payoutAmount,
+                            deltaViews: item.deltaViews,
                             engagementScore: item.engagementScore,
                             engagementMultiplier: item.engagementMultiplier,
+                            growthFactor: item.growthFactor,
                             metrics: item.metrics,
-                        })),
+                        }))
                     },
-                    idempotencyKey,
+                    idempotencyKey: `eng_run_${payoutRunId}_${creatorId}`
                 });
                 await aggTxn.save({ session });
 
-                // Mark content views as paid to prevent re-payment
+                // Update content: mark views as paid using lastEngagementPayoutViews
                 for (const item of group.contents) {
                     await Content.updateOne(
                         { _id: item.contentId },
-                        { $set: { paidViews: item.metrics.totalViews, lastPayoutAt: new Date() } },
+                        { 
+                            $set: { 
+                                lastEngagementPayoutViews: item.metrics.views,
+                                lastPayoutAt: now 
+                            } 
+                        }
                     ).session(session);
                 }
-
+                
                 await session.commitTransaction();
+                creatorsProcessed++;
 
-                // Fire-and-forget email
-                (async () => {
-                    try {
-                        const creatorUser = await User.findById(creatorId).select('email contact userName channelName').lean();
-                        const recipientEmail = creatorUser?.email || (creatorUser?.contact?.includes('@') ? creatorUser.contact : null);
-                        if (recipientEmail) {
-                            await sendAdminEmail('engagementPayoutCredited', recipientEmail, {
-                                creatorName: creatorUser.channelName || creatorUser.userName || 'Creator',
-                                totalAmount: group.totalPayout,
-                                contentCount: group.contents.length,
-                                payoutMonth: runId,
-                                contentBreakdown: group.contents,
-                            });
-                        }
-                    } catch (emailErr) {
-                        console.error(`⚠️ Engagement payout email failed for ${creatorId}:`, emailErr.message);
-                    }
-                })();
+                // Fire-and-forget email notification (outside transaction)
+                _sendCreatorPayoutEmail(creatorId, group, payoutRunId).catch(() => {});
             } catch (error) {
                 console.error(`❌ Transaction failed for creator ${creatorId}:`, error);
-                txErrors.push({ creatorId, error: error.message });
                 await session.abortTransaction();
+                
+                for (const item of group.contents) {
+                    failedContents.push({
+                        contentId: item.contentId,
+                        contentTitle: item.contentTitle,
+                        contentType: item.contentType,
+                        creatorId: item.creatorId,
+                        creatorName: item.creatorName,
+                        error: error.message,
+                    });
+                }
             } finally {
                 session.endSession();
             }
         }
 
-        // Save payout record
-        const record = await EngagementPayout.create({
-            payoutMonth: runId,
-            totalPool,
-            totalContentEvaluated: allContent.length,
-            totalCreatorsPaid: payoutsByCreator.size - txErrors.length,
-            totalContentPaid: allContentPayouts.length,
-            minViewsThreshold: minViews,
-            contentPayouts: allContentPayouts,
-            periodStart: new Date(0),
-            periodEnd: now,
-            initiatedBy: req.admin?._id,
-            status: txErrors.length > 0 ? 'partial' : 'completed',
+        // ── Update payout record with results ────────────────────────────
+        const finalStatus = failedContents.length > 0 
+            ? (creatorsProcessed > 0 ? 'partial' : 'failed') 
+            : 'completed';
+
+        await EngagementPayout.findByIdAndUpdate(payoutRecord._id, {
+            $set: {
+                status: finalStatus,
+                totalPool,
+                totalContentEvaluated: allContent.length,
+                totalCreatorsPaid: creatorsProcessed,
+                totalContentPaid: contentPayouts.length,
+                totalContentSkipped: skippedContents.length,
+                totalContentFailed: failedContents.length,
+                contentPayouts,
+                skippedContents,
+                failedContents,
+            }
         });
 
-        console.log(`✅ [ENGAGEMENT_PAYOUT_SUCCESS] Pool: ₹${totalPool.toFixed(2)}, Creators: ${payoutsByCreator.size}, Errors: ${txErrors.length}`);
+        console.log(`✅ [ENGAGEMENT_PAYOUT_${finalStatus.toUpperCase()}] Pool: ₹${totalPool.toFixed(2)} | Creators: ${creatorsProcessed} | Paid: ${contentPayouts.length} | Skipped: ${skippedContents.length} | Failed: ${failedContents.length}`);
 
         return res.json({
             success: true,
-            message: `Engagement payout ${txErrors.length > 0 ? 'partially' : 'fully'} completed`,
+            message: `Engagement payout ${finalStatus}`,
+            payoutId: payoutRecord._id,
+            status: finalStatus,
             totalDistributed: totalPool,
-            creatorsPaid: payoutsByCreator.size - txErrors.length,
+            creatorsPaid: creatorsProcessed,
             contentEvaluated: allContent.length,
-            contentPaid: allContentPayouts.length,
-            skipped: skippedItems.length,
-            errors: txErrors,
-            payoutMonth: record.payoutMonth,
-            baseCpmPerView: BASE_CPM,
-            maxCpmPerView: MAX_CPM,
+            contentPaid: contentPayouts.length,
+            contentSkipped: skippedContents.length,
+            contentFailed: failedContents.length,
+            payoutMonth: payoutRunId,
         });
+
     } catch (error) {
         console.error('❌ Error running engagement payout:', error);
         return res.status(500).json({ error: 'Failed to run engagement payout' });
     }
 };
 
-// ─── Single creator payout (SuperAdmin) ─────────────────────────────────────
-export const runSingleCreatorEngagementPayout = async (req, res) => {
+// ─── PREVIEW ─────────────────────────────────────────────────────────────────
+
+export const previewEngagementPayout = async (req, res) => {
     try {
-        const { userId, minViews = 0 } = req.body;
-
-        if (!userId) {
-            return res.status(400).json({ error: 'User ID is required' });
+        const { minViews: minViewsQuery, creatorId } = req.query;
+        const minViews = minViewsQuery !== undefined ? parseInt(minViewsQuery) : MIN_VIEWS_FOR_PAYOUT;
+        
+        const query = { 
+            status: { $ne: 'removed' }, 
+            contentType: { $in: ['video', 'audio', 'short'] }, 
+            views: { $gte: Math.max(minViews, 1) } 
+        };
+        if (creatorId && mongoose.Types.ObjectId.isValid(creatorId)) {
+            query.userId = new mongoose.Types.ObjectId(creatorId);
         }
 
-        const now = new Date();
-        const runId = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_single_${userId}_${now.getTime()}`;
+        const lastPayout = await EngagementPayout.findOne({ 
+            status: { $in: ['completed', 'partial'] } 
+        }).sort({ createdAt: -1 });
+        const periodStart = lastPayout ? lastPayout.periodEnd : new Date(0);
 
-        const creatorUser = await User.findById(userId).lean();
-        if (!creatorUser || creatorUser.channelBanned) {
-            return res.status(400).json({ error: 'Creator not found or banned' });
-        }
-
-        const allContent = await Content.find({
-            userId,
-            status: { $ne: 'removed' },
-            contentType: { $in: ['video', 'audio'] },
-            views: { $gt: Math.max(minViews, 0) },
-        }).lean();
-
-        // Batch comment counts
+        const allContent = await Content.find(query)
+            .populate('userId', 'userName channelName channelBanned')
+            .lean();
+        
+        // Batch-fetch engagement counts
         const contentIds = allContent.map(c => c._id);
-        const commentMap = await batchCommentCounts(contentIds);
+        const { commentMap, shareMap } = await batchFetchEngagementCounts(contentIds);
 
         const contentPayouts = [];
-        const skippedItems = [];
-        let totalPayout = 0;
+        const skippedContents = [];
+        let totalPool = 0;
+        const totalCreators = new Set();
 
         for (const content of allContent) {
-            const commentCount = commentMap[content._id.toString()] || 0;
-            const calc = computeContentPayout(content, commentCount);
-            if (!calc) {
-                skippedItems.push({ contentId: content._id, contentTitle: content.title, reason: `new_views < ${MIN_NEW_VIEWS}` });
+            const creator = content.userId;
+            if (!creator || creator.channelBanned) {
+                skippedContents.push({
+                    contentId: content._id,
+                    contentTitle: content.title || 'Untitled',
+                    reason: !creator ? 'Creator not found' : 'Channel banned',
+                    views: content.views || 0,
+                });
                 continue;
             }
 
-            totalPayout += calc.payoutAmount;
+            const comments = commentMap.get(content._id.toString()) || 0;
+            const shares = shareMap.get(content._id.toString()) || (content.shareCount || 0);
+            const calc = calculateContentPayout(content, comments, shares, BASE_CPM);
+
+            if (calc.skip) {
+                skippedContents.push({
+                    contentId: content._id,
+                    contentTitle: content.title || 'Untitled',
+                    creatorName: creator.channelName || creator.userName || 'Unknown',
+                    reason: calc.reason,
+                    views: content.views || 0,
+                });
+                continue;
+            }
+
+            if (calc.payoutAmount <= 0) continue;
+
+            const growthFactor = computeGrowthFactor(content, periodStart);
+            const adjustedPayout = Math.round(calc.payoutAmount * growthFactor * 100) / 100;
+
+            totalPool += adjustedPayout;
+            totalCreators.add(creator._id.toString());
+
             contentPayouts.push({
                 contentId: content._id,
-                contentTitle: content.title,
+                contentTitle: content.title || 'Untitled',
                 contentType: content.contentType,
-                creatorId: creatorUser._id,
-                creatorName: creatorUser.channelName || creatorUser.userName || 'Unknown',
-                engagementScore: calc.eqs,
+                creatorId: creator._id,
+                creatorName: creator.channelName || creator.userName || 'Unknown',
+                engagementScore: calc.engagementScore,
                 engagementMultiplier: calc.engagementMultiplier,
-                payoutAmount: calc.payoutAmount,
+                growthFactor,
+                payoutAmount: adjustedPayout,
+                deltaViews: calc.deltaViews,
                 metrics: calc.metrics,
             });
         }
 
-        if (totalPayout <= 0 || contentPayouts.length === 0) {
-            return res.json({
-                success: true,
-                message: `No eligible payouts for this creator (all content has < ${MIN_NEW_VIEWS} new views since last payout)`,
-                data: { totalPayout: 0, contentPaid: 0, skipped: skippedItems.length },
+        return res.json({
+            success: true,
+            totalContent: contentPayouts.length,
+            totalProjectedPayout: totalPool,
+            totalCreators: totalCreators.size,
+            totalSkipped: skippedContents.length,
+            minViewsThreshold: minViews,
+            baseCpm: BASE_CPM,
+            contentBreakdown: contentPayouts,
+            skippedBreakdown: skippedContents,
+        });
+
+    } catch (error) {
+        console.error('❌ Error previewing engagement payout:', error);
+        return res.status(500).json({ error: 'Failed to preview engagement payout' });
+    }
+};
+
+// ─── REPORT ──────────────────────────────────────────────────────────────────
+
+export const getEngagementPayoutReport = async (req, res) => {
+    try {
+        const { month } = req.params;
+        const regex = new RegExp(`^${month}`);
+        const payouts = await EngagementPayout.find({ payoutMonth: regex })
+            .sort({ createdAt: -1 })
+            .lean();
+        
+        return res.json({ success: true, payouts });
+    } catch (error) {
+        console.error('❌ Error getting engagement payout report:', error);
+        return res.status(500).json({ error: 'Failed to fetch report' });
+    }
+};
+
+// ─── DETAILED TRANSACTION DRILLDOWN ──────────────────────────────────────────
+
+export const getEngagementPayoutDetail = async (req, res) => {
+    try {
+        const { payoutId } = req.params;
+        const payout = await EngagementPayout.findById(payoutId).lean();
+        if (!payout) {
+            return res.status(404).json({ error: 'Engagement payout record not found' });
+        }
+
+        // Group content payouts by creator
+        const creatorMap = new Map();
+        for (const cp of (payout.contentPayouts || [])) {
+            const key = cp.creatorId?.toString() || 'unknown';
+            if (!creatorMap.has(key)) {
+                creatorMap.set(key, {
+                    creatorId: cp.creatorId,
+                    creatorName: cp.creatorName,
+                    totalPayout: 0,
+                    contentCount: 0,
+                    contents: [],
+                });
+            }
+            const group = creatorMap.get(key);
+            group.totalPayout += cp.payoutAmount;
+            group.contentCount++;
+            group.contents.push(cp);
+        }
+
+        return res.json({
+            success: true,
+            payout: {
+                _id: payout._id,
+                payoutMonth: payout.payoutMonth,
+                status: payout.status,
+                totalPool: payout.totalPool,
+                totalContentEvaluated: payout.totalContentEvaluated,
+                totalCreatorsPaid: payout.totalCreatorsPaid,
+                totalContentPaid: payout.totalContentPaid,
+                totalContentSkipped: payout.totalContentSkipped,
+                totalContentFailed: payout.totalContentFailed,
+                baseCpmUsed: payout.baseCpmUsed,
+                growthFactorEnabled: payout.growthFactorEnabled,
+                periodStart: payout.periodStart,
+                periodEnd: payout.periodEnd,
+                createdAt: payout.createdAt,
+                initiatedBy: payout.initiatedBy,
+            },
+            creators: Array.from(creatorMap.values()).sort((a, b) => b.totalPayout - a.totalPayout),
+            skipped: payout.skippedContents || [],
+            failed: payout.failedContents || [],
+        });
+    } catch (error) {
+        console.error('❌ Error fetching engagement payout detail:', error);
+        return res.status(500).json({ error: 'Failed to fetch payout detail' });
+    }
+};
+
+// ─── SINGLE CREATOR ENGAGEMENT PAYOUT ────────────────────────────────────────
+
+export const runSingleCreatorEngagementPayout = async (req, res) => {
+    try {
+        const { userId, minViews = MIN_VIEWS_FOR_PAYOUT } = req.body;
+        
+        if (!userId) {
+            return res.status(400).json({ error: "User ID is required" });
+        }
+
+        // Duplicate prevention
+        const inProgress = await EngagementPayout.findOne({ status: 'processing' });
+        if (inProgress) {
+            return res.status(409).json({ 
+                error: "Another engagement payout is already in progress.",
+                existingPayoutId: inProgress._id
             });
         }
 
-        // Idempotency: prevent duplicate run within the same minute
-        const idempotencyKey = `eng_single_${runId}_${userId}`;
-        const existing = await WalletTransaction.findOne({ idempotencyKey }).lean();
-        if (existing) {
-            return res.status(409).json({ error: 'Duplicate payout: a payout was already processed for this run.' });
+        const now = new Date();
+        const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}_single_${userId}_${now.getTime()}`;
+
+        const creatorUser = await User.findById(userId).lean();
+        if (!creatorUser || creatorUser.channelBanned) {
+            return res.status(400).json({ error: "Creator not found or banned" });
+        }
+
+        const lastPayout = await EngagementPayout.findOne({ 
+            status: { $in: ['completed', 'partial'] } 
+        }).sort({ createdAt: -1 });
+        const periodStart = lastPayout ? lastPayout.periodEnd : new Date(0);
+
+        const allContent = await Content.find({ 
+            userId, 
+            status: { $ne: 'removed' }, 
+            contentType: { $in: ['video', 'audio', 'short'] }, 
+            views: { $gte: Math.max(minViews, 1) } 
+        }).lean();
+
+        // Batch-fetch engagement
+        const contentIds = allContent.map(c => c._id);
+        const { commentMap, shareMap } = await batchFetchEngagementCounts(contentIds);
+        
+        const contentPayouts = [];
+        const skippedContents = [];
+        let totalPayout = 0;
+
+        for (const content of allContent) {
+            const comments = commentMap.get(content._id.toString()) || 0;
+            const shares = shareMap.get(content._id.toString()) || (content.shareCount || 0);
+            const calc = calculateContentPayout(content, comments, shares, BASE_CPM);
+
+            if (calc.skip) {
+                skippedContents.push({
+                    contentId: content._id,
+                    contentTitle: content.title || 'Untitled',
+                    contentType: content.contentType,
+                    creatorId: userId,
+                    creatorName: creatorUser.channelName || creatorUser.userName || 'Unknown',
+                    reason: calc.reason,
+                    views: content.views || 0,
+                });
+                continue;
+            }
+
+            if (calc.payoutAmount <= 0) continue;
+
+            const growthFactor = computeGrowthFactor(content, periodStart);
+            const adjustedPayout = Math.round(calc.payoutAmount * growthFactor * 100) / 100;
+            totalPayout += adjustedPayout;
+
+            contentPayouts.push({
+                contentId: content._id,
+                contentTitle: content.title || 'Untitled',
+                contentType: content.contentType,
+                creatorId: creatorUser._id,
+                creatorName: creatorUser.channelName || creatorUser.userName || 'Unknown',
+                engagementScore: calc.engagementScore,
+                engagementMultiplier: calc.engagementMultiplier,
+                growthFactor,
+                payoutAmount: adjustedPayout,
+                deltaViews: calc.deltaViews,
+                metrics: calc.metrics,
+            });
+        }
+
+        if (totalPayout <= 0) {
+            return res.json({ 
+                success: true, 
+                message: "No eligible payouts for this creator", 
+                data: { totalPayout: 0, skipped: skippedContents } 
+            });
         }
 
         const session = await mongoose.startSession();
         try {
             session.startTransaction();
-
+            
             let wallet = await SecondaryWallet.findOne({ userId }).session(session);
             if (!wallet) {
-                wallet = new SecondaryWallet({ userId, balance: 0, status: 'active' });
+                wallet = new SecondaryWallet({ userId, balance: 0 });
             }
+
             wallet.balance += totalPayout;
             await wallet.save({ session });
 
@@ -571,7 +837,7 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
                 amount: totalPayout,
                 balanceAfter: wallet.balance,
                 status: 'completed',
-                description: `Engagement Earnings (${contentPayouts.length} item${contentPayouts.length > 1 ? 's' : ''})`,
+                description: `Engagement Payout (${contentPayouts.length} content)`,
                 metadata: {
                     contentCount: contentPayouts.length,
                     contentBreakdown: contentPayouts.map(item => ({
@@ -579,94 +845,87 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
                         contentTitle: item.contentTitle,
                         contentType: item.contentType,
                         payoutAmount: item.payoutAmount,
+                        deltaViews: item.deltaViews,
                         engagementScore: item.engagementScore,
                         engagementMultiplier: item.engagementMultiplier,
+                        growthFactor: item.growthFactor,
                         metrics: item.metrics,
-                    })),
+                    }))
                 },
-                idempotencyKey,
+                idempotencyKey: `eng_single_${month}_${userId}`
             });
             await aggTxn.save({ session });
 
-            // Mark content as paid
             for (const item of contentPayouts) {
                 await Content.updateOne(
                     { _id: item.contentId },
-                    { $set: { paidViews: item.metrics.totalViews, lastPayoutAt: new Date() } },
+                    { $set: { lastEngagementPayoutViews: item.metrics.views, lastPayoutAt: now } }
                 ).session(session);
             }
-
+            
             await session.commitTransaction();
+
+            // Fire-and-forget email
+            _sendCreatorPayoutEmail(userId, { totalPayout, contents: contentPayouts }, month).catch(() => {});
         } catch (error) {
+            console.error(`❌ Transaction failed for creator ${userId}:`, error);
             await session.abortTransaction();
             throw error;
         } finally {
             session.endSession();
         }
 
-        // Save record
         const record = await EngagementPayout.create({
-            payoutMonth: runId,
+            payoutMonth: month,
             totalPool: totalPayout,
             totalContentEvaluated: allContent.length,
             totalCreatorsPaid: 1,
             totalContentPaid: contentPayouts.length,
-            minViewsThreshold: minViews,
+            totalContentSkipped: skippedContents.length,
             contentPayouts,
-            periodStart: new Date(0),
+            skippedContents,
+            periodStart,
             periodEnd: now,
             initiatedBy: req.admin?._id,
             status: 'completed',
+            baseCpmUsed: BASE_CPM,
+            growthFactorEnabled: true,
         });
-
-        // Fire-and-forget email
-        (async () => {
-            try {
-                const recipientEmail = creatorUser?.email || (creatorUser?.contact?.includes('@') ? creatorUser.contact : null);
-                if (recipientEmail) {
-                    await sendAdminEmail('engagementPayoutCredited', recipientEmail, {
-                        creatorName: creatorUser.channelName || creatorUser.userName || 'Creator',
-                        totalAmount: totalPayout,
-                        contentCount: contentPayouts.length,
-                        payoutMonth: runId,
-                        contentBreakdown: contentPayouts,
-                    });
-                }
-            } catch (emailErr) {
-                console.error(`⚠️ Single engagement payout email failed for ${userId}:`, emailErr.message);
-            }
-        })();
-
-        console.log(`✅ [SINGLE_ENG_PAYOUT] Creator: ${userId}, Amount: ₹${totalPayout.toFixed(2)}, Items: ${contentPayouts.length}`);
 
         return res.json({
             success: true,
-            message: `Engagement payout of ₹${totalPayout.toFixed(2)} credited to Secondary Wallet`,
+            message: `Single creator engagement payout completed`,
+            payoutId: record._id,
             data: {
                 totalPool: record.totalPool,
                 totalContentPaid: record.totalContentPaid,
-                skipped: skippedItems.length,
-                baseCpmPerView: BASE_CPM,
-                maxCpmPerView: MAX_CPM,
-            },
+                totalContentSkipped: skippedContents.length,
+                skipped: skippedContents,
+            }
         });
+
     } catch (error) {
         console.error('❌ Error running single creator payout:', error);
         return res.status(500).json({ error: 'Failed to run single creator payout' });
     }
 };
 
-// ─── Report: get payout history by month prefix ──────────────────────────────
-export const getEngagementPayoutReport = async (req, res) => {
+// ─── Internal Helper ─────────────────────────────────────────────────────────
+
+async function _sendCreatorPayoutEmail(creatorId, group, payoutMonth) {
     try {
-        const { month } = req.params;
-        const regex = new RegExp(`^${month}`);
-        const payouts = await EngagementPayout.find({ payoutMonth: regex })
-            .sort({ createdAt: -1 })
-            .lean();
-        return res.json({ success: true, payouts });
-    } catch (error) {
-        console.error('❌ Error getting engagement payout report:', error);
-        return res.status(500).json({ error: 'Failed to fetch report' });
+        const creatorUser = await User.findById(creatorId).select('email contact userName channelName').lean();
+        const recipientEmail = creatorUser?.email || (creatorUser?.contact && creatorUser.contact.includes('@') ? creatorUser.contact : null);
+        if (recipientEmail) {
+            await sendAdminEmail('engagementPayoutCredited', recipientEmail, {
+                creatorName: creatorUser.channelName || creatorUser.userName || 'Creator',
+                totalAmount: group.totalPayout,
+                contentCount: group.contents.length,
+                payoutMonth,
+                contentBreakdown: group.contents
+            });
+        }
+    } catch (emailErr) {
+        console.error(`⚠️ Failed to send engagement payout email to creator ${creatorId}:`, emailErr.message);
     }
-};
+}

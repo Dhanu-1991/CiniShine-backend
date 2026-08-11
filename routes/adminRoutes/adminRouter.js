@@ -40,7 +40,7 @@ import {
 import { getCreatorEarnings } from '../../controllers/wallet-controllers/earningsController.js';
 import {
     sendEngagementPayoutOtp, runEngagementPayout, previewEngagementPayout,
-    getEngagementPayoutReport, runSingleCreatorEngagementPayout
+    getEngagementPayoutReport, runSingleCreatorEngagementPayout, getEngagementPayoutDetail
 } from '../../controllers/wallet-controllers/engagementPayoutController.js';
 import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
@@ -136,21 +136,24 @@ adminRouter.put('/kyc/:kycId/reject', auditLog('kyc_rejected', 'admin'), rejectK
 adminRouter.get('/wallets/primary', getWalletsList);
 adminRouter.get('/wallets/secondary', getSecondaryWalletsList);
 
-// ─── Payout routes ───────────────────────────────────────────────────────────
+// ─── Payout routes (accessible to all admins) ───────────────────────────────
 adminRouter.get('/payouts/daily-stats', getDailyPayoutStats);
 adminRouter.get('/payouts/:month', getPayoutReport);
 adminRouter.post('/payouts/send-otp', sendBulkPayoutOtp);
 adminRouter.post('/payouts/run', runMonthEndPayout);
+adminRouter.post('/payouts/run-single', auditLog('single_payout', 'payout'), runSingleCreatorPayout);
 adminRouter.post('/payouts/complete-bulk', completeBulkPayoutSettlement);
 adminRouter.post('/payouts/:payoutId/complete', completePayoutSettlement);
 adminRouter.post('/payouts/:payoutId/resend-email', resendSettlementEmail);
 adminRouter.get('/payouts/:payoutId/invoice-pdf', getPayoutInvoicePdf);
 
-// ─── Engagement Payout routes ────────────────────────────────────────────────
+// ─── Engagement Payout routes (accessible to all admins) ─────────────────────
 adminRouter.post('/engagement-payouts/send-otp', sendEngagementPayoutOtp);
 adminRouter.post('/engagement-payouts/run', runEngagementPayout);
+adminRouter.post('/engagement-payouts/run-single', auditLog('single_engagement_payout', 'payout'), runSingleCreatorEngagementPayout);
 adminRouter.get('/engagement-payouts/preview', previewEngagementPayout);
 adminRouter.get('/engagement-payouts/:month', getEngagementPayoutReport);
+adminRouter.get('/engagement-payouts/:payoutId/detail', getEngagementPayoutDetail);
 
 // Ledger & Live Transfers
 adminRouter.get('/ledger/daily', getDailyLedger);
@@ -168,7 +171,6 @@ adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);
 adminRouter.patch('/creator/:id/stats', requireSuperAdmin, updateCreatorStats);
 adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
 adminRouter.post('/analytics/aggregate', requireSuperAdmin, runAggregation);
-adminRouter.post('/payouts/run-single', requireSuperAdmin, auditLog('single_payout', 'payout'), runSingleCreatorPayout);
-adminRouter.post('/engagement-payouts/run-single', requireSuperAdmin, auditLog('single_engagement_payout', 'payout'), runSingleCreatorEngagementPayout);
+// Note: run-single routes moved to regular admin section above
 
 export default adminRouter;

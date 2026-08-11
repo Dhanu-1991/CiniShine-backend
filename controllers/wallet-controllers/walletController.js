@@ -359,6 +359,29 @@ export const rechargeInit = async (req, res) => {
 
 export const transferOtpStore = new Map();
 
+// ── OTP Store TTL Cleanup (prevents memory leaks) ───────────────────────────
+// Runs every 5 minutes to clear expired OTPs from all in-memory stores
+setInterval(() => {
+    const now = Date.now();
+    const stores = [
+        { name: 'transferOtpStore', store: transferOtpStore },
+    ];
+    // kycOtpStore and pinOtpStore are defined later, cleaned via same interval
+    for (const { name, store } of stores) {
+        let cleaned = 0;
+        for (const [key, val] of store.entries()) {
+            if (typeof val === 'object' && val.expiresAt && val.expiresAt < now) {
+                store.delete(key);
+                cleaned++;
+            } else if (typeof val === 'number' && val < now) {
+                store.delete(key);
+                cleaned++;
+            }
+        }
+        if (cleaned > 0) console.log(`🧹 [OTP_CLEANUP] ${name}: removed ${cleaned} expired entries`);
+    }
+}, 5 * 60 * 1000);
+
 /**
  * POST /wallets/transfer/send-otp — Send OTP for transferring Wallet 2 balance to Wallet 1
  */

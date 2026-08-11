@@ -15,6 +15,7 @@ import ContentWatchtime from '../../models/contentWatchtime.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import KycDetails from '../../models/kycDetails.model.js';
 import Payout from '../../models/payout.model.js';
+import Purchase from '../../models/purchase.model.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';

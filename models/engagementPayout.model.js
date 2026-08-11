@@ -4,7 +4,7 @@ const engagementPayoutSchema = new mongoose.Schema({
   payoutMonth: {
     type: String,
     required: true,
-    unique: true, // '2026-08' format
+    index: true, // not unique — multiple runs per month allowed
   },
   totalPool: {
     type: Number,
@@ -22,36 +22,39 @@ const engagementPayoutSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  totalContentSkipped: {
+    type: Number,
+    default: 0,
+  },
+  totalContentFailed: {
+    type: Number,
+    default: 0,
+  },
   minViewsThreshold: {
     type: Number,
     default: 10,
   },
   scoreWeights: {
-    views: { type: Number, default: 0.25 },
-    watchtime: { type: Number, default: 0.30 },
-    completion: { type: Number, default: 0.20 },
-    likes: { type: Number, default: 0.10 },
+    watchPercent: { type: Number, default: 0.30 },
+    completion: { type: Number, default: 0.25 },
+    likes: { type: Number, default: 0.15 },
+    comments: { type: Number, default: 0.10 },
     shares: { type: Number, default: 0.10 },
-    comments: { type: Number, default: 0.05 }
+    duration: { type: Number, default: 0.10 },
   },
-  baseCpm: {
+  baseCpmUsed: {
     type: Number,
-    default: 0.13, // ₹0.13/view = ₹130/1K views floor
+    default: 200,
   },
-  maxCpm: {
-    type: Number,
-    default: 0.175, // ₹0.175/view = ₹175/1K views ceiling
+  growthFactorEnabled: {
+    type: Boolean,
+    default: true,
   },
   status: {
     type: String,
-    enum: ['completed', 'failed', 'partial'],
-    default: 'completed',
+    enum: ['processing', 'completed', 'failed', 'partial'],
+    default: 'processing',
   },
-  skippedPayouts: [{
-    contentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Content' },
-    contentTitle: String,
-    reason: String,
-  }],
   initiatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',
@@ -62,27 +65,50 @@ const engagementPayoutSchema = new mongoose.Schema({
     contentType: String,
     creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     creatorName: String,
-    engagementScore: Number,   // 0-100 EQS score
-    engagementMultiplier: Number, // e.g. 1.0x – 1.35x
+    engagementScore: Number,
+    engagementMultiplier: Number,
+    growthFactor: Number,
     payoutAmount: Number,
+    deltaViews: Number,
     metrics: {
       views: Number,
-      newViews: Number,
-      paidViews: Number,
+      deltaViews: Number,
+      previousPaidViews: Number,
       totalWatchTime: Number,
       avgWatchPercent: Number,
       completionRate: Number,
+      duration: Number,
       likes: Number,
       dislikes: Number,
       shares: Number,
       comments: Number,
-      duration: Number,
     }
+  }],
+  skippedContents: [{
+    contentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Content' },
+    contentTitle: String,
+    contentType: String,
+    creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    creatorName: String,
+    reason: String,
+    views: Number,
+  }],
+  failedContents: [{
+    contentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Content' },
+    contentTitle: String,
+    contentType: String,
+    creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    creatorName: String,
+    error: String,
   }],
   periodStart: Date,
   periodEnd: Date,
   createdAt: { type: Date, default: Date.now }
 });
+
+// Compound index for efficient lookups
+engagementPayoutSchema.index({ payoutMonth: 1, createdAt: -1 });
+engagementPayoutSchema.index({ status: 1 });
 
 const EngagementPayout = mongoose.models.EngagementPayout || mongoose.model('EngagementPayout', engagementPayoutSchema);
 export default EngagementPayout;

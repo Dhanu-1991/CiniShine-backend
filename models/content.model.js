@@ -146,6 +146,10 @@ const ContentSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    lastEngagementPayoutViews: {
+        type: Number,
+        default: 0
+    },
     authenticatedViews: {
         type: Number,
         default: 0
