@@ -96,6 +96,39 @@ app.post(
 app.use(express.json());
 app.use(cookieParser());
 
+// ── Global spam protection — rate limit all API routes ────────────────────
+const globalRateLimitStore = new Map();
+const GLOBAL_RATE_LIMIT = 100; // max requests per window
+const GLOBAL_RATE_WINDOW = 60000; // 1 minute window
+
+app.use('/api', (req, res, next) => {
+    const key = req.ip || 'unknown';
+    const now = Date.now();
+    const record = globalRateLimitStore.get(key);
+
+    if (!record || now > record.resetAt) {
+        globalRateLimitStore.set(key, { count: 1, resetAt: now + GLOBAL_RATE_WINDOW });
+        return next();
+    }
+
+    record.count++;
+    if (record.count > GLOBAL_RATE_LIMIT) {
+        return res.status(429).json({
+            success: false,
+            message: 'Too many requests. Please slow down and try again later.'
+        });
+    }
+    next();
+});
+
+// Cleanup stale global rate limit entries every 5 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of globalRateLimitStore) {
+        if (now > record.resetAt) globalRateLimitStore.delete(key);
+    }
+}, 5 * 60 * 1000);
+
 app.use("/api/v1/contact", contactRouter);
 app.use("/api/v1/payments", router);//
 app.use("/api/v1/auth/authRoutes", authRouter);

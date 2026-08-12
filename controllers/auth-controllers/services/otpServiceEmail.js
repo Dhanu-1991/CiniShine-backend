@@ -123,6 +123,14 @@ export function getOtpEmailContent(otp, purposeInput = 'default') {
       badgeColor: "#059669",
       headerGradient: "linear-gradient(135deg, #059669 0%, #0d9488 100%)",
     },
+    referral_settings: {
+      title: "Referral Settings Verification",
+      subject: `[${PLATFORM_NAME}] Action Required - Referral Settings OTP`,
+      heading: "Authorize Referral Changes",
+      message: "An administrative request to change referral settings was initiated. Please use the One-Time Password (OTP) below to authorize the referral changes:",
+      badgeColor: "#f59e0b",
+      headerGradient: "linear-gradient(135deg, #f59e0b 0%, #b45309 100%)",
+    },
     admin_login: {
       title: "Admin Portal Security Code",
       subject: `[${PLATFORM_NAME}] Security Code - Admin Access Authentication`,

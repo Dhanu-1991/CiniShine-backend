@@ -7,6 +7,7 @@ import AdminRequest from '../../models/adminRequest.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
 import { sendOtpToEmail, sendNotificationEmail } from '../auth-controllers/services/otpServiceEmail.js';
+import { validatePasswordStrength } from '../../utils/passwordValidator.js';
 import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -66,6 +67,20 @@ export const adminSignin = async (req, res) => {
                 success: false,
                 requireReset: true,
                 message: 'You must reset your password to continue.'
+            });
+        }
+
+        // Check for pending forgot-password request — block signin
+        const pendingForgotRequest = await AdminRequest.findOne({
+            requester_contact: admin.contact,
+            type: 'forgot_password_activation',
+            status: 'pending'
+        });
+        if (pendingForgotRequest) {
+            return res.status(403).json({
+                success: false,
+                pendingReset: true,
+                message: 'A password reset request is pending. Contact your admin to approve it.'
             });
         }
 
@@ -391,10 +406,12 @@ export const adminSignup = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Name, contact, and password are required' });
         }
 
-        if (password.length < PASSWORD_MIN_LENGTH) {
+        const pwValidation = validatePasswordStrength(password);
+        if (!pwValidation.valid) {
             return res.status(400).json({
                 success: false,
-                message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters`
+                message: 'Password does not meet requirements',
+                errors: pwValidation.errors
             });
         }
 
@@ -598,6 +615,14 @@ export const forgotPasswordRequest = async (req, res) => {
             });
         }
 
+        // Block locked accounts from submitting forgot-password requests
+        if (admin.locked_until) {
+            return res.status(403).json({
+                success: false,
+                message: 'Your account is locked. A locked account cannot submit a forgot password request. Contact a SuperAdmin to unlock your account.'
+            });
+        }
+
         // Check for existing pending request
         const existingRequest = await AdminRequest.findOne({
             requester_contact: normalizedContact,
@@ -719,6 +744,14 @@ export const generateResetOtp = async (req, res) => {
             return res.status(403).json({ success: false, message: 'You must request a password reset and wait for approval.' });
         }
 
+        // Block locked accounts
+        if (admin.locked_until) {
+            return res.status(403).json({
+                success: false,
+                message: 'Account is locked. Contact a SuperAdmin to unlock your account.'
+            });
+        }
+
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const channel = detectContactType(admin.contact);
 
@@ -769,10 +802,12 @@ export const adminResetPassword = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Reset token and new password required' });
         }
 
-        if (newPassword.length < PASSWORD_MIN_LENGTH) {
+        const pwValidation = validatePasswordStrength(newPassword);
+        if (!pwValidation.valid) {
             return res.status(400).json({
                 success: false,
-                message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters`
+                message: 'Password does not meet requirements',
+                errors: pwValidation.errors
             });
         }
 

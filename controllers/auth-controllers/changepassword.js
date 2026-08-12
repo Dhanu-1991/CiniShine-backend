@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { validatePasswordStrength } from '../../utils/passwordValidator.js';
 import bcrypt from "bcryptjs";
 import User from "../../models/user.model.js";
 import dotenv from 'dotenv';
@@ -12,6 +13,17 @@ const changePassword = async (req, res, next) => {
         const { contact, newPassword } = req.body;
         if (!contact || !newPassword) {
             return res.status(400).json({ message: 'Contact and new password are required' });
+        }
+        // Validate password strength
+        const pwValidation = validatePasswordStrength(newPassword);
+        if (!pwValidation.valid) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+                success: false,
+                message: 'Password does not meet requirements',
+                errors: pwValidation.errors
+            });
         }
         // Case-insensitive contact lookup
         const escapedContact = contact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

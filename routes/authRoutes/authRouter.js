@@ -11,18 +11,18 @@ import { userData } from '../../controllers/auth-controllers/userdata.js';
 import { updateChannel, checkHandleAvailability, generateHandleSuggestion } from '../../controllers/auth-controllers/updateChannel.js';
 import { refreshToken } from '../../controllers/auth-controllers/refreshToken.js';
 import { logout } from '../../controllers/auth-controllers/logoutController.js';
-
+import { adminRateLimiter } from '../../middlewares/admin.middleware.js';
 const authRouter = express.Router();
 
 // Public auth routes
-authRouter.post("/sendOtp/signup", sendOtp);
+authRouter.post("/sendOtp/signup", adminRateLimiter(5, 60000), sendOtp);
 authRouter.post("/checkUser", checkUser);
 authRouter.post("/verifyOtp", verifyOtp);
-authRouter.post("/signup", Signup);
-authRouter.post("/signin", signIn);
+authRouter.post("/signup", adminRateLimiter(5, 60000), Signup);
+authRouter.post("/signin", adminRateLimiter(10, 60000), signIn);
 authRouter.post("/google-auth", googleAuth);
-authRouter.post("/sendOtp/forgotPass", sendOtp);
-authRouter.post("/signin/changePassword", changePassword);
+authRouter.post("/sendOtp/forgotPass", adminRateLimiter(5, 60000), sendOtp);
+authRouter.post("/signin/changePassword", adminRateLimiter(5, 60000), changePassword);
 
 // Token refresh — uses refresh_token cookie (no auth middleware needed)
 authRouter.post("/refresh", refreshToken);
