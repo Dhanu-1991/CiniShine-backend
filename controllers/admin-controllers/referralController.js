@@ -2,6 +2,31 @@ import Referral from '../../models/referral.model.js';
 import User from '../../models/user.model.js';
 import ReferralSettings from '../../models/referralSettings.model.js';
 import { approveReferral, rejectReferral, getReferralSettings } from '../../utils/referralService.js';
+import crypto from 'crypto';
+import OtpSession from '../../models/adminOtpSession.model.js';
+import Admin from '../../models/admin.model.js';
+import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
+import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js';
+
+const OTP_TTL_MS = 5 * 60 * 1000;
+const OTP_COOLDOWN_MS = 30 * 1000;
+const MAX_OTP_ATTEMPTS = 3;
+
+function hashOtp(otp) {
+    return crypto.createHash('sha256').update(otp).digest('hex');
+}
+
+function detectContactType(contact) {
+    return contact.includes('@') ? 'email' : 'sms';
+}
+
+function maskContact(contact, channel) {
+    if (channel === 'email') {
+        const [user, domain] = contact.split('@');
+        return `${user.slice(0, 2)}***@${domain}`;
+    }
+    return `***${contact.slice(-4)}`;
+}
 
 // GET /api/admin/referrals
 export const listReferrals = async (req, res) => {
@@ -165,5 +190,151 @@ export const updateReferralSettingsHandler = async (req, res) => {
     } catch (err) {
         console.error('[ADMIN_UPDATE_REFERRAL_SETTINGS]', err.message);
         res.status(500).json({ success: false, message: 'Failed to update referral settings' });
+    }
+};
+
+// POST /api/admin/referrals/settings/send-otp
+export const sendReferralSettingsOtp = async (req, res) => {
+    try {
+        const adminId = req.admin._id;
+        const admin = await Admin.findById(adminId);
+        if (!admin) return res.status(404).json({ success: false, message: 'Admin not found' });
+        
+        const contact = admin.contact;
+        const channel = detectContactType(contact);
+
+        // Check cooldown - look for existing referral_settings session for this admin
+        const existingSession = await OtpSession.findOne({
+            admin_id: adminId,
+            purpose: 'referral_settings'
+        }).sort({ createdAt: -1 });
+
+        if (existingSession) {
+            const ageMs = Date.now() - (existingSession.updatedAt || existingSession.createdAt).getTime();
+            if (ageMs < OTP_COOLDOWN_MS) {
+                return res.status(429).json({
+                    success: false,
+                    message: 'Please wait before requesting another OTP',
+                    cooldownRemaining: Math.ceil((OTP_COOLDOWN_MS - ageMs) / 1000)
+                });
+            }
+        }
+
+        // Delete old sessions for this admin/purpose
+        await OtpSession.deleteMany({ admin_id: adminId, purpose: 'referral_settings' });
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        const otpSession = await OtpSession.create({
+            admin_id: adminId,
+            contact,
+            otp_hash: hashOtp(otp),
+            channel,
+            purpose: 'referral_settings',
+            expires_at: new Date(Date.now() + OTP_TTL_MS)
+        });
+
+        let sent = false;
+        if (channel === 'email') {
+            sent = await sendOtpToEmail(contact, otp, 'referral_settings');
+        } else {
+            sent = await sendOtpToPhone(contact, otp);
+        }
+
+        if (!sent) {
+            await OtpSession.findByIdAndDelete(otpSession._id);
+            return res.status(500).json({ success: false, message: 'Failed to send OTP' });
+        }
+
+        console.log(`[ADMIN] Referral settings OTP sent to ${maskContact(contact, channel)} by admin ${adminId}`);
+
+        res.json({
+            success: true,
+            message: 'OTP sent successfully',
+            otpSessionId: otpSession._id,
+            channel,
+            maskedContact: maskContact(contact, channel),
+            cooldownRemaining: Math.ceil(OTP_COOLDOWN_MS / 1000)
+        });
+    } catch (err) {
+        console.error('[ADMIN_REFERRAL_SETTINGS_OTP]', err.message);
+        res.status(500).json({ success: false, message: 'Failed to send OTP' });
+    }
+};
+
+// POST /api/admin/referrals/settings/verify-otp
+export const verifyReferralSettingsOtp = async (req, res) => {
+    try {
+        const { otpSessionId, otp, settings: pendingSettings } = req.body;
+        const adminId = req.admin._id;
+        
+        if (!otpSessionId || !otp) {
+            return res.status(400).json({ success: false, message: 'OTP session and code required' });
+        }
+        if (!pendingSettings) {
+            return res.status(400).json({ success: false, message: 'Settings payload required' });
+        }
+
+        const session = await OtpSession.findById(otpSessionId);
+        if (!session) {
+            return res.status(400).json({ success: false, message: 'OTP session not found or expired' });
+        }
+
+        // Verify session belongs to this admin
+        if (session.admin_id?.toString() !== adminId.toString()) {
+            return res.status(403).json({ success: false, message: 'Unauthorized OTP session' });
+        }
+
+        if (session.purpose !== 'referral_settings') {
+            return res.status(400).json({ success: false, message: 'Invalid OTP purpose' });
+        }
+
+        if (session.expires_at < new Date()) {
+            await OtpSession.findByIdAndDelete(otpSessionId);
+            return res.status(400).json({ success: false, message: 'OTP has expired' });
+        }
+
+        if (session.attempts >= MAX_OTP_ATTEMPTS) {
+            await OtpSession.findByIdAndDelete(otpSessionId);
+            return res.status(403).json({
+                success: false,
+                message: 'Too many failed attempts. Please request a new OTP.'
+            });
+        }
+
+        const otpHash = hashOtp(otp);
+        if (otpHash !== session.otp_hash) {
+            session.attempts += 1;
+            await session.save();
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid OTP',
+                attemptsRemaining: MAX_OTP_ATTEMPTS - session.attempts
+            });
+        }
+
+        // OTP verified — delete session and save settings
+        await OtpSession.findByIdAndDelete(otpSessionId);
+
+        const settingsDoc = await ReferralSettings.getSettings();
+        
+        if (typeof pendingSettings.isEnabled === 'boolean') settingsDoc.isEnabled = pendingSettings.isEnabled;
+        if (typeof pendingSettings.referrerBonusAmount === 'number' && pendingSettings.referrerBonusAmount >= 0) settingsDoc.referrerBonusAmount = pendingSettings.referrerBonusAmount;
+        if (typeof pendingSettings.referredBonusAmount === 'number' && pendingSettings.referredBonusAmount >= 0) settingsDoc.referredBonusAmount = pendingSettings.referredBonusAmount;
+        settingsDoc.updatedBy = adminId;
+        settingsDoc.updatedAt = new Date();
+        
+        await settingsDoc.save();
+
+        console.log(`[ADMIN] Referral settings updated after OTP verification by ${adminId}: enabled=${settingsDoc.isEnabled}, referrer=${settingsDoc.referrerBonusAmount}, referred=${settingsDoc.referredBonusAmount}`);
+
+        res.json({
+            success: true,
+            message: 'Settings updated successfully',
+            settings: settingsDoc
+        });
+    } catch (err) {
+        console.error('[ADMIN_VERIFY_REFERRAL_SETTINGS_OTP]', err.message);
+        res.status(500).json({ success: false, message: 'Failed to verify OTP' });
     }
 };

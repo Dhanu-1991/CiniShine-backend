@@ -46,7 +46,8 @@ import {
 import {
     listReferrals, getReferralStats, getReferralDetail,
     handleApproveReferral, handleRejectReferral,
-    getReferralSettingsHandler, updateReferralSettingsHandler
+    getReferralSettingsHandler, updateReferralSettingsHandler,
+    sendReferralSettingsOtp, verifyReferralSettingsOtp
 } from '../../controllers/admin-controllers/referralController.js';
 import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
@@ -171,6 +172,8 @@ adminRouter.get('/referrals', listReferrals);
 adminRouter.get('/referrals/stats', getReferralStats);
 adminRouter.get('/referrals/settings', getReferralSettingsHandler);
 adminRouter.put('/referrals/settings', auditLog('referral_settings_updated', 'referral'), updateReferralSettingsHandler);
+adminRouter.post('/referrals/settings/send-otp', sendReferralSettingsOtp);
+adminRouter.post('/referrals/settings/verify-otp', auditLog('referral_settings_otp_verified', 'referral'), verifyReferralSettingsOtp);
 adminRouter.get('/referrals/:id', getReferralDetail);
 adminRouter.post('/referrals/:id/approve', auditLog('referral_approved', 'referral'), handleApproveReferral);
 adminRouter.post('/referrals/:id/reject', auditLog('referral_rejected', 'referral'), handleRejectReferral);
