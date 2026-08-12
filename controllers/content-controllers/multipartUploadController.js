@@ -17,7 +17,9 @@ import Content from "../../models/content.model.js";
 import User from '../../models/user.model.js';
 import ContentToCommunity from '../../models/contentToCommunity.model.js';
 import Community from '../../models/community.model.js';
-import CommunityMember from '../../models/communityMember.model.js'; import { createUploadNotifications } from "../notification-controllers/notificationController.js";
+import CommunityMember from '../../models/communityMember.model.js';
+import { createUploadNotifications } from "../notification-controllers/notificationController.js";
+import { markContentUploaded } from "../../utils/referralService.js";
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -300,6 +302,10 @@ export const multipartComplete = async (req, res) => {
         }
 
         const content = await Content.findByIdAndUpdate(fileId, updateData, { new: true });
+
+        if (content) {
+            markContentUploaded(content.userId, content._id).catch(err => console.error('[REFERRAL] Error marking content uploaded:', err.message));
+        }
 
         // Notify subscribers about the new upload
         if (content) {

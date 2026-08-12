@@ -153,6 +153,18 @@ const userSchema = new mongoose.Schema({
         type: Number,
         default: 0,
     },
+    // Referral system
+    referralCode: {
+        type: String,
+        unique: true,
+        sparse: true,
+        index: true,
+    },
+    referredBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+    },
 });
 
 const User = mongoose.model("User", userSchema);

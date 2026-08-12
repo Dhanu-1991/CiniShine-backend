@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import User from "../../models/user.model.js";
 import { setAuthCookies } from "./services/cookieHelper.js";
 import { ensurePrimaryWallet } from "../../utils/walletService.js";
+import { processReferralSignup } from '../../utils/referralService.js';
 
 let googleClient = null;
 let googleClientInitError = null;
@@ -49,7 +50,7 @@ const verifyGoogleToken = async (credential) => {
 
 const googleAuth = async (req, res) => {
   try {
-    const { credential } = req.body;
+    const { credential, referralCode } = req.body;
 
     if (!process.env.GOOGLE_CLIENT_ID) {
       return res.status(500).json({
@@ -152,6 +153,12 @@ const googleAuth = async (req, res) => {
 
       // Create primary wallet for new user (fire-and-forget, non-blocking)
       ensurePrimaryWallet(user._id).catch(err => console.error('Wallet creation error:', err));
+
+      if (referralCode) {
+          processReferralSignup(referralCode, user._id).catch(err => {
+              console.error('[GOOGLE_AUTH] Referral processing error:', err.message);
+          });
+      }
     }
 
     // Set httpOnly auth cookies

@@ -1620,6 +1620,7 @@ export const listAllContent = async (req, res) => {
 
         // Summary Stats
         const statsAgg = await Content.aggregate([
+            { $match: filter },
             {
                 $group: {
                     _id: null,
@@ -1636,9 +1637,24 @@ export const listAllContent = async (req, res) => {
             }
         ]);
         
-        const overallPpvRevAgg = await Purchase.aggregate([
-            { $match: { status: { $in: ['active', 'expired'] } } },
-            { $group: { _id: null, totalPpvRevenue: { $sum: '$creatorPayout' } } }
+        const overallPpvRevAgg = await Content.aggregate([
+            { $match: filter },
+            {
+                $lookup: {
+                    from: 'purchases',
+                    localField: '_id',
+                    foreignField: 'contentId',
+                    as: 'purchases'
+                }
+            },
+            { $unwind: '$purchases' },
+            { $match: { 'purchases.status': { $in: ['active', 'expired'] } } },
+            {
+                $group: {
+                    _id: null,
+                    totalPpvRevenue: { $sum: '$purchases.creatorPayout' }
+                }
+            }
         ]);
 
         const stats = statsAgg[0] || { totalCount: 0, totalViews: 0, totalWatchTime: 0, uploading: 0, processing: 0, completed: 0, failed: 0, removed: 0, ppvCount: 0 };

@@ -331,6 +331,93 @@ const templates = {
             text: `${PLATFORM_NAME} - Engagement Earnings Credited\n\nHi ${creatorName},\n\n₹${formattedAmount} has been credited to your Secondary Wallet for ${payoutMonth}.\n\nView details in your wallet: ${FRONTEND_URL}/wallet`
         };
     },
+
+    referralApprovedReferrer: ({ referrerName, referredName, bonusAmount }) => ({
+        subject: `[${PLATFORM_NAME}] 🎊 Referral Approved! You earned ₹${bonusAmount}`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #34d399; margin-top: 0;">Referral Successful!</h2>
+                    <p>Hi <strong>${referrerName}</strong>,</p>
+                    <p>Great news! Your friend <strong>${referredName}</strong> has successfully uploaded content, and your referral has been approved.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #10b981; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #e0e0e0;"><strong>Bonus Credited:</strong> ₹${bonusAmount}</p>
+                    </div>
+                    <p>The bonus has been credited to your settlement wallet (Wallet 2).</p>
+                    <p>Keep referring to earn more!</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${referrerName}, your referral for ${referredName} was approved. You earned ₹${bonusAmount}.`
+    }),
+
+    referralApprovedReferred: ({ referredName, referrerName, bonusAmount }) => ({
+        subject: `[${PLATFORM_NAME}] 🎉 Welcome Bonus Approved!`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #34d399; margin-top: 0;">Welcome Bonus Credited!</h2>
+                    <p>Hi <strong>${referredName}</strong>,</p>
+                    <p>Congratulations! You successfully uploaded your first content via <strong>${referrerName}</strong>'s referral.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #10b981; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #e0e0e0;"><strong>Bonus Credited:</strong> ₹${bonusAmount}</p>
+                    </div>
+                    <p>The bonus has been credited to your primary wallet.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${referredName}, your welcome bonus of ₹${bonusAmount} for joining via ${referrerName} has been approved.`
+    }),
+
+    referralRejectedReferrer: ({ referrerName, referredName, reason }) => ({
+        subject: `[${PLATFORM_NAME}] Referral Update: ${referredName}`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #e63946 0%, #c1121f 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #ff6b6b; margin-top: 0;">Referral Rejected</h2>
+                    <p>Hi <strong>${referrerName}</strong>,</p>
+                    <p>Unfortunately, your referral for <strong>${referredName}</strong> has been rejected by our team.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #e63946; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #ff9999;"><strong>Reason:</strong></p>
+                        <p style="margin: 8px 0 0; color: #e0e0e0;">${reason}</p>
+                    </div>
+                    <p>Please review our referral program guidelines.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${referrerName}, your referral for ${referredName} was rejected. Reason: ${reason}`
+    }),
+
+    referralRejectedReferred: ({ referredName, referrerName, reason }) => ({
+        subject: `[${PLATFORM_NAME}] Welcome Bonus Update`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #e63946 0%, #c1121f 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #ff6b6b; margin-top: 0;">Welcome Bonus Update</h2>
+                    <p>Hi <strong>${referredName}</strong>,</p>
+                    <p>Unfortunately, your welcome bonus from <strong>${referrerName}</strong>'s referral could not be processed.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #e63946; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #ff9999;"><strong>Reason:</strong></p>
+                        <p style="margin: 8px 0 0; color: #e0e0e0;">${reason}</p>
+                    </div>
+                    <p>If you believe this is an error, please contact our support team.</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${referredName}, your welcome bonus for joining via ${referrerName} was rejected. Reason: ${reason}`
+    }),
 };
 
 // Pre-built quick templates for admin UI

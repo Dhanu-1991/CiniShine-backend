@@ -44,6 +44,11 @@ import {
     getEngagementPayoutReport, runSingleCreatorEngagementPayout, getEngagementPayoutDetail
 } from '../../controllers/wallet-controllers/engagementPayoutController.js';
 import {
+    listReferrals, getReferralStats, getReferralDetail,
+    handleApproveReferral, handleRejectReferral,
+    getReferralSettingsHandler, updateReferralSettingsHandler
+} from '../../controllers/admin-controllers/referralController.js';
+import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
 
@@ -160,6 +165,15 @@ adminRouter.get('/engagement-payouts/:payoutId/detail', getEngagementPayoutDetai
 // Ledger & Live Transfers
 adminRouter.get('/ledger/daily', getDailyLedger);
 adminRouter.get('/ledger/live', getLiveTransfers);
+
+// Referral management routes (add after existing route sections)
+adminRouter.get('/referrals', listReferrals);
+adminRouter.get('/referrals/stats', getReferralStats);
+adminRouter.get('/referrals/settings', getReferralSettingsHandler);
+adminRouter.put('/referrals/settings', auditLog('referral_settings_updated', 'referral'), updateReferralSettingsHandler);
+adminRouter.get('/referrals/:id', getReferralDetail);
+adminRouter.post('/referrals/:id/approve', auditLog('referral_approved', 'referral'), handleApproveReferral);
+adminRouter.post('/referrals/:id/reject', auditLog('referral_rejected', 'referral'), handleRejectReferral);
 
 // ─── SuperAdmin-only routes ──────────────────────────────────────────────────
 adminRouter.post('/approve-signup', requireSuperAdmin, auditLog('signup_approved', 'admin'), approveSignup);

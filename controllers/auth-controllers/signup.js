@@ -3,13 +3,14 @@ import bcrypt from "bcryptjs";
 import User from "../../models/user.model.js";
 import dotenv from 'dotenv';
 import { setAuthCookies } from "./services/cookieHelper.js";
+import { processReferralSignup } from '../../utils/referralService.js';
 dotenv.config();
 
 const Signup = async (req, res, next) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const { userName, contact, password } = req.body;
+        const { userName, contact, password, referralCode } = req.body;
         // Check if user exists
         const existingUser = await User.findOne({ contact });
         if (existingUser) {
@@ -24,6 +25,12 @@ const Signup = async (req, res, next) => {
 
         await session.commitTransaction();
         session.endSession();
+
+        if (referralCode) {
+            processReferralSignup(referralCode, newUser[0]._id).catch(err => {
+                console.error('[SIGNUP] Referral processing error:', err.message);
+            });
+        }
 
         // Set httpOnly auth cookies
         const { accessToken, refreshToken } = setAuthCookies(res, newUser[0]);
