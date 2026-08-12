@@ -608,7 +608,7 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     console.log(`🎥 Encoding ${renditions.length} renditions (all at once)...`);
 
     const splitOutputs = renditions.map((_, i) => `[v${i}]`).join('');
-    const scaleFilters = renditions.map((r, i) => `[v${i}]scale=${r.resolution}[v${i}out]`).join('; ');
+    const scaleFilters = renditions.map((r, i) => `[v${i}]scale=${r.width}:${r.height}[v${i}out]`).join('; ');
     const filterComplex = `[0:v]split=${renditions.length}${splitOutputs}; ${scaleFilters}`;
 
     const ffArgs = [
@@ -777,10 +777,10 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     const isVertical = videoStream.height > videoStream.width;
     const renditions = getAppropriateRenditions(videoStream.width, videoStream.height, 'short');
 
-    // Build scale filters — swap W:H for vertical content
+    // Build scale filters — use correct W:H for vertical/horizontal content
     const splitOutputs = renditions.map((_, i) => `[v${i}]`).join('');
     const scaleFilters = renditions.map((r, i) => {
-      const scale = isVertical ? `scale=${r.height}:${r.width}` : `scale=${r.resolution}`;
+      const scale = isVertical ? `scale=${r.width}:${r.height}` : `scale=${r.height}:${r.width}`;
       return `[v${i}]${scale}[v${i}out]`;
     }).join('; ');
     const filterComplex = `[0:v]split=${renditions.length}${splitOutputs}; ${scaleFilters}`;

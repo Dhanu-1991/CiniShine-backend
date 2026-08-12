@@ -2,9 +2,14 @@ import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
+import { sendNotificationEmail } from '../auth-controllers/services/otpServiceEmail.js';
 
 function getClientIp(req) {
     return req.ip || req.connection?.remoteAddress || '';
+}
+
+function detectContactType(contact) {
+    return contact.includes('@') ? 'email' : 'sms';
 }
 
 /**
@@ -34,6 +39,19 @@ export const approveSignup = async (req, res) => {
         request.status = 'approved';
         request.reviewed_by_admin = req.admin._id;
         await request.save();
+
+        const channel = detectContactType(admin.contact);
+        if (channel === 'email') {
+            await sendNotificationEmail(
+                admin.contact,
+                'Admin Account Approved',
+                'Account Activation',
+                'Welcome to the Admin Portal!',
+                `Hello ${admin.name},<br/><br/>Your application for an admin account has been approved. You can now log in to the admin portal using your credentials.`,
+                '#10b981',
+                'linear-gradient(135deg, #10b981 0%, #047857 100%)'
+            );
+        }
 
         await AdminAuditLog.create({
             admin_id: req.admin._id,
@@ -214,7 +232,21 @@ export const unlockAdmin = async (req, res) => {
 
         admin.locked_until = null;
         admin.failed_attempts_count = 0;
+        admin.require_password_reset = true;
         await admin.save();
+
+        const channel = detectContactType(admin.contact);
+        if (channel === 'email') {
+            await sendNotificationEmail(
+                admin.contact,
+                'Account Unlocked',
+                'Security Update',
+                'Your account has been unlocked',
+                `Hello ${admin.name},<br/><br/>Your admin account has been unlocked by a SuperAdmin. For security purposes, you are required to reset your password before you can log in again.<br/><br/>Please visit the admin portal, select "Reset Password", and generate an OTP to set a new password.`,
+                '#10b981',
+                'linear-gradient(135deg, #10b981 0%, #047857 100%)'
+            );
+        }
 
         await AdminAuditLog.create({
             admin_id: req.admin._id,

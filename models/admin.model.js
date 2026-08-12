@@ -40,6 +40,10 @@ const AdminSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    require_password_reset: {
+        type: Boolean,
+        default: false
+    },
     metadata: {
         type: mongoose.Schema.Types.Mixed,
         default: {}

@@ -6,7 +6,7 @@ import OtpSession from '../../models/adminOtpSession.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
-import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
+import { sendOtpToEmail, sendNotificationEmail } from '../auth-controllers/services/otpServiceEmail.js';
 import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -60,6 +60,15 @@ export const adminSignin = async (req, res) => {
             });
         }
 
+        // Require password reset check
+        if (admin.require_password_reset) {
+            return res.status(403).json({
+                success: false,
+                requireReset: true,
+                message: 'You must reset your password to continue.'
+            });
+        }
+
         const isMatch = await bcrypt.compare(password, admin.password_hash);
         if (!isMatch) {
             admin.failed_attempts_count += 1;
@@ -88,6 +97,19 @@ export const adminSignin = async (req, res) => {
                     note: 'Account permanently locked after 3 failed password attempts'
                 });
 
+                const channel = detectContactType(admin.contact);
+                if (channel === 'email') {
+                    await sendNotificationEmail(
+                        admin.contact,
+                        'Account Locked - Too Many Failed Attempts',
+                        'Security Alert',
+                        'Your account has been locked',
+                        `Your admin account (${admin.contact}) has been permanently locked due to ${MAX_LOGIN_ATTEMPTS} failed password attempts. Please contact a SuperAdmin to unlock your account.`,
+                        '#ef4444',
+                        'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)'
+                    );
+                }
+
                 return res.status(403).json({
                     success: false,
                     message: 'Account permanently locked due to too many failed attempts. Contact a SuperAdmin to unlock.'
@@ -107,6 +129,12 @@ export const adminSignin = async (req, res) => {
             });
 
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+
+        // Password correct - reset failed attempts
+        if (admin.failed_attempts_count > 0) {
+            admin.failed_attempts_count = 0;
+            await admin.save();
         }
 
         // Password correct — check for active OTP session within cooldown period
@@ -230,6 +258,19 @@ export const adminVerifyOtp = async (req, res) => {
                         user_agent: req.headers['user-agent'] || '',
                         note: 'Account permanently locked after 3 failed OTP attempts'
                     });
+
+                    const channel = detectContactType(admin.contact);
+                    if (channel === 'email') {
+                        await sendNotificationEmail(
+                            admin.contact,
+                            'Account Locked - Too Many Failed OTP Attempts',
+                            'Security Alert',
+                            'Your account has been locked',
+                            `Your admin account (${admin.contact}) has been permanently locked due to ${MAX_OTP_ATTEMPTS} failed OTP attempts. Please contact a SuperAdmin to unlock your account.`,
+                            '#ef4444',
+                            'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)'
+                        );
+                    }
                 }
             }
 
@@ -447,6 +488,19 @@ export const adminSignup = async (req, res) => {
             metadata: { admin_id: admin._id }
         });
 
+        const channelType = detectContactType(normalizedContact);
+        if (channelType === 'email') {
+            await sendNotificationEmail(
+                normalizedContact,
+                'Admin Application Under Review',
+                'Application Received',
+                'Your application is under review',
+                `Hello ${name.trim()},<br/><br/>Your application for an admin account has been successfully submitted and is currently under review by our SuperAdmins. You will receive an email once your account is approved.`,
+                '#3b82f6',
+                'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)'
+            );
+        }
+
         return res.status(201).json({
             success: true,
             message: 'Signup submitted. Awaiting admin approval.',
@@ -607,7 +661,64 @@ export const forgotPasswordApprove = async (req, res) => {
         request.reviewed_by_admin = req.admin._id;
         await request.save();
 
-        // Send OTP to admin for password reset
+        // Require password reset
+        admin.require_password_reset = true;
+        await admin.save();
+
+        const channel = detectContactType(admin.contact);
+
+        if (channel === 'email') {
+            await sendNotificationEmail(
+                admin.contact,
+                'Password Reset Approved',
+                'Account Security',
+                'Your password reset request is approved',
+                `Hello ${admin.name},<br/><br/>Your request to reset your password has been approved by a SuperAdmin.<br/><br/>Please visit the admin portal, select "Reset Password", and generate an OTP to set a new password.`,
+                '#10b981',
+                'linear-gradient(135deg, #10b981 0%, #047857 100%)'
+            );
+        }
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'forgot_password_approved',
+            target_type: 'admin',
+            target_id: admin._id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: `Approved forgot-password for ${admin.contact}`
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: `Forgot-password approved. Notification sent to ${maskContact(admin.contact, channel)}.`
+        });
+    } catch (error) {
+        console.error('Forgot password approve error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/forgot-password-generate-otp
+ * Admin requests to generate an OTP for resetting their password (if authorized)
+ */
+export const generateResetOtp = async (req, res) => {
+    try {
+        const { contact } = req.body;
+        if (!contact) {
+            return res.status(400).json({ success: false, message: 'Contact required' });
+        }
+
+        const admin = await Admin.findOne({ contact: contact.toLowerCase() });
+        if (!admin) {
+            return res.status(404).json({ success: false, message: 'Admin account not found' });
+        }
+
+        if (!admin.require_password_reset) {
+            return res.status(403).json({ success: false, message: 'You must request a password reset and wait for approval.' });
+        }
+
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const channel = detectContactType(admin.contact);
 
@@ -629,23 +740,20 @@ export const forgotPasswordApprove = async (req, res) => {
             sent = await sendOtpToPhone(admin.contact, otp);
         }
 
-        await AdminAuditLog.create({
-            admin_id: req.admin._id,
-            action: 'forgot_password_approved',
-            target_type: 'admin',
-            target_id: admin._id,
-            ip: getClientIp(req),
-            user_agent: req.headers['user-agent'] || '',
-            note: `Approved forgot-password for ${admin.contact}`
-        });
+        if (!sent) {
+            return res.status(500).json({ success: false, message: 'Failed to send OTP' });
+        }
 
+        const cooldown = Math.ceil(OTP_COOLDOWN_MS / 1000);
         return res.status(200).json({
             success: true,
-            message: `Forgot-password approved. OTP sent to ${maskContact(admin.contact, channel)}.`,
-            otpSessionId: otpSession._id
+            message: `OTP sent to ${maskContact(admin.contact, channel)}`,
+            otpSessionId: otpSession._id,
+            maskedContact: maskContact(admin.contact, channel),
+            cooldownRemaining: cooldown
         });
     } catch (error) {
-        console.error('Forgot password approve error:', error);
+        console.error('Generate reset OTP error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
@@ -688,6 +796,7 @@ export const adminResetPassword = async (req, res) => {
         admin.password_hash = await bcrypt.hash(newPassword, salt);
         admin.locked_until = null;
         admin.failed_attempts_count = 0;
+        admin.require_password_reset = false;
         await admin.save();
 
         await AdminAuditLog.create({

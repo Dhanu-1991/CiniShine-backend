@@ -301,9 +301,95 @@ export async function sendOtpToEmail(to, otp, purpose = 'default') {
       return false;
     }
 
+}
+
+export function getNotificationEmailContent(subject, title, heading, message, badgeColor = "#4f46e5", headerGradient = "linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)") {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${subject}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 40px 10px;">
+    <tr>
+      <td align="center">
+        <table width="100%" max-width="600" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);">
+          
+          <!-- Header Banner -->
+          <tr>
+            <td style="background: ${headerGradient}; padding: 32px 40px; text-align: left;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">${PLATFORM_NAME}</h1>
+              <p style="margin: 6px 0 0 0; color: rgba(255, 255, 255, 0.85); font-size: 14px; font-weight: 400;">${title}</p>
+            </td>
+          </tr>
+
+          <!-- Body Content -->
+          <tr>
+            <td style="padding: 40px; color: #334155; font-size: 15px; line-height: 1.6;">
+              <h2 style="margin-top: 0; color: #0f172a; font-size: 20px; font-weight: 600;">${heading}</h2>
+              <p style="margin-bottom: 24px;">${message}</p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f8fafc; padding: 24px 40px; border-top: 1px solid #e2e8f0; text-align: center; color: #94a3b8; font-size: 12px;">
+              <p style="margin: 0 0 6px 0;">This is an automated notification from ${PLATFORM_NAME}.</p>
+              <p style="margin: 0;">&copy; ${new Date().getFullYear()} ${PLATFORM_NAME}. All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  const text = `${PLATFORM_NAME} - ${title}\n\n${heading}\n\n${message}\n\n© ${new Date().getFullYear()} ${PLATFORM_NAME}`;
+
+  return { subject, html, text };
+}
+
+export async function sendNotificationEmail(to, subject, title, heading, message, badgeColor, headerGradient) {
+  const { subject: finalSubject, html, text } = getNotificationEmailContent(subject, title, heading, message, badgeColor, headerGradient);
+
+  if (resendClient) {
+    try {
+      const resp = await resendClient.emails.send({
+        from: process.env.RESEND_FROM || FROM_ADDRESS,
+        to,
+        subject: finalSubject,
+        html,
+        text,
+      });
+      const succeeded = Boolean(resp && (resp.id || resp.messageId || resp.data?.id));
+      if (succeeded) return true;
+    } catch (err) {
+      if (err?.message?.includes('domain is not verified') || err?.message?.includes('validation_error')) {
+        return false;
+      }
+    }
+  }
+
+  try {
+    const params = {
+      Destination: { ToAddresses: [to] },
+      Message: {
+        Body: {
+          Html: { Charset: "UTF-8", Data: html },
+          Text: { Charset: "UTF-8", Data: text },
+        },
+        Subject: { Charset: "UTF-8", Data: finalSubject },
+      },
+      Source: FROM_ADDRESS,
+    };
+    const command = new SendEmailCommand(params);
+    const response = await ses.send(command);
+    if (!response || !response.MessageId) return false;
     return true;
   } catch (error) {
-    console.error("SES error:", error);
     return false;
   }
 }

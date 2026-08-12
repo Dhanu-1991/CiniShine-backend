@@ -1,7 +1,8 @@
 import express from 'express';
 import {
     adminSignin, adminVerifyOtp, adminSignup, adminResendOtp,
-    forgotPasswordRequest, forgotPasswordApprove, adminResetPassword
+    forgotPasswordRequest, forgotPasswordApprove, adminResetPassword,
+    generateResetOtp
 } from '../../controllers/admin-controllers/adminAuthController.js';
 import {
     approveSignup, rejectSignup, listRequests, removeAdmin, listAdmins, unlockAdmin
@@ -54,6 +55,7 @@ adminRouter.post('/verify-otp', adminRateLimiter(10, 60000), adminVerifyOtp);
 adminRouter.post('/signup', adminRateLimiter(5, 60000), adminSignup);
 adminRouter.post('/resend-otp', adminRateLimiter(3, 60000), adminResendOtp);
 adminRouter.post('/forgot-password-request', adminRateLimiter(3, 60000), forgotPasswordRequest);
+adminRouter.post('/forgot-password-generate-otp', adminRateLimiter(3, 60000), generateResetOtp);
 adminRouter.post('/reset-password', adminRateLimiter(5, 60000), adminResetPassword);
 
 // ─── Protected routes (require valid admin JWT) ─────────────────────────────
