@@ -6,7 +6,6 @@ import OtpSession from '../../models/adminOtpSession.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
-import DummyLockout from '../../models/dummyLockout.model.js';
 import { sendOtpToEmail, sendNotificationEmail } from '../auth-controllers/services/otpServiceEmail.js';
 import { validatePasswordStrength } from '../../utils/passwordValidator.js';
 import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js';
@@ -611,37 +610,11 @@ export const forgotPasswordRequest = async (req, res) => {
 
         const normalizedContact = contact.toLowerCase().trim();
 
-        // Check if this fake contact was permanently locked out
-        const dummyLock = await DummyLockout.findOne({ contact: normalizedContact });
-        if (dummyLock) {
-            return res.status(403).json({
-                success: false,
-                message: 'Your account is locked. A locked account cannot submit a forgot password request. Contact a SuperAdmin to unlock your account.'
-            });
-        }
-
         const admin = await Admin.findOne({ contact: normalizedContact });
         if (!admin) {
-            // We simulate success to prevent enumeration, but we can't send an OTP to a non-existent account.
-            // Create a dummy OtpSession in the database so that the attacker experiences the exact same flow,
-            // including 'attemptsRemaining' decrements, without crashing or revealing the difference.
-            const dummyOtp = Math.floor(100000 + Math.random() * 900000).toString();
-            const dummySession = await OtpSession.create({
-                admin_id: null,
-                contact: normalizedContact,
-                otp_hash: hashOtp(dummyOtp),
-                channel: 'email',
-                purpose: 'forgot_password_submission',
-                expires_at: new Date(Date.now() + OTP_TTL_MS)
-            });
-
-            return res.status(200).json({
-                success: true,
-                needsOtp: true,
-                otpSessionId: dummySession._id,
-                channel: 'email',
-                maskedContact: '***@***.***',
-                cooldownRemaining: 30
+            return res.status(404).json({
+                success: false,
+                message: 'Admin account not found'
             });
         }
 
@@ -745,9 +718,6 @@ export const forgotPasswordRequestVerify = async (req, res) => {
                     admin.failed_attempts_count = 0;
                     await admin.save();
                 }
-            } else {
-                // It's a dummy session, lock the fake contact permanently
-                await DummyLockout.create({ contact: session.contact });
             }
 
             return res.status(403).json({
@@ -840,7 +810,7 @@ export const forgotPasswordApprove = async (req, res) => {
                 'Password Reset Approved',
                 'Account Security',
                 'Your password reset request is approved',
-                `Hello ${admin.name},<br/><br/>Your request to reset your password has been approved by a SuperAdmin.<br/><br/>Please visit the admin portal, select "Reset Password", and generate an OTP to set a new password.`,
+                `Hello ${admin.name},<br/><br/>Your request to reset your password has been approved by a SuperAdmin.<br/><br/>Please visit the admin portal, try to signin with this email and any password to generate an OTP to set a new password.`,
                 '#10b981',
                 'linear-gradient(135deg, #10b981 0%, #047857 100%)'
             );

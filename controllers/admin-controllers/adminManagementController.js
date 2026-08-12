@@ -2,7 +2,6 @@ import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
-import DummyLockout from '../../models/dummyLockout.model.js';
 import { sendNotificationEmail } from '../auth-controllers/services/otpServiceEmail.js';
 
 function getClientIp(req) {
@@ -238,7 +237,7 @@ export const unlockAdmin = async (req, res) => {
                 'Account Unlocked',
                 'Security Update',
                 'Your account has been unlocked',
-                `Hello ${admin.name},<br/><br/>Your admin account has been unlocked by a SuperAdmin. For security purposes, you are required to reset your password before you can log in again.<br/><br/>Please visit the admin portal, select "Reset Password", and generate an OTP to set a new password.`,
+                `Hello ${admin.name},<br/><br/>Your admin account has been unlocked by a SuperAdmin. For security purposes, you are required to reset your password before you can log in again.<br/><br/>Please visit the admin portal, try to signin with this email and any password to generate an OTP to set a new password.`,
                 '#10b981',
                 'linear-gradient(135deg, #10b981 0%, #047857 100%)'
             );
@@ -265,42 +264,6 @@ export const unlockAdmin = async (req, res) => {
         return res.status(200).json({ success: true, message: 'Admin account unlocked successfully' });
     } catch (error) {
         console.error('Unlock admin error:', error);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-};
-
-/**
- * GET /admin/list-dummy-lockouts
- * SuperAdmin lists all dummy lockouts
- */
-export const listDummyLockouts = async (req, res) => {
-    try {
-        const dummyLockouts = await DummyLockout.find().sort({ locked_at: -1 });
-        return res.status(200).json({ success: true, dummyLockouts });
-    } catch (error) {
-        console.error('List dummy lockouts error:', error);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-};
-
-/**
- * DELETE /admin/remove-dummy-lockout/:id
- * SuperAdmin removes a dummy lockout
- */
-export const removeDummyLockout = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const dummyLockout = await DummyLockout.findById(id);
-        
-        if (!dummyLockout) {
-            return res.status(404).json({ success: false, message: 'Dummy lockout not found' });
-        }
-
-        await DummyLockout.findByIdAndDelete(id);
-
-        return res.status(200).json({ success: true, message: `Dummy lockout for "${dummyLockout.contact}" has been removed.` });
-    } catch (error) {
-        console.error('Remove dummy lockout error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };

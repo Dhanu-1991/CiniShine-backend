@@ -5,8 +5,7 @@ import {
     generateResetOtp
 } from '../../controllers/admin-controllers/adminAuthController.js';
 import {
-    approveSignup, rejectSignup, listRequests, removeAdmin, listAdmins, unlockAdmin,
-    listDummyLockouts, removeDummyLockout
+    approveSignup, rejectSignup, listRequests, removeAdmin, listAdmins, unlockAdmin
 } from '../../controllers/admin-controllers/adminManagementController.js';
 import {
     hideContent, removeContent, restoreContent, deleteContent,
@@ -186,8 +185,6 @@ adminRouter.post('/reject-signup', requireSuperAdmin, auditLog('signup_rejected'
 adminRouter.post('/forgot-password-approve', requireSuperAdmin, auditLog('forgot_password_approved', 'admin'), forgotPasswordApprove);
 adminRouter.delete('/remove-admin/:id', requireSuperAdmin, auditLog('admin_remove', 'admin'), removeAdmin);
 adminRouter.get('/list-admins', requireSuperAdmin, listAdmins);
-adminRouter.get('/list-dummy-lockouts', requireSuperAdmin, listDummyLockouts);
-adminRouter.delete('/remove-dummy-lockout/:id', requireSuperAdmin, auditLog('dummy_lockout_remove', 'dummy_lockout'), removeDummyLockout);
 adminRouter.post('/creator/:id/ban', requireSuperAdmin, banChannel);
 adminRouter.post('/creator/:id/unban', requireSuperAdmin, unbanChannel);
 adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);
