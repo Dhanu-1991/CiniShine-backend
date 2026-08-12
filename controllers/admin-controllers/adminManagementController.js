@@ -19,7 +19,7 @@ function detectContactType(contact) {
  */
 export const approveSignup = async (req, res) => {
     try {
-        const { requestId } = req.body;
+        const { requestId } = req.body || {};
         if (!requestId) {
             return res.status(400).json({ success: false, message: 'Request ID required' });
         }
@@ -80,7 +80,7 @@ export const approveSignup = async (req, res) => {
  */
 export const rejectSignup = async (req, res) => {
     try {
-        const { requestId, note } = req.body;
+        const { requestId, note } = req.body || {};
         if (!requestId) {
             return res.status(400).json({ success: false, message: 'Request ID required' });
         }
@@ -155,7 +155,7 @@ export const listRequests = async (req, res) => {
 export const removeAdmin = async (req, res) => {
     try {
         const { id } = req.params;
-        const { reason } = req.body;
+        const { reason } = req.body || {};
 
         if (id === req.admin._id.toString()) {
             return res.status(400).json({ success: false, message: 'Cannot remove yourself' });
@@ -166,25 +166,27 @@ export const removeAdmin = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Admin not found' });
         }
 
-        // SuperAdmins can't be removed by other superadmins — only by themselves (which is blocked above)
-        if (targetAdmin.role === 'superadmin' && req.admin.role !== 'superadmin') {
+        // SuperAdmins cannot be removed by others
+        if (targetAdmin.role === 'superadmin') {
             return res.status(403).json({ success: false, message: 'Cannot remove a SuperAdmin' });
         }
 
-        targetAdmin.status = 'blocked';
-        targetAdmin.password_hash = 'BLOCKED'; // Invalidate password completely
-        targetAdmin.locked_until = new Date(9999, 11, 31); // Lock forever
-        await targetAdmin.save();
+        const adminContact = targetAdmin.contact;
+        const adminName = targetAdmin.name;
+
+        // Permanently delete admin account and any associated requests so they can apply again
+        await Admin.findByIdAndDelete(id);
+        await AdminRequest.deleteMany({ requester_contact: adminContact });
 
         await AdminNotification.create({
             type: 'admin_removed',
             title: 'Admin Removed',
-            message: `Admin "${targetAdmin.name}" (${targetAdmin.contact}) was removed by ${req.admin.name}.`,
+            message: `Admin "${adminName}" (${adminContact}) was permanently removed by ${req.admin.name}.`,
             severity: 'warning',
-            metadata: { removed_admin_id: id, removed_by: req.admin._id }
+            metadata: { removed_admin_id: id, removed_by: req.admin._id, reason: reason || '' }
         });
 
-        return res.status(200).json({ success: true, message: `Admin "${targetAdmin.name}" has been removed.` });
+        return res.status(200).json({ success: true, message: `Admin "${adminName}" has been permanently removed.` });
     } catch (error) {
         console.error('Remove admin error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
