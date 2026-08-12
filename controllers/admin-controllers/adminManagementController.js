@@ -184,16 +184,6 @@ export const removeAdmin = async (req, res) => {
             metadata: { removed_admin_id: id, removed_by: req.admin._id }
         });
 
-        await AdminAuditLog.create({
-            admin_id: req.admin._id,
-            action: 'admin_remove',
-            target_type: 'admin',
-            target_id: id,
-            ip: getClientIp(req),
-            user_agent: req.headers['user-agent'] || '',
-            note: reason || `Removed admin ${targetAdmin.name}`
-        });
-
         return res.status(200).json({ success: true, message: `Admin "${targetAdmin.name}" has been removed.` });
     } catch (error) {
         console.error('Remove admin error:', error);
@@ -305,16 +295,6 @@ export const removeDummyLockout = async (req, res) => {
         }
 
         await DummyLockout.findByIdAndDelete(id);
-
-        await AdminAuditLog.create({
-            admin_id: req.admin._id,
-            action: 'dummy_lockout_remove',
-            target_type: 'dummy_lockout',
-            target_id: null,
-            ip: getClientIp(req),
-            user_agent: req.headers['user-agent'] || '',
-            note: `Removed dummy lockout for contact ${dummyLockout.contact}`
-        });
 
         return res.status(200).json({ success: true, message: `Dummy lockout for "${dummyLockout.contact}" has been removed.` });
     } catch (error) {

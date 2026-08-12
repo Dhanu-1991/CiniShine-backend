@@ -23,12 +23,13 @@ const AdminAuditLogSchema = new mongoose.Schema({
             'ban_request', 'stats_update', 'email_sent',
             'otp_sent', 'otp_verified', 'otp_failed',
             'single_payout', 'bulk_payout', 'payout_complete', 'payout_resend',
+            'dummy_lockout_remove',
             'other'
         ]
     },
     target_type: {
         type: String,
-        enum: ['admin', 'content', 'report', 'feedback', 'user', 'payout', 'system', null],
+        enum: ['admin', 'content', 'report', 'feedback', 'user', 'payout', 'system', 'dummy_lockout', null],
         default: null
     },
     target_id: {
