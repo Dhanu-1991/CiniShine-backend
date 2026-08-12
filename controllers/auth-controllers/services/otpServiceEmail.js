@@ -300,7 +300,11 @@ export async function sendOtpToEmail(to, otp, purpose = 'default') {
       console.error("SES failed to send email");
       return false;
     }
-
+    return true;
+  } catch (err) {
+    console.error("SES fallback error:", err);
+    return false;
+  }
 }
 
 export function getNotificationEmailContent(subject, title, heading, message, badgeColor = "#4f46e5", headerGradient = "linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)") {
