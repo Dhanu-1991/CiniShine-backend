@@ -609,7 +609,8 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
 
     const splitOutputs = renditions.map((_, i) => `[v${i}]`).join('');
     const scaleFilters = renditions.map((r, i) => `[v${i}]scale=${r.width}:${r.height}[v${i}out]`).join('; ');
-    const filterComplex = `[0:v]split=${renditions.length}${splitOutputs}; ${scaleFilters}`;
+    // format=yuv420p converts 10-bit input (e.g. HEVC Main 10) to 8-bit for libx264 main profile
+    const filterComplex = `[0:v]format=yuv420p,split=${renditions.length}${splitOutputs}; ${scaleFilters}`;
 
     const ffArgs = [
       '-hide_banner', '-loglevel', 'error', '-progress', 'pipe:2', '-y',
@@ -783,7 +784,8 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
       const scale = isVertical ? `scale=${r.width}:${r.height}` : `scale=${r.height}:${r.width}`;
       return `[v${i}]${scale}[v${i}out]`;
     }).join('; ');
-    const filterComplex = `[0:v]split=${renditions.length}${splitOutputs}; ${scaleFilters}`;
+    // format=yuv420p converts 10-bit input (e.g. HEVC Main 10) to 8-bit for libx264 main profile
+    const filterComplex = `[0:v]format=yuv420p,split=${renditions.length}${splitOutputs}; ${scaleFilters}`;
 
     const ffArgs = [
       '-hide_banner', '-loglevel', 'error', '-progress', 'pipe:2', '-y',
