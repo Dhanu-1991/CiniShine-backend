@@ -6,6 +6,7 @@ import OtpSession from '../../models/adminOtpSession.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
+import DummyLockout from '../../models/dummyLockout.model.js';
 import { sendOtpToEmail, sendNotificationEmail } from '../auth-controllers/services/otpServiceEmail.js';
 import { validatePasswordStrength } from '../../utils/passwordValidator.js';
 import { sendOtpToPhone } from '../auth-controllers/services/otpServicePhone.js';
@@ -418,6 +419,9 @@ export const adminSignup = async (req, res) => {
         const normalizedContact = contact.toLowerCase().trim();
         const existing = await Admin.findOne({ contact: normalizedContact });
         if (existing) {
+            if (existing.status === 'blocked') {
+                return res.status(403).json({ success: false, message: 'This contact has been permanently banned from the admin portal.' });
+            }
             return res.status(400).json({ success: false, message: 'Admin with this contact already exists' });
         }
 
@@ -596,7 +600,7 @@ export const adminResendOtp = async (req, res) => {
 
 /**
  * POST /admin/forgot-password-request
- * Admin requests activation of forgot-password (hidden UI feature).
+ * Admin requests activation of forgot-password (init step - sends OTP).
  */
 export const forgotPasswordRequest = async (req, res) => {
     try {
@@ -606,12 +610,38 @@ export const forgotPasswordRequest = async (req, res) => {
         }
 
         const normalizedContact = contact.toLowerCase().trim();
+
+        // Check if this fake contact was permanently locked out
+        const dummyLock = await DummyLockout.findOne({ contact: normalizedContact });
+        if (dummyLock) {
+            return res.status(403).json({
+                success: false,
+                message: 'Your account is locked. A locked account cannot submit a forgot password request. Contact a SuperAdmin to unlock your account.'
+            });
+        }
+
         const admin = await Admin.findOne({ contact: normalizedContact });
         if (!admin) {
-            // Don't reveal whether admin exists
+            // We simulate success to prevent enumeration, but we can't send an OTP to a non-existent account.
+            // Create a dummy OtpSession in the database so that the attacker experiences the exact same flow,
+            // including 'attemptsRemaining' decrements, without crashing or revealing the difference.
+            const dummyOtp = Math.floor(100000 + Math.random() * 900000).toString();
+            const dummySession = await OtpSession.create({
+                admin_id: null,
+                contact: normalizedContact,
+                otp_hash: hashOtp(dummyOtp),
+                channel: 'email',
+                purpose: 'forgot_password_submission',
+                expires_at: new Date(Date.now() + OTP_TTL_MS)
+            });
+
             return res.status(200).json({
                 success: true,
-                message: 'If an account exists, a forgot-password request has been submitted.'
+                needsOtp: true,
+                otpSessionId: dummySession._id,
+                channel: 'email',
+                maskedContact: '***@***.***',
+                cooldownRemaining: 30
             });
         }
 
@@ -620,6 +650,14 @@ export const forgotPasswordRequest = async (req, res) => {
             return res.status(403).json({
                 success: false,
                 message: 'Your account is locked. A locked account cannot submit a forgot password request. Contact a SuperAdmin to unlock your account.'
+            });
+        }
+
+        if (admin.require_password_reset) {
+            // ALREADY APPROVED
+            return res.status(200).json({
+                success: true,
+                alreadyApproved: true
             });
         }
 
@@ -636,8 +674,112 @@ export const forgotPasswordRequest = async (req, res) => {
             });
         }
 
+        // Generate OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const channel = detectContactType(admin.contact);
+
+        await OtpSession.deleteMany({ contact: admin.contact, purpose: 'forgot_password_submission' });
+
+        const otpSession = await OtpSession.create({
+            admin_id: admin._id,
+            contact: admin.contact,
+            otp_hash: hashOtp(otp),
+            channel,
+            purpose: 'forgot_password_submission',
+            expires_at: new Date(Date.now() + OTP_TTL_MS)
+        });
+
+        let sent = false;
+        if (channel === 'email') {
+            sent = await sendOtpToEmail(admin.contact, otp, 'admin_login'); // Using admin_login template or similar
+        } else {
+            sent = await sendOtpToPhone(admin.contact, otp);
+        }
+
+        if (!sent) {
+            return res.status(500).json({ success: false, message: 'Failed to send OTP' });
+        }
+
+        return res.status(200).json({
+            success: true,
+            needsOtp: true,
+            otpSessionId: otpSession._id,
+            channel,
+            maskedContact: maskContact(admin.contact, channel),
+            cooldownRemaining: Math.ceil(OTP_COOLDOWN_MS / 1000)
+        });
+    } catch (error) {
+        console.error('Forgot password request error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/forgot-password-request-verify
+ * Verifies the OTP and submits the forgot-password request to the SuperAdmins.
+ */
+export const forgotPasswordRequestVerify = async (req, res) => {
+    try {
+        const { otpSessionId, otp, reason } = req.body;
+        if (!otpSessionId || !otp || !reason) {
+            return res.status(400).json({ success: false, message: 'OTP session, code, and reason required' });
+        }
+
+        const session = await OtpSession.findById(otpSessionId);
+        if (!session || session.purpose !== 'forgot_password_submission') {
+            return res.status(400).json({ success: false, message: 'OTP session not found or expired' });
+        }
+
+        if (session.expires_at < new Date()) {
+            await OtpSession.findByIdAndDelete(otpSessionId);
+            return res.status(400).json({ success: false, message: 'OTP has expired' });
+        }
+
+        if (session.attempts >= MAX_OTP_ATTEMPTS) {
+            await OtpSession.findByIdAndDelete(otpSessionId);
+
+            if (session.admin_id) {
+                const admin = await Admin.findById(session.admin_id);
+                if (admin) {
+                    admin.locked_until = new Date();
+                    admin.failed_attempts_count = 0;
+                    await admin.save();
+                }
+            } else {
+                // It's a dummy session, lock the fake contact permanently
+                await DummyLockout.create({ contact: session.contact });
+            }
+
+            return res.status(403).json({
+                success: false,
+                message: 'Too many failed OTP attempts. Account permanently locked. Contact a SuperAdmin.'
+            });
+        }
+
+        const otpHash = hashOtp(otp);
+        if (otpHash !== session.otp_hash) {
+            session.attempts += 1;
+            await session.save();
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid OTP',
+                attemptsRemaining: MAX_OTP_ATTEMPTS - session.attempts
+            });
+        }
+
+        // OTP Correct - proceed to submit the request
+        await OtpSession.findByIdAndDelete(otpSessionId);
+
+        const admin = await Admin.findById(session.admin_id);
+        if (!admin || admin.locked_until) {
+             return res.status(200).json({
+                 success: true,
+                 message: 'If an account exists and isn\'t locked, your request has been taken.'
+             });
+        }
+
         await AdminRequest.create({
-            requester_contact: normalizedContact,
+            requester_contact: admin.contact,
             type: 'forgot_password_activation',
             reason: reason.trim()
         });
@@ -645,17 +787,17 @@ export const forgotPasswordRequest = async (req, res) => {
         await AdminNotification.create({
             type: 'forgot_password_request',
             title: 'Forgot Password Request',
-            message: `Admin "${admin.name}" (${normalizedContact}) requested password reset. Reason: ${reason.trim()}`,
+            message: `Admin "${admin.name}" (${admin.contact}) requested password reset. Reason: ${reason.trim()}`,
             severity: 'warning',
             metadata: { admin_id: admin._id }
         });
 
         return res.status(200).json({
             success: true,
-            message: 'If an account exists, a forgot-password request has been submitted.'
+            message: 'If an account exists and isn\'t locked, your request has been taken.'
         });
     } catch (error) {
-        console.error('Forgot password request error:', error);
+        console.error('Forgot password request verify error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };

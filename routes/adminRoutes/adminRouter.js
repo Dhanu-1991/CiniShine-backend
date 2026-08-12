@@ -1,11 +1,12 @@
 import express from 'express';
 import {
     adminSignin, adminVerifyOtp, adminSignup, adminResendOtp,
-    forgotPasswordRequest, forgotPasswordApprove, adminResetPassword,
+    forgotPasswordRequest, forgotPasswordRequestVerify, forgotPasswordApprove, adminResetPassword,
     generateResetOtp
 } from '../../controllers/admin-controllers/adminAuthController.js';
 import {
-    approveSignup, rejectSignup, listRequests, removeAdmin, listAdmins, unlockAdmin
+    approveSignup, rejectSignup, listRequests, removeAdmin, listAdmins, unlockAdmin,
+    listDummyLockouts, removeDummyLockout
 } from '../../controllers/admin-controllers/adminManagementController.js';
 import {
     hideContent, removeContent, restoreContent, deleteContent,
@@ -61,6 +62,7 @@ adminRouter.post('/verify-otp', adminRateLimiter(10, 60000), adminVerifyOtp);
 adminRouter.post('/signup', adminRateLimiter(5, 60000), adminSignup);
 adminRouter.post('/resend-otp', adminRateLimiter(3, 60000), adminResendOtp);
 adminRouter.post('/forgot-password-request', adminRateLimiter(3, 60000), forgotPasswordRequest);
+adminRouter.post('/forgot-password-request-verify', adminRateLimiter(5, 60000), forgotPasswordRequestVerify);
 adminRouter.post('/forgot-password-generate-otp', adminRateLimiter(3, 60000), generateResetOtp);
 adminRouter.post('/reset-password', adminRateLimiter(5, 60000), adminResetPassword);
 
@@ -184,6 +186,8 @@ adminRouter.post('/reject-signup', requireSuperAdmin, auditLog('signup_rejected'
 adminRouter.post('/forgot-password-approve', requireSuperAdmin, auditLog('forgot_password_approved', 'admin'), forgotPasswordApprove);
 adminRouter.delete('/remove-admin/:id', requireSuperAdmin, auditLog('admin_remove', 'admin'), removeAdmin);
 adminRouter.get('/list-admins', requireSuperAdmin, listAdmins);
+adminRouter.get('/list-dummy-lockouts', requireSuperAdmin, listDummyLockouts);
+adminRouter.delete('/remove-dummy-lockout/:id', requireSuperAdmin, auditLog('dummy_lockout_remove', 'dummy_lockout'), removeDummyLockout);
 adminRouter.post('/creator/:id/ban', requireSuperAdmin, banChannel);
 adminRouter.post('/creator/:id/unban', requireSuperAdmin, unbanChannel);
 adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);

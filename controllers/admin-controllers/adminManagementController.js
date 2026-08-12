@@ -2,6 +2,7 @@ import Admin from '../../models/admin.model.js';
 import AdminRequest from '../../models/adminRequest.model.js';
 import AdminAuditLog from '../../models/adminAuditLog.model.js';
 import AdminNotification from '../../models/adminNotification.model.js';
+import DummyLockout from '../../models/dummyLockout.model.js';
 import { sendNotificationEmail } from '../auth-controllers/services/otpServiceEmail.js';
 
 function getClientIp(req) {
@@ -170,7 +171,10 @@ export const removeAdmin = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Cannot remove a SuperAdmin' });
         }
 
-        await Admin.findByIdAndDelete(id);
+        targetAdmin.status = 'blocked';
+        targetAdmin.password_hash = 'BLOCKED'; // Invalidate password completely
+        targetAdmin.locked_until = new Date(9999, 11, 31); // Lock forever
+        await targetAdmin.save();
 
         await AdminNotification.create({
             type: 'admin_removed',
@@ -203,7 +207,7 @@ export const removeAdmin = async (req, res) => {
  */
 export const listAdmins = async (req, res) => {
     try {
-        const admins = await Admin.find()
+        const admins = await Admin.find({ status: { $ne: 'blocked' } })
             .select('-password_hash')
             .sort({ createdAt: -1 });
 
@@ -269,6 +273,52 @@ export const unlockAdmin = async (req, res) => {
         return res.status(200).json({ success: true, message: 'Admin account unlocked successfully' });
     } catch (error) {
         console.error('Unlock admin error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * GET /admin/list-dummy-lockouts
+ * SuperAdmin lists all dummy lockouts
+ */
+export const listDummyLockouts = async (req, res) => {
+    try {
+        const dummyLockouts = await DummyLockout.find().sort({ locked_at: -1 });
+        return res.status(200).json({ success: true, dummyLockouts });
+    } catch (error) {
+        console.error('List dummy lockouts error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * DELETE /admin/remove-dummy-lockout/:id
+ * SuperAdmin removes a dummy lockout
+ */
+export const removeDummyLockout = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const dummyLockout = await DummyLockout.findById(id);
+        
+        if (!dummyLockout) {
+            return res.status(404).json({ success: false, message: 'Dummy lockout not found' });
+        }
+
+        await DummyLockout.findByIdAndDelete(id);
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'dummy_lockout_remove',
+            target_type: 'dummy_lockout',
+            target_id: null,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: `Removed dummy lockout for contact ${dummyLockout.contact}`
+        });
+
+        return res.status(200).json({ success: true, message: `Dummy lockout for "${dummyLockout.contact}" has been removed.` });
+    } catch (error) {
+        console.error('Remove dummy lockout error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
