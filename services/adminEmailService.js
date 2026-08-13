@@ -159,21 +159,27 @@ const templates = {
         text: `Hi ${creatorName}, your KYC verification failed. Reason: ${rejectionReason}. Please log in and update your details.`
     }),
 
-    custom: ({ creatorName, subject: customSubject, body }) => ({
-        subject: customSubject || `[${PLATFORM_NAME}] Message from the team`,
-        html: `
-            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
-                <div style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); padding: 24px 32px;">
-                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
-                </div>
-                <div style="padding: 32px;">
-                    <p>Hi <strong>${creatorName}</strong>,</p>
-                    <div style="line-height: 1.6;">${body.replace(/\n/g, '<br>')}</div>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">From Team ${PLATFORM_NAME}.</p>
-                </div>
-            </div>`,
-        text: `Hi ${creatorName}, ${body}`
-    }),
+    custom: ({ creatorName, subject: customSubject, body }) => {
+        let cleanBody = (body || '').trim();
+        // Remove duplicate leading "Hi <Name>," or "Hi <Name>" if present in body
+        cleanBody = cleanBody.replace(/^Hi\s+[^,\n]+,?\s*/i, '').trim();
+
+        return {
+            subject: customSubject || `[${PLATFORM_NAME}] Message from the team`,
+            html: `
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                    <div style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); padding: 24px 32px;">
+                        <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                    </div>
+                    <div style="padding: 32px;">
+                        <p style="margin-top: 0; font-size: 15px;">Hi <strong>${creatorName}</strong>,</p>
+                        <div style="line-height: 1.6;">${cleanBody.replace(/\n/g, '<br>')}</div>
+                        <p style="color: #888; font-size: 12px; margin-top: 24px;">From Team ${PLATFORM_NAME}.</p>
+                    </div>
+                </div>`,
+            text: `Hi ${creatorName},\n\n${cleanBody}`
+        };
+    },
 
     payoutInitiated: ({ creatorName, netAmount, grossAmount, payoutMonth }) => ({
         subject: `[${PLATFORM_NAME}] Payout Initiated: ₹${netAmount}`,

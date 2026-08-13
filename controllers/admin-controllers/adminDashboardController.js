@@ -1051,12 +1051,7 @@ export const adminSendEmailHandler = async (req, res) => {
         for (const user of eligibleUsers) {
             const recipientName = user.channelName || user.userName || user.fullName || 'User';
             
-            // Format body: Ensure "Hi <username>," prefix is present
             let formattedBody = body.trim();
-            const greetingPrefixRegex = /^hi\s+/i;
-            if (!greetingPrefixRegex.test(formattedBody)) {
-                formattedBody = `Hi ${recipientName},\n\n${formattedBody}`;
-            }
 
             try {
                 let sent = false;
