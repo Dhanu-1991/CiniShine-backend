@@ -1083,7 +1083,7 @@ export const adminSendEmailHandler = async (req, res) => {
 
         await AdminAuditLog.create({
             admin_id: req.admin._id,
-            action: 'email_sent_bulk',
+            action: 'email_sent',
             target_type: 'user',
             target_id: eligibleUsers[0]?._id,
             ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '',
