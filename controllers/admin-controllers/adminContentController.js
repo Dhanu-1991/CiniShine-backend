@@ -920,10 +920,33 @@ export const unbanChannel = async (req, res) => {
         user.channelBanReason = null;
         await user.save();
 
-        // Restore content that was hidden by the ban (only 'removed' status)
+        // Restore content that was hidden by the ban
+        const removedContents = await Content.find({ userId: id, status: 'removed' });
+        for (const c of removedContents) {
+            c.status = 'completed';
+            if ((c.price && c.price > 0) || (c.ppvPrice && c.ppvPrice > 0) || (c.rentalPrice && c.rentalPrice > 0) || c.isPayPerView) {
+                c.visibility = 'pay_per_view';
+            } else if (c.previousVisibility) {
+                c.visibility = c.previousVisibility;
+            } else {
+                c.visibility = 'public';
+            }
+            await c.save();
+        }
+
+        // Auto-remedy any content for this creator that has a price but visibility was set to public
         await Content.updateMany(
-            { userId: id, status: 'removed' },
-            { $set: { visibility: 'public', status: 'completed' } }
+            {
+                userId: id,
+                $or: [
+                    { price: { $gt: 0 } },
+                    { ppvPrice: { $gt: 0 } },
+                    { rentalPrice: { $gt: 0 } },
+                    { isPayPerView: true }
+                ],
+                visibility: 'public'
+            },
+            { $set: { visibility: 'pay_per_view' } }
         );
 
         await AdminAuditLog.create({
@@ -1597,7 +1620,16 @@ export const listAllContent = async (req, res) => {
 
         // Auto-remedy any existing PPV content that has price > 0 but visibility set to public (due to past unban bug)
         await Content.updateMany(
-            { price: { $gt: 0 }, visibility: 'public', status: 'completed' },
+            {
+                $or: [
+                    { price: { $gt: 0 } },
+                    { ppvPrice: { $gt: 0 } },
+                    { rentalPrice: { $gt: 0 } },
+                    { isPayPerView: true }
+                ],
+                visibility: 'public',
+                status: 'completed'
+            },
             { $set: { visibility: 'pay_per_view' } }
         );
 
