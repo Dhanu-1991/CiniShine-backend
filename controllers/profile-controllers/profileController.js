@@ -427,7 +427,7 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions'
+            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned'
         ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -473,6 +473,7 @@ export const getProfileSettings = async (req, res) => {
                 channelPicture: channelPictureUrl || user.channelPicture,
                 profilePicture: profilePictureUrl || user.profilePicture,
                 historyPaused: user.historyPaused || false,
+                channelBanned: user.channelBanned || false,
                 contentCounts: counts,
                 subscriberCount,
                 subscriptions,
@@ -755,6 +756,7 @@ export const getContentAnalytics = async (req, res) => {
                 trailerContentId: content.trailerContentId || content.spoilerContentId || null,
                 spoilerContentId: content.spoilerContentId || content.trailerContentId || null,
                 spoilerText: content.spoilerText || '',
+                commentsEnabled: content.commentsEnabled !== false,
                 tags: content.tags,
                 category: content.category,
                 createdAt: content.createdAt,
