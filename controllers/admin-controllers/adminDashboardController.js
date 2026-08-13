@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import Content from '../../models/content.model.js';
 import ContentReport from '../../models/contentReport.model.js';
 import Feedback from '../../models/contact.feedback.model.js';
@@ -14,8 +15,10 @@ import ContentWatchtime from '../../models/contentWatchtime.model.js';
 import PrimaryWallet from '../../models/primaryWallet.model.js';
 import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import UserSession from '../../models/userSession.model.js';
+import OtpSession from '../../models/adminOtpSession.model.js';
 import { getCfUrl } from '../../config/cloudfront.js';
 import { sendCustomEmail } from '../../services/adminEmailService.js';
+import { sendOtpToEmail } from '../auth-controllers/services/otpServiceEmail.js';
 
 /**
  * GET /admin/dashboard
@@ -790,73 +793,6 @@ export const listUsers = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
-
-/**
- * POST /admin/send-email
- * Send a free-form or templated email to a creator.
- * Body: { creatorId, template, subject, body, reason }
- */
-export const adminSendEmailHandler = async (req, res) => {
-    try {
-        const creatorId = req.body.creatorId || req.body.userId;
-        const { template, subject, body, reason } = req.body;
-
-        if (!creatorId) {
-            return res.status(400).json({ success: false, message: 'creatorId is required' });
-        }
-
-        const user = await User.findById(creatorId).select('userName contact channelName').lean();
-        if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
-
-        if (!user.contact || !user.contact.includes('@')) {
-            return res.status(400).json({ success: false, message: 'User does not have an email address' });
-        }
-
-        const { sendAdminEmail, sendCustomEmail } = await import('../../services/adminEmailService.js');
-        const creatorName = user.channelName || user.userName || 'Creator';
-        const adminName = req.admin.name || 'Admin';
-
-        let sent = false;
-        if (template && template !== 'custom') {
-            sent = await sendAdminEmail(template, user.contact, {
-                creatorName, reason: reason || body || '',
-                warningMessage: body || reason || '',
-                adminName, contentTitle: '', contentType: '',
-                subject, body: body || '',
-            });
-        } else {
-            if (!subject || !body) {
-                return res.status(400).json({ success: false, message: 'Subject and body are required for custom emails' });
-            }
-            sent = await sendCustomEmail(user.contact, subject, body, creatorName, adminName);
-        }
-
-        await AdminAuditLog.create({
-            admin_id: req.admin._id,
-            action: 'email_sent',
-            target_type: 'user',
-            target_id: creatorId,
-            ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '',
-            user_agent: req.headers['user-agent'] || '',
-            note: `Email "${template || 'custom'}" sent to ${user.contact}${subject ? ` — Subject: ${subject}` : ''}`
-        });
-
-        return res.status(200).json({
-            success: true, sent,
-            message: sent ? 'Email sent successfully' : 'Email sending failed (check email configuration)'
-        });
-    } catch (error) {
-        console.error('Send email error:', error);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
-    }
-};
-
-/**
- * GET /admin/users/:userId/detailed-analytics
- * Returns deep analytics for a specific user.
- */
 export const getUserDetailedAnalytics = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -952,5 +888,218 @@ export const getUserDetailedAnalytics = async (req, res) => {
     } catch (error) {
         console.error('User detailed analytics error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/emails/send-otp
+ * Generate 6-digit Security OTP for admin email dispatch authorization.
+ */
+export const sendAdminEmailOtp = async (req, res) => {
+    try {
+        const contact = req.admin?.contact;
+        if (!contact) {
+            return res.status(401).json({ success: false, message: 'Admin authentication required or contact details missing' });
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const channel = contact.includes('@') ? 'email' : 'sms';
+
+        await OtpSession.deleteMany({ contact, purpose: 'admin_email' });
+
+        await OtpSession.create({
+            admin_id: req.admin._id,
+            contact,
+            otp_hash: crypto.createHash('sha256').update(otp).digest('hex'),
+            channel,
+            purpose: 'admin_email',
+            expires_at: new Date(Date.now() + 5 * 60 * 1000)
+        });
+
+        let sent = false;
+        try {
+            if (channel === 'email') {
+                sent = await sendOtpToEmail(contact, otp, 'admin_email');
+            }
+        } catch (emailErr) {
+            console.error('⚠️ Admin email OTP dispatch error:', emailErr.message);
+        }
+
+        console.log(`\n=================== [ADMIN_EMAIL_OTP] ===================`);
+        console.log(`🔑 OTP for Admin (${contact}): [ ${otp} ]`);
+        console.log(`=========================================================\n`);
+
+        return res.status(200).json({
+            success: true,
+            sent,
+            message: sent 
+                ? `Security OTP sent to your registered admin contact (${contact})`
+                : `OTP generated for admin (${contact}): ${otp}`
+        });
+    } catch (error) {
+        console.error('Send admin email OTP error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to send OTP' });
+    }
+};
+
+/**
+ * POST /admin/send-email
+ * Send individual or bulk/mass emails with OTP verification.
+ */
+export const adminSendEmailHandler = async (req, res) => {
+    try {
+        const { otp, recipientType = 'single', creatorId, userId, selectedUserIds, filters, template, subject, body, reason } = req.body;
+        const targetId = creatorId || userId;
+
+        if (!otp) {
+            return res.status(400).json({ success: false, message: 'Admin security OTP is required to send emails' });
+        }
+
+        const contact = req.admin?.contact;
+        if (!contact) {
+            return res.status(401).json({ success: false, message: 'Admin contact details missing' });
+        }
+
+        // Verify OTP
+        const otpSession = await OtpSession.findOne({
+            contact,
+            purpose: 'admin_email',
+            expires_at: { $gt: new Date() }
+        });
+
+        if (!otpSession) {
+            return res.status(400).json({ success: false, message: 'OTP expired or not requested. Please request a new OTP.' });
+        }
+
+        const otpHash = crypto.createHash('sha256').update(String(otp).trim()).digest('hex');
+        if (otpSession.otp_hash !== otpHash) {
+            otpSession.attempts = (otpSession.attempts || 0) + 1;
+            await otpSession.save();
+            return res.status(400).json({ success: false, message: 'Invalid OTP provided' });
+        }
+
+        // Delete OTP session after successful verification
+        await OtpSession.deleteOne({ _id: otpSession._id });
+
+        if (!subject || !subject.trim() || !body || !body.trim()) {
+            return res.status(400).json({ success: false, message: 'Subject and message body are required' });
+        }
+
+        // Resolve Target Users
+        let targetUsers = [];
+
+        if (recipientType === 'single' || (targetId && !selectedUserIds && !filters)) {
+            if (!targetId) {
+                return res.status(400).json({ success: false, message: 'Target user ID is required for individual email' });
+            }
+            const singleUser = await User.findById(targetId).select('userName contact channelName fullName').lean();
+            if (!singleUser) {
+                return res.status(404).json({ success: false, message: 'Target user not found' });
+            }
+            targetUsers = [singleUser];
+        } else if (recipientType === 'selected' && Array.isArray(selectedUserIds) && selectedUserIds.length > 0) {
+            targetUsers = await User.find({ _id: { $in: selectedUserIds } })
+                .select('userName contact channelName fullName')
+                .lean();
+        } else {
+            // Mass / Filtered Users
+            let mongoFilter = {};
+            const activeFilters = filters || req.body;
+            const { channelStatus, contentTypeFilter, search } = activeFilters || {};
+
+            if (channelStatus === 'banned') {
+                mongoFilter.channelBanned = true;
+            } else if (channelStatus === 'active') {
+                mongoFilter.channelBanned = { $ne: true };
+            }
+
+            if (search && search.trim()) {
+                const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+                mongoFilter.$or = [
+                    { userName: regex },
+                    { contact: regex },
+                    { channelHandle: regex },
+                    { channelName: regex },
+                    { fullName: regex }
+                ];
+            }
+
+            if (contentTypeFilter === 'with_content' || contentTypeFilter === 'without_content') {
+                const usersWithContent = await Content.distinct('userId');
+                if (contentTypeFilter === 'with_content') {
+                    mongoFilter._id = { $in: usersWithContent };
+                } else {
+                    mongoFilter._id = { $nin: usersWithContent };
+                }
+            }
+
+            targetUsers = await User.find(mongoFilter).select('userName contact channelName fullName').lean();
+        }
+
+        // Filter valid email addresses
+        const eligibleUsers = targetUsers.filter(u => u.contact && u.contact.includes('@'));
+        if (eligibleUsers.length === 0) {
+            return res.status(400).json({ success: false, message: 'No valid recipient email addresses found for the selected filter/users' });
+        }
+
+        const { sendAdminEmail, sendCustomEmail } = await import('../../services/adminEmailService.js');
+        const adminName = req.admin?.name || 'Admin';
+
+        let sentCount = 0;
+        let failCount = 0;
+
+        for (const user of eligibleUsers) {
+            const recipientName = user.channelName || user.userName || user.fullName || 'User';
+            
+            // Format body: Ensure "Hi <username>," prefix is present
+            let formattedBody = body.trim();
+            const greetingPrefixRegex = /^hi\s+/i;
+            if (!greetingPrefixRegex.test(formattedBody)) {
+                formattedBody = `Hi ${recipientName},\n\n${formattedBody}`;
+            }
+
+            try {
+                let sent = false;
+                if (template && template !== 'custom' && template !== 'platform_updates') {
+                    sent = await sendAdminEmail(template, user.contact, {
+                        creatorName: recipientName,
+                        reason: reason || body || '',
+                        warningMessage: body || reason || '',
+                        adminName,
+                        subject: subject.trim(),
+                        body: formattedBody,
+                    });
+                } else {
+                    sent = await sendCustomEmail(user.contact, subject.trim(), formattedBody, recipientName, adminName);
+                }
+
+                if (sent) sentCount++;
+                else failCount++;
+            } catch (err) {
+                console.error(`Failed to send email to ${user.contact}:`, err.message);
+                failCount++;
+            }
+        }
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'email_sent_bulk',
+            target_type: 'user',
+            target_id: eligibleUsers[0]?._id,
+            ip: req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || '',
+            user_agent: req.headers['user-agent'] || '',
+            note: `Email broadcast sent to ${sentCount} recipient(s) (${failCount} failed). Subject: "${subject.trim()}"`
+        });
+
+        return res.status(200).json({
+            success: true,
+            sent: sentCount > 0,
+            count: sentCount,
+            failCount,
+            message: `Successfully sent email to ${sentCount} user(s)${failCount > 0 ? ` (${failCount} failed)` : ''}.`
+        });
+    } catch (error) {
+        console.error('Send email error:', error);
+        return res.status(500).json({ success: false, message: error.message || 'Internal server error' });
     }
 };

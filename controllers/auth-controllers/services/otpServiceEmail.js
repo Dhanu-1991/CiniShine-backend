@@ -131,6 +131,14 @@ export function getOtpEmailContent(otp, purposeInput = 'default') {
       badgeColor: "#f59e0b",
       headerGradient: "linear-gradient(135deg, #f59e0b 0%, #b45309 100%)",
     },
+    admin_email: {
+      title: "Admin Email Dispatch Authorization",
+      subject: `[${PLATFORM_NAME}] Action Required - Admin Email Security OTP`,
+      heading: "Authorize Email Broadcast",
+      message: "An administrative request to send announcement or custom emails to platform users was initiated. Please use the One-Time Password (OTP) below to authorize email delivery:",
+      badgeColor: "#6366f1",
+      headerGradient: "linear-gradient(135deg, #6366f1 0%, #4338ca 100%)",
+    },
     admin_login: {
       title: "Admin Portal Security Code",
       subject: `[${PLATFORM_NAME}] Security Code - Admin Access Authentication`,

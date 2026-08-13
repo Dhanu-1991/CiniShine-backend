@@ -18,7 +18,7 @@ import {
     getDashboard, listReports, resolveReport, listFeedbacks, listEnquiries,
     replyToEnquiry, toggleEnquiryStatus,
     listAuditLogs, listNotifications, markNotificationRead, listUsers, adminSendEmailHandler,
-    getUserDetailedAnalytics
+    sendAdminEmailOtp, getUserDetailedAnalytics
 } from '../../controllers/admin-controllers/adminDashboardController.js';
 import { getAnalytics } from '../../controllers/admin-controllers/adminAnalyticsController.js';
 import {
@@ -130,9 +130,10 @@ adminRouter.get('/audit-logs', listAuditLogs);
 adminRouter.get('/notifications', listNotifications);
 adminRouter.post('/notifications/:id/read', markNotificationRead);
 
-// User management
+// User management & Email Broadcasts
 adminRouter.get('/users', listUsers);
 adminRouter.get('/users/:userId/detailed-analytics', getUserDetailedAnalytics);
+adminRouter.post('/emails/send-otp', sendAdminEmailOtp);
 adminRouter.post('/send-email', auditLog('email_sent', 'user'), adminSendEmailHandler);
 
 // Admin requests (signup approvals, forgot-password activations)
