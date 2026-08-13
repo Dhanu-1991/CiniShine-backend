@@ -853,11 +853,13 @@ export const banChannel = async (req, res) => {
         user.channelBanReason = reason || 'Banned by SuperAdmin';
         await user.save();
 
-        // Hide all their content
-        await Content.updateMany(
-            { userId: id, status: 'completed' },
-            { $set: { visibility: 'private', status: 'removed' } }
-        );
+        // Hide all their content: store previousVisibility so unban restores original state
+        const userContents = await Content.find({ userId: id, status: 'completed' });
+        for (const c of userContents) {
+            c.status = 'removed';
+            c.previousVisibility = c.visibility;
+            await c.save();
+        }
 
         await AdminAuditLog.create({
             admin_id: req.admin._id,
@@ -1593,17 +1595,41 @@ export const listAllContent = async (req, res) => {
         const commentMap = Object.fromEntries(commentCounts.map(c => [c._id.toString(), c.count]));
         const purchaseMap = Object.fromEntries(purchaseAgg.map(p => [p._id.toString(), { count: p.purchases, revenue: p.revenue }]));
 
+        // Auto-remedy any existing PPV content that has price > 0 but visibility set to public (due to past unban bug)
+        await Content.updateMany(
+            { price: { $gt: 0 }, visibility: 'public', status: 'completed' },
+            { $set: { visibility: 'pay_per_view' } }
+        );
+
         const enrichedContents = contents.map(c => {
             const cId = c._id.toString();
             const thumbKey = c.thumbnailKey || c.imageKey || c.thumbnailUrl || c.thumbnail;
-            const mediaKey = c.mediaKey || c.videoKey || c.s3Key;
+            const mediaKey = c.processedKey || c.originalKey || c.hlsKey || c.mediaKey || c.videoKey || c.s3Key;
             const pInfo = purchaseMap[cId] || { count: 0, revenue: 0 };
             const uInfo = c.userId || {};
             
+            let videoUrl = null;
+            let audioUrl = null;
+            let imageUrls = [];
+
+            if (c.contentType === 'short' || c.contentType === 'video') {
+                videoUrl = mediaKey ? getCfUrl(mediaKey) : (c.videoUrl || c.mediaUrl || null);
+            } else if (c.contentType === 'audio') {
+                audioUrl = mediaKey ? getCfUrl(mediaKey) : (c.audioUrl || c.mediaUrl || null);
+            } else if (c.contentType === 'post') {
+                if (c.imageKeys && c.imageKeys.length > 0) {
+                    imageUrls = c.imageKeys.map(k => getCfUrl(k)).filter(Boolean);
+                } else if (c.imageKey) {
+                    imageUrls = [getCfUrl(c.imageKey)].filter(Boolean);
+                }
+            }
+
             return {
                 ...c,
                 thumbnailUrl: getCfUrl(thumbKey),
-                videoUrl: mediaKey ? getCfUrl(mediaKey) : (c.videoUrl || c.mediaUrl || null),
+                videoUrl,
+                audioUrl,
+                imageUrls,
                 hlsMasterUrl: c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null,
                 creator: {
                     userName: uInfo.userName,
@@ -1703,6 +1729,23 @@ export const getContentDetailedAnalytics = async (req, res) => {
 
         const thumbKey = content.thumbnailKey || content.imageKey || content.thumbnailUrl || content.thumbnail;
         content.thumbnailUrl = getCfUrl(thumbKey);
+
+        const mediaKey = content.processedKey || content.originalKey || content.hlsKey || content.mediaKey || content.videoKey || content.s3Key;
+        if (content.hlsMasterKey) {
+            content.hlsMasterUrl = getCfHlsMasterUrl(content.hlsMasterKey);
+        }
+        if (content.contentType === 'short' || content.contentType === 'video') {
+            content.videoUrl = mediaKey ? getCfUrl(mediaKey) : (content.videoUrl || content.mediaUrl || null);
+        } else if (content.contentType === 'audio') {
+            content.audioUrl = mediaKey ? getCfUrl(mediaKey) : (content.audioUrl || content.mediaUrl || null);
+        } else if (content.contentType === 'post') {
+            if (content.imageKeys && content.imageKeys.length > 0) {
+                content.imageUrls = content.imageKeys.map(k => getCfUrl(k)).filter(Boolean);
+            } else if (content.imageKey) {
+                content.imageUrls = [getCfUrl(content.imageKey)].filter(Boolean);
+            }
+        }
+
         if (content.userId) {
             content.userId.channelPicture = getCfUrl(content.userId.channelPicture || content.userId.profilePicture);
         }

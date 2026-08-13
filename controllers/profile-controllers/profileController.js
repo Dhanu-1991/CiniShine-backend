@@ -122,6 +122,9 @@ export const getMyContent = async (req, res) => {
                 commentsEnabled: item.commentsEnabled,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
+                trailerContentId: item.trailerContentId || item.spoilerContentId || null,
+                spoilerContentId: item.spoilerContentId || item.trailerContentId || null,
+                spoilerText: item.spoilerText || '',
                 thumbnailUrl: getCfUrl(item.thumbnailKey),
                 imageUrl: getCfUrl(item.imageKey),
                 hlsMasterUrl: item.hlsMasterKey ? getCfHlsMasterUrl(item.hlsMasterKey) : null,
@@ -175,23 +178,28 @@ export const updateContent = async (req, res) => {
 
         const { title, description, visibility, price, trailerContentId, spoilerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
 
-        // Extract 24-char MongoDB ID from a full watchinit URL or raw ID
+        // Extract 24-char MongoDB ID from a full watchinit URL, string ID, or populated object
         const extractId = (val) => {
             if (!val) return null;
-            const match = val.match(/([a-f\d]{24})$/i);
+            if (typeof val === 'object' && val._id) return val._id.toString();
+            const strVal = String(val);
+            const match = strVal.match(/([a-f\d]{24})$/i);
             return match ? match[1] : null;
         };
         const rawTrailerId = trailerContentId || spoilerContentId;
         const parsedTrailerId = extractId(rawTrailerId);
 
-        // Validate trailer content exists and is publicly visible
+        // Validate trailer/spoiler content: must exist, be public, and be VIDEO format (as per user directive)
         if (parsedTrailerId) {
-            const trailerContent = await Content.findById(parsedTrailerId).select('visibility');
+            const trailerContent = await Content.findById(parsedTrailerId).select('visibility contentType');
             if (!trailerContent) {
-                return res.status(400).json({ error: 'Trailer content not found. Make sure the video exists on WatchinIt.' });
+                return res.status(400).json({ error: 'Spoiler video content not found. Make sure the video exists.' });
+            }
+            if (trailerContent.contentType !== 'video' && trailerContent.contentType !== 'short') {
+                return res.status(400).json({ error: 'Only video content can be used as a spoiler preview. (Thumbnail will be used if no video spoiler is linked).' });
             }
             if (trailerContent.visibility !== 'public') {
-                return res.status(400).json({ error: 'Trailer video must be set to Public visibility. Private, unlisted, or PPV videos cannot be used as trailers.' });
+                return res.status(400).json({ error: 'Spoiler video must be set to Public visibility.' });
             }
         }
 

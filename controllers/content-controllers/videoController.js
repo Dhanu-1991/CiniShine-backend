@@ -111,6 +111,7 @@ export const getVideo = async (req, res) => {
 
         res.json({
             _id: video._id,
+            contentType: video.contentType,
             title: video.title,
             description: video.description,
             duration: video.duration,
