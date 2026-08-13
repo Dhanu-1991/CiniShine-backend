@@ -165,19 +165,23 @@ const templates = {
         cleanBody = cleanBody.replace(/^Hi\s+[^,\n]+,?\s*/i, '').trim();
 
         return {
-            subject: customSubject || `[${PLATFORM_NAME}] Message from the team`,
+            subject: customSubject || `[${PLATFORM_NAME}] Operational Account Update`,
             html: `
-                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
-                    <div style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); padding: 24px 32px;">
-                        <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #0f172a; color: #f8fafc; border-radius: 12px; overflow: hidden; border: 1px solid #1e293b;">
+                    <span style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; mso-hide:all;">Official WatchInit account operational notice regarding wallets, payouts, and platform policies.</span>
+                    <div style="background: #1e1b4b; border-bottom: 1px solid #312e81; padding: 24px 32px;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 700; tracking-tight: -0.02em;">${PLATFORM_NAME} OFFICIAL NOTICE</h1>
                     </div>
                     <div style="padding: 32px;">
-                        <p style="margin-top: 0; font-size: 15px;">Hi <strong>${creatorName}</strong>,</p>
-                        <div style="line-height: 1.6;">${cleanBody.replace(/\n/g, '<br>')}</div>
-                        <p style="color: #888; font-size: 12px; margin-top: 24px;">From Team ${PLATFORM_NAME}.</p>
+                        <p style="margin-top: 0; font-size: 15px; color: #f8fafc;">Hi <strong>${creatorName}</strong>,</p>
+                        <div style="line-height: 1.65; color: #e2e8f0; font-size: 14px;">${cleanBody.replace(/\n/g, '<br>')}</div>
+                        <div style="margin-top: 32px; padding-top: 20px; border-t: 1px solid #334155; font-size: 12px; color: #94a3b8;">
+                            <p style="margin: 0;">This is an official operational notice from Team ${PLATFORM_NAME}.</p>
+                            <p style="margin: 4px 0 0; color: #64748b;">If you need assistance, please reply or contact <a href="mailto:support@watchinit.com" style="color: #818cf8; text-decoration: underline;">support@watchinit.com</a>.</p>
+                        </div>
                     </div>
                 </div>`,
-            text: `Hi ${creatorName},\n\n${cleanBody}`
+            text: `Hi ${creatorName},\n\n${cleanBody}\n\n---\nTeam ${PLATFORM_NAME}\nContact: support@watchinit.com`
         };
     },
 
