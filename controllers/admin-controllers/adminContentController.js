@@ -969,7 +969,7 @@ export const unbanChannel = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: 'Channel unbanned. Content restored to public.'
+            message: 'Channel unbanned. Content restored to initial state.'
         });
     } catch (error) {
         console.error('Unban channel error:', error);
