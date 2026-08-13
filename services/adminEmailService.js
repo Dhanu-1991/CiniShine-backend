@@ -164,6 +164,9 @@ const templates = {
         // Remove duplicate leading "Hi <Name>," or "Hi <Name>" if present in body
         cleanBody = cleanBody.replace(/^Hi\s+[^,\n]+,?\s*/i, '').trim();
 
+        let htmlFormattedBody = cleanBody.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color: #818cf8; font-weight: bold; text-decoration: underline;">$1</a>');
+        htmlFormattedBody = htmlFormattedBody.replace(/\n/g, '<br>');
+
         return {
             subject: customSubject || `[${PLATFORM_NAME}] Operational Account Update`,
             html: `
@@ -174,7 +177,7 @@ const templates = {
                     </div>
                     <div style="padding: 32px;">
                         <p style="margin-top: 0; font-size: 15px; color: #f8fafc;">Hi <strong>${creatorName}</strong>,</p>
-                        <div style="line-height: 1.65; color: #e2e8f0; font-size: 14px;">${cleanBody.replace(/\n/g, '<br>')}</div>
+                        <div style="line-height: 1.65; color: #e2e8f0; font-size: 14px;">${htmlFormattedBody}</div>
                         <div style="margin-top: 32px; padding-top: 20px; border-t: 1px solid #334155; font-size: 12px; color: #94a3b8;">
                             <p style="margin: 0;">This is an official operational notice from Team ${PLATFORM_NAME}.</p>
                             <p style="margin: 4px 0 0; color: #64748b;">If you need assistance, please reply or contact <a href="mailto:support@watchinit.com" style="color: #818cf8; text-decoration: underline;">support@watchinit.com</a>.</p>
