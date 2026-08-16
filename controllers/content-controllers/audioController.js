@@ -12,6 +12,7 @@ import { getCfUrl } from '../../config/cloudfront.js';
 import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
+import Bookmark from '../../models/bookmark.model.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -105,6 +106,16 @@ export const audioUploadComplete = async (req, res) => {
             content.userId, fileId, 'audio',
             updateData.title || content.title, content.thumbnailKey || content.imageKey
         ).catch(err => console.error('Notification error:', err));
+
+        // Auto-bookmark creator's own public audio
+        const effectiveVisibility = updateData.visibility || content.visibility;
+        if (effectiveVisibility === 'public') {
+            Bookmark.findOneAndUpdate(
+                { userId: content.userId, contentId: fileId },
+                { userId: content.userId, contentId: fileId, contentType: 'audio' },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            ).catch(err => console.error('Auto-bookmark error:', err));
+        }
 
         console.log(`✅ Audio upload completed: ${fileId}`);
         res.json({ success: true, message: 'Audio uploaded successfully', contentId: fileId });

@@ -11,6 +11,7 @@ import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.j
 import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 import { hasPpvAccess } from '../../utils/ppvGuard.js';
+import Bookmark from '../../models/bookmark.model.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -1093,6 +1094,15 @@ export const uploadComplete = async (req, res) => {
                 content.userId, content._id, 'video',
                 content.title, content.thumbnailKey
             ).catch(err => console.error('Notification error:', err));
+
+            // Auto-bookmark creator's own public content
+            if (content.visibility === 'public') {
+                Bookmark.findOneAndUpdate(
+                    { userId: content.userId, contentId: content._id },
+                    { userId: content.userId, contentId: content._id, contentType: 'video' },
+                    { upsert: true, new: true, setDefaultsOnInsert: true }
+                ).catch(err => console.error('Auto-bookmark error:', err));
+            }
         }
 
         res.json({ success: true, message: 'Queue reset and video added' });

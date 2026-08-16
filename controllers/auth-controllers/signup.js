@@ -5,6 +5,7 @@ import User from "../../models/user.model.js";
 import dotenv from 'dotenv';
 import { setAuthCookies } from "./services/cookieHelper.js";
 import { processReferralSignup } from '../../utils/referralService.js';
+import { sendWelcomeEmail } from '../../services/authEmailService.js';
 dotenv.config();
 
 const Signup = async (req, res, next) => {
@@ -41,6 +42,13 @@ const Signup = async (req, res, next) => {
         if (referralCode) {
             processReferralSignup(referralCode, newUser[0]._id).catch(err => {
                 console.error('[SIGNUP] Referral processing error:', err.message);
+            });
+        }
+
+        // Send welcome email if contact is an email address (non-blocking)
+        if (contact && contact.includes('@')) {
+            sendWelcomeEmail({ email: contact, userName }).catch(err => {
+                console.error('[SIGNUP] Welcome email error:', err.message);
             });
         }
 

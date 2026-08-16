@@ -111,13 +111,33 @@ export const getBookmarksByType = async (req, res) => {
             if (c.imageKey) c.imageUrl = getCfUrl(c.imageKey);
             if (c.imageKeys?.length) c.imageUrls = c.imageKeys.map(k => getCfUrl(k));
             const mediaKey = c.processedKey || c.originalKey;
-            c.hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
-            c.videoUrl = (c.contentType === 'video' || c.contentType === 'short') && mediaKey
-                ? getCfUrl(mediaKey)
-                : null;
-            c.audioUrl = c.contentType === 'audio' && mediaKey
-                ? getCfUrl(mediaKey)
-                : null;
+
+            // Determine if content is removed or a rental/PPV
+            const isRemoved = c.status === 'removed';
+            const isRental = c.visibility === 'pay_per_view';
+
+            if (isRemoved) {
+                // Strip all media URLs — content no longer accessible
+                c.hlsMasterUrl = null;
+                c.videoUrl = null;
+                c.audioUrl = null;
+                c.isRemoved = true;
+            } else if (isRental) {
+                // Strip media URLs for rentals so hover-play is blocked
+                c.hlsMasterUrl = null;
+                c.videoUrl = null;
+                c.audioUrl = null;
+                c.isRental = true;
+            } else {
+                c.hlsMasterUrl = c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null;
+                c.videoUrl = (c.contentType === 'video' || c.contentType === 'short') && mediaKey
+                    ? getCfUrl(mediaKey)
+                    : null;
+                c.audioUrl = c.contentType === 'audio' && mediaKey
+                    ? getCfUrl(mediaKey)
+                    : null;
+            }
+
             if (c.userId?.channelPicture) c.channelPicture = getCfUrl(c.userId.channelPicture);
             c.channelName = c.userId?.channelName;
             c.channelHandle = c.userId?.channelHandle;

@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import User from "../../models/user.model.js";
 import dotenv from 'dotenv';
 import { setAuthCookies } from "./services/cookieHelper.js";
+import { sendSigninAlertEmail } from "../../services/authEmailService.js";
 dotenv.config();
 
 const signIn = async (req, res, next) => {
@@ -22,11 +23,30 @@ const signIn = async (req, res, next) => {
     }
 
     // 3. Track login time
-    user.lastLoginAt = new Date();
+    const loginTime = new Date();
+    user.lastLoginAt = loginTime;
     await user.save();
 
     // 4. Set httpOnly auth cookies
     const { accessToken, refreshToken } = setAuthCookies(res, user);
+
+    // 5. Send sign-in security alert email (non-blocking)
+    const userEmail = user.email || (user.contact && user.contact.includes('@') ? user.contact : null);
+    if (userEmail) {
+      const ipAddress = req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || req.ip || '';
+      const userAgent = req.headers['user-agent'] || '';
+
+      sendSigninAlertEmail({
+        email: userEmail,
+        userName: user.userName,
+        ipAddress,
+        userAgent,
+        signinTime: loginTime,
+        method: 'Email & Password'
+      }).catch(err => {
+        console.error('[SIGNIN] Sign-in alert email error:', err.message);
+      });
+    }
 
     return res.status(200).json({
       success: true,

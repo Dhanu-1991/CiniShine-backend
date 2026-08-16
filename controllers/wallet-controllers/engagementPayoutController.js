@@ -13,7 +13,7 @@ import { sendAdminEmail } from '../../services/adminEmailService.js';
 import crypto from 'crypto';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const BASE_CPM = 200;           // ₹200 per 1K views (max theoretical rate)
+const BASE_CPM = 130;           // ₹130 per 1K views (base rate at QualityScore 0.20)
 const MIN_VIEWS_FOR_PAYOUT = 10; // Minimum delta views to qualify
 const MIN_WATCH_PERCENT = 5;     // Minimum avg watch % to qualify
 const BAYESIAN_PRIOR_WEIGHT = 100; // Smoothing factor for rate estimation
@@ -111,18 +111,17 @@ function calculateContentPayout(content, commentCount, shareCount, baseCpm = BAS
                        + shareScore * 0.10
                        + durationScore * 0.10;
 
-    // ── Engagement Multiplier ────────────────────────────────────────────
-    // Maps qualityScore to a multiplier that yields ~₹125-150 for normal engagement
-    // Normal engagement ≈ qualityScore ~0.65 → multiplier ~0.955 → ₹191/1K
-    // But with baseCpm=200, at multiplier 0.65: 200*0.65 = ₹130/1K ✓
-    // Let's use: multiplier = qualityScore directly (0.2 to 1.0)
-    // Normal: 0.65 * 200 = ₹130/1K ✓
-    // Excellent: 0.9 * 200 = ₹180/1K
-    // Poor: 0.35 * 200 = ₹70/1K
+    // ── Engagement Payout Rate (₹ per 1,000 views) ────────────────────────
+    // Formula: Payout Rate = 130 + 100 × (QualityScore − 0.20)
+    // QualityScore = 0.20 (min)  → ₹130 / 1K views
+    // QualityScore = 0.65 (avg)  → ₹175 / 1K views
+    // QualityScore = 1.00 (max)  → ₹210 / 1K views
+    const effectiveRate = 130 + 100 * (qualityScore - 0.20);
     const engagementMultiplier = qualityScore;
 
     // ── Calculate payout amount ──────────────────────────────────────────
-    let payoutAmount = (deltaViews / 1000) * baseCpm * engagementMultiplier;
+    // Payout (₹) = MIN( ( ΔViews / 1000 ) × ( 130 + 100 × ( QualityScore − 0.20 ) ), ₹50,000 Cap )
+    let payoutAmount = (deltaViews / 1000) * effectiveRate;
 
     // Apply per-content cap
     payoutAmount = Math.min(payoutAmount, MAX_PAYOUT_PER_CONTENT);
@@ -135,7 +134,9 @@ function calculateContentPayout(content, commentCount, shareCount, baseCpm = BAS
         deltaViews,
         previousPaidViews,
         totalViews,
-        engagementScore: qualityScore * 100,
+        qualityScore: Math.round(qualityScore * 100) / 100,
+        engagementScore: Math.round(qualityScore * 100) / 100,
+        effectiveRate: Math.round(effectiveRate * 100) / 100,
         engagementMultiplier,
         payoutAmount,
         metrics: {
@@ -394,11 +395,8 @@ export const runEngagementPayout = async (req, res) => {
 
             if (calc.payoutAmount <= 0) continue;
 
-            // Apply growth factor
-            const growthFactor = computeGrowthFactor(content, periodStart);
-            const adjustedPayout = Math.round(calc.payoutAmount * growthFactor * 100) / 100;
-
-            totalPool += adjustedPayout;
+            const payoutAmount = calc.payoutAmount;
+            totalPool += payoutAmount;
 
             const item = {
                 contentId: content._id,
@@ -406,10 +404,12 @@ export const runEngagementPayout = async (req, res) => {
                 contentType: content.contentType,
                 creatorId: creator._id,
                 creatorName: creator.channelName || creator.userName || 'Unknown',
-                engagementScore: calc.engagementScore,
+                qualityScore: calc.qualityScore,
+                engagementScore: calc.qualityScore,
+                effectiveRate: calc.effectiveRate,
                 engagementMultiplier: calc.engagementMultiplier,
-                growthFactor,
-                payoutAmount: adjustedPayout,
+                growthFactor: 1.0,
+                payoutAmount,
                 deltaViews: calc.deltaViews,
                 metrics: calc.metrics,
             };
@@ -425,7 +425,7 @@ export const runEngagementPayout = async (req, res) => {
                 });
             }
             const group = payoutsByCreator.get(creatorKey);
-            group.totalPayout += adjustedPayout;
+            group.totalPayout += payoutAmount;
             group.contents.push(item);
         }
 
@@ -620,10 +620,8 @@ export const previewEngagementPayout = async (req, res) => {
 
             if (calc.payoutAmount <= 0) continue;
 
-            const growthFactor = computeGrowthFactor(content, periodStart);
-            const adjustedPayout = Math.round(calc.payoutAmount * growthFactor * 100) / 100;
-
-            totalPool += adjustedPayout;
+            const payoutAmount = calc.payoutAmount;
+            totalPool += payoutAmount;
             totalCreators.add(creator._id.toString());
 
             contentPayouts.push({
@@ -632,10 +630,12 @@ export const previewEngagementPayout = async (req, res) => {
                 contentType: content.contentType,
                 creatorId: creator._id,
                 creatorName: creator.channelName || creator.userName || 'Unknown',
-                engagementScore: calc.engagementScore,
+                qualityScore: calc.qualityScore,
+                engagementScore: calc.qualityScore,
+                effectiveRate: calc.effectiveRate,
                 engagementMultiplier: calc.engagementMultiplier,
-                growthFactor,
-                payoutAmount: adjustedPayout,
+                growthFactor: 1.0,
+                payoutAmount,
                 deltaViews: calc.deltaViews,
                 metrics: calc.metrics,
             });
@@ -804,9 +804,8 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
 
             if (calc.payoutAmount <= 0) continue;
 
-            const growthFactor = computeGrowthFactor(content, periodStart);
-            const adjustedPayout = Math.round(calc.payoutAmount * growthFactor * 100) / 100;
-            totalPayout += adjustedPayout;
+            const payoutAmount = calc.payoutAmount;
+            totalPayout += payoutAmount;
 
             contentPayouts.push({
                 contentId: content._id,
@@ -814,10 +813,12 @@ export const runSingleCreatorEngagementPayout = async (req, res) => {
                 contentType: content.contentType,
                 creatorId: creatorUser._id,
                 creatorName: creatorUser.channelName || creatorUser.userName || 'Unknown',
-                engagementScore: calc.engagementScore,
+                qualityScore: calc.qualityScore,
+                engagementScore: calc.qualityScore,
+                effectiveRate: calc.effectiveRate,
                 engagementMultiplier: calc.engagementMultiplier,
-                growthFactor,
-                payoutAmount: adjustedPayout,
+                growthFactor: 1.0,
+                payoutAmount,
                 deltaViews: calc.deltaViews,
                 metrics: calc.metrics,
             });

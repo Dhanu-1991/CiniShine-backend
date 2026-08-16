@@ -4,6 +4,7 @@ import User from "../../models/user.model.js";
 import { setAuthCookies } from "./services/cookieHelper.js";
 import { ensurePrimaryWallet } from "../../utils/walletService.js";
 import { processReferralSignup } from '../../utils/referralService.js';
+import { sendWelcomeEmail, sendSigninAlertEmail } from '../../services/authEmailService.js';
 
 let googleClient = null;
 let googleClientInitError = null;
@@ -133,8 +134,23 @@ const googleAuth = async (req, res) => {
       // Mark as Google-linked if not already
       if (user.authProvider !== 'google') user.authProvider = 'google';
       user.emailVerified = true;
-      user.lastLoginAt = new Date();
+      const loginTime = new Date();
+      user.lastLoginAt = loginTime;
       await user.save();
+
+      // Send sign-in security alert email (non-blocking)
+      const ipAddress = req.headers['x-forwarded-for']?.split(',')[0] || req.socket?.remoteAddress || req.ip || '';
+      const userAgent = req.headers['user-agent'] || '';
+      sendSigninAlertEmail({
+        email,
+        userName: user.userName || user.fullName,
+        ipAddress,
+        userAgent,
+        signinTime: loginTime,
+        method: 'Google Sign-In'
+      }).catch(err => {
+        console.error('[GOOGLE_AUTH] Sign-in alert email error:', err.message);
+      });
     } else {
       const randomPassword = crypto.randomBytes(48).toString("hex");
       const hashedPassword = await bcrypt.hash(randomPassword, 10);
@@ -149,6 +165,14 @@ const googleAuth = async (req, res) => {
         authProvider: "google",
         emailVerified: true,
         lastLoginAt: new Date(),
+      });
+
+      // Send welcome email for new Google user (non-blocking)
+      sendWelcomeEmail({
+        email,
+        userName: user.userName || user.fullName
+      }).catch(err => {
+        console.error('[GOOGLE_AUTH] Welcome email error:', err.message);
       });
 
       // Create primary wallet for new user (fire-and-forget, non-blocking)

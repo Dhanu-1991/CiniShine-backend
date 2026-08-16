@@ -80,6 +80,10 @@ export const getWatchHistory = async (req, res) => {
                 channelPicUrl = getCfUrl(creator.channelPicture);
             }
 
+            // Check if content has been removed by creator/admin
+            const isRemoved = content.status === 'removed';
+            const isRental = content.visibility === 'pay_per_view';
+
             return {
                 _id: item._id,
                 contentId: content._id,
@@ -88,13 +92,14 @@ export const getWatchHistory = async (req, res) => {
                 description: content.description,
                 thumbnailUrl: getCfUrl(content.thumbnailKey),
                 imageUrl: getCfUrl(content.imageKey),
-                hlsMasterUrl: content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null,
-                videoUrl: (content.contentType === 'video' || content.contentType === 'short') && (content.processedKey || content.originalKey)
+                // Strip media for removed content
+                hlsMasterUrl: isRemoved ? null : (content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null),
+                videoUrl: isRemoved ? null : ((content.contentType === 'video' || content.contentType === 'short') && (content.processedKey || content.originalKey)
                     ? getCfUrl(content.processedKey || content.originalKey)
-                    : null,
-                audioUrl: content.contentType === 'audio' && (content.processedKey || content.originalKey)
+                    : null),
+                audioUrl: isRemoved ? null : (content.contentType === 'audio' && (content.processedKey || content.originalKey)
                     ? getCfUrl(content.processedKey || content.originalKey)
-                    : null,
+                    : null),
                 duration: content.duration,
                 views: content.views || 0,
                 likeCount: content.likeCount || 0,
@@ -110,6 +115,8 @@ export const getWatchHistory = async (req, res) => {
                 visibility: content.visibility,
                 price: content.price,
                 deleted: false,
+                isRemoved,
+                isRental,
             };
         }));
 
