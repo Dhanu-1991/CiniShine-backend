@@ -109,7 +109,7 @@ const changePassword = async (req, res, next) => {
 export const sendChangePasswordOtp = async (req, res) => {
     try {
         const userId = req.user?.id;
-        const { currentPassword, newPassword } = req.body;
+        const { newPassword } = req.body;
 
         if (!userId) {
             return res.status(401).json({ success: false, message: 'Authentication required' });
@@ -118,17 +118,6 @@ export const sendChangePasswordOtp = async (req, res) => {
         const user = await User.findById(userId);
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
-        }
-
-        // If user already has a password, verify current password first
-        if (user.password) {
-            if (!currentPassword) {
-                return res.status(400).json({ success: false, message: 'Current password is required' });
-            }
-            const isMatch = await bcrypt.compare(currentPassword, user.password);
-            if (!isMatch) {
-                return res.status(400).json({ success: false, message: 'Current password does not match' });
-            }
         }
 
         if (newPassword) {
@@ -197,44 +186,48 @@ export const sendChangePasswordOtp = async (req, res) => {
  * Authenticated: Save new password after OTP verification in /settings
  */
 export const changePasswordAuth = async (req, res) => {
+    const userId = req.user?.id;
+    const { newPassword, otp } = req.body;
+
+    if (!userId) {
+        return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+    if (!newPassword) {
+        return res.status(400).json({ success: false, message: 'New password is required' });
+    }
+    if (!otp || String(otp).trim().length !== 6) {
+        return res.status(400).json({ success: false, message: 'Valid 6-digit verification code is required' });
+    }
+
+    const pwValidation = validatePasswordStrength(newPassword);
+    if (!pwValidation.valid) {
+        return res.status(400).json({
+            success: false,
+            message: 'Password does not meet requirements',
+            errors: pwValidation.errors
+        });
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const userId = req.user?.id;
-        const { currentPassword, newPassword, otp } = req.body;
-
-        if (!userId) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(401).json({ success: false, message: 'Authentication required' });
-        }
-        if (!newPassword) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({ success: false, message: 'New password is required' });
-        }
-        if (!otp || String(otp).trim().length !== 6) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({ success: false, message: 'Valid 6-digit verification code is required' });
-        }
-
-        const pwValidation = validatePasswordStrength(newPassword);
-        if (!pwValidation.valid) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({
-                success: false,
-                message: 'Password does not meet requirements',
-                errors: pwValidation.errors
-            });
-        }
-
         const user = await User.findById(userId).session(session);
         if (!user) {
             await session.abortTransaction();
             session.endSession();
             return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (user.password) {
+            const isSame = await bcrypt.compare(newPassword, user.password);
+            if (isSame) {
+                await session.abortTransaction();
+                session.endSession();
+                return res.status(400).json({
+                    success: false,
+                    message: 'New password cannot be the same as your current password'
+                });
+            }
         }
 
         // Verify OTP
@@ -255,21 +248,6 @@ export const changePasswordAuth = async (req, res) => {
                 success: false,
                 message: 'Invalid verification code. Please check and try again.'
             });
-        }
-
-        // If user already has a local password, require current password verification
-        if (user.password) {
-            if (!currentPassword) {
-                await session.abortTransaction();
-                session.endSession();
-                return res.status(400).json({ success: false, message: 'Current password is required' });
-            }
-            const isMatch = await bcrypt.compare(currentPassword, user.password);
-            if (!isMatch) {
-                await session.abortTransaction();
-                session.endSession();
-                return res.status(400).json({ success: false, message: 'Current password does not match' });
-            }
         }
 
         const salt = await bcrypt.genSalt(10);

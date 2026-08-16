@@ -15,17 +15,29 @@ export const listEmailLogs = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const [logs, total] = await Promise.all([
             EmailLog.find(filter)
-                .populate('adminId', 'name email')
-                .sort({ sentAt: -1 })
+                .populate('adminId', 'name email contact')
+                .populate('recipientIds', 'userName channelName contact email')
+                .sort({ sentAt: -1, createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit))
                 .lean(),
             EmailLog.countDocuments(filter),
         ]);
+
+        const formattedLogs = logs.map(log => ({
+            ...log,
+            status: log.status || (log.successCount > 0 ? 'success' : 'failed'),
+            adminEmail: log.adminEmail || log.adminId?.email || log.adminId?.name || log.adminId?.contact || (log.adminId ? 'Admin' : 'System Automated'),
+            body: log.body || log.bodyPreview || '',
+            template: log.template || { 
+                name: log.templateId ? log.templateId.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()) : 'Admin Notification',
+                category: 'Notification'
+            }
+        }));
         
         res.json({
             success: true,
-            logs,
+            logs: formattedLogs,
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(total / parseInt(limit)),

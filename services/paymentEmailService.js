@@ -159,7 +159,34 @@ export async function sendWalletRechargeEmail({ userId, amount, orderId, payment
 
         const text = `${PLATFORM_NAME} - Wallet Recharge Confirmation\n\nHi ${userName},\n\n₹${formattedAmount} has been successfully added to your Wallet balance.\n\nOrder Ref: ${refId}\nDate: ${dateTimeStr}\n\nView your balance at: ${FRONTEND_URL}/wallet`;
 
-        return await sendRawEmail(recipientEmail, subject, html, text);
+        const sent = await sendRawEmail(recipientEmail, subject, html, text);
+
+        try {
+            const EmailLog = (await import('../models/emailLog.model.js')).default;
+            await EmailLog.create({
+                adminId: null,
+                adminEmail: 'System (Billing)',
+                recipientType: 'individual',
+                recipientIds: [user._id],
+                recipientCount: 1,
+                successCount: sent ? 1 : 0,
+                failCount: sent ? 0 : 1,
+                status: sent ? 'success' : 'failed',
+                subject: subject.trim(),
+                body: text || html || '',
+                bodyPreview: (text || html || '').substring(0, 500),
+                templateId: 'wallet_recharge',
+                template: {
+                    name: 'Wallet Recharge Confirmation',
+                    category: 'Billing & Payments'
+                },
+                sentAt: new Date()
+            });
+        } catch (logErr) {
+            console.error('[EMAIL_LOG_RECHARGE_ERROR]', logErr.message);
+        }
+
+        return sent;
     } catch (err) {
         console.error('❌ Error sending wallet recharge email:', err);
         return false;
@@ -258,7 +285,34 @@ export async function sendPpvRentalEmail({ userId, contentId, amount, orderId, p
 
         const text = `${PLATFORM_NAME} - Content Rental Confirmation\n\nHi ${userName},\n\nYou have successfully rented "${contentTitle}" for ₹${formattedAmount}.\n\nAccess Expiry: ${expiryFormatted}\nPayment Method: ${paymentMethod}\nOrder Ref: ${refId}\n\nAccess your content at: ${contentUrl}`;
 
-        return await sendRawEmail(recipientEmail, subject, html, text);
+        const sent = await sendRawEmail(recipientEmail, subject, html, text);
+
+        try {
+            const EmailLog = (await import('../models/emailLog.model.js')).default;
+            await EmailLog.create({
+                adminId: null,
+                adminEmail: 'System (PPV Rentals)',
+                recipientType: 'individual',
+                recipientIds: [user._id],
+                recipientCount: 1,
+                successCount: sent ? 1 : 0,
+                failCount: sent ? 0 : 1,
+                status: sent ? 'success' : 'failed',
+                subject: subject.trim(),
+                body: text || html || '',
+                bodyPreview: (text || html || '').substring(0, 500),
+                templateId: 'ppv_rental',
+                template: {
+                    name: 'PPV Rental Receipt',
+                    category: 'Billing & Payments'
+                },
+                sentAt: new Date()
+            });
+        } catch (logErr) {
+            console.error('[EMAIL_LOG_PPV_ERROR]', logErr.message);
+        }
+
+        return sent;
     } catch (err) {
         console.error('❌ Error sending PPV rental email:', err);
         return false;

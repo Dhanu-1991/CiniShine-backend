@@ -129,12 +129,12 @@ const templates = {
                 <div style="padding: 32px;">
                     <h2 style="color: #34d399; margin-top: 0;">KYC Verified</h2>
                     <p>Hi <strong>${creatorName}</strong>,</p>
-                    <p>Great news! Your KYC details have been successfully verified by our team. Your wallet is now fully approved for payouts and monetization features.</p>
+                    <p>Great news! Your KYC details have been successfully verified by our team. Your Payout Balance is now fully approved for month-end payouts and monetization features.</p>
                     <p>Thank you for submitting your details!</p>
                     <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
-        text: `Hi ${creatorName}, your KYC details have been successfully verified! Your wallet is now fully approved.`
+        text: `Hi ${creatorName}, your KYC details have been successfully verified! Your Payout Balance is now fully approved.`
     }),
 
     kycRejected: ({ creatorName, rejectionReason }) => ({
@@ -224,7 +224,7 @@ const templates = {
                     <div style="background: #2a2a3e; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 4px; margin: 16px 0;">
                         <p style="margin: 0; color: #e0e0e0;"><strong>Amount to be Credited:</strong> ₹${netAmount}</p>
                         <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Partial Amount Processed: ₹${grossAmount}</p>
-                        <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Remaining Wallet Balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}</p>
+                        <p style="margin: 4px 0 0; color: #888; font-size: 13px;">Remaining Payout Balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}</p>
                     </div>
                     <div style="background: #2a2a3e; border-left: 4px solid #ef4444; padding: 16px; border-radius: 4px; margin: 16px 0;">
                         <p style="margin: 0; color: #fca5a5; font-size: 14px;"><strong>Reason for Partial Payout:</strong></p>
@@ -235,7 +235,7 @@ const templates = {
                     <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
-        text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}. If you have any queries, please contact support@watchinit.com.`
+        text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining Payout Balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}. If you have any queries, please contact support@watchinit.com.`
     }),
 
     inactiveCreatorNudge: ({ creatorName }) => ({
@@ -498,26 +498,35 @@ const templates = {
         text: `Hi ${userName}, your referral was not approved. Reason: ${reason}`
     }),
 
-    walletAdjusted: ({ creatorName, action, amount, walletType, reason }) => ({
-        subject: `[${PLATFORM_NAME}] Wallet ${action === 'credit' ? 'Credit' : 'Debit'} Notification`,
-        html: `
-            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
-                <div style="background: linear-gradient(135deg, ${action === 'credit' ? '#10b981 0%, #059669' : '#e63946 0%, #c1121f'} 100%); padding: 24px 32px;">
-                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
-                </div>
-                <div style="padding: 32px;">
-                    <h2 style="color: ${action === 'credit' ? '#34d399' : '#ff6b6b'}; margin-top: 0;">Wallet ${action === 'credit' ? 'Credited' : 'Debited'}</h2>
-                    <p>Hi <strong>${creatorName}</strong>,</p>
-                    <p>Your ${walletType} wallet has been <strong>${action === 'credit' ? 'credited' : 'debited'}</strong>.</p>
-                    <div style="background: #2a2a3e; border-left: 4px solid ${action === 'credit' ? '#10b981' : '#e63946'}; padding: 16px; border-radius: 4px; margin: 16px 0;">
-                        <p style="margin: 0; color: #e0e0e0;"><strong>Amount:</strong> ₹${amount}</p>
-                        <p style="margin: 8px 0 0; color: #e0e0e0;"><strong>Reason:</strong> ${reason}</p>
+    walletAdjusted: ({ creatorName, action, amount, walletType, reason }) => {
+        const isPayout = typeof walletType === 'string' && (
+            walletType.toLowerCase().includes('payout') || 
+            walletType.toLowerCase().includes('secondary') || 
+            walletType.toLowerCase().includes('settlement')
+        );
+        const targetName = isPayout ? 'Payout Balance' : 'Wallet';
+        const formattedAmount = Number(amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return {
+            subject: `[${PLATFORM_NAME}] ${targetName} ${action === 'credit' ? 'Credited' : 'Debited'} Notification`,
+            html: `
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                    <div style="background: linear-gradient(135deg, ${action === 'credit' ? '#10b981 0%, #059669' : '#e63946 0%, #c1121f'} 100%); padding: 24px 32px;">
+                        <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
                     </div>
-                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
-                </div>
-            </div>`,
-        text: `Hi ${creatorName}, your ${walletType} wallet was ${action === 'credit' ? 'credited' : 'debited'} by ₹${amount}. Reason: ${reason}`
-    }),
+                    <div style="padding: 32px;">
+                        <h2 style="color: ${action === 'credit' ? '#34d399' : '#ff6b6b'}; margin-top: 0;">${targetName} ${action === 'credit' ? 'Credited' : 'Debited'}</h2>
+                        <p>Hi <strong>${creatorName}</strong>,</p>
+                        <p>Your ${targetName} has been <strong>${action === 'credit' ? 'credited' : 'debited'}</strong>.</p>
+                        <div style="background: #2a2a3e; border-left: 4px solid ${action === 'credit' ? '#10b981' : '#e63946'}; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                            <p style="margin: 0; color: #e0e0e0;"><strong>Amount:</strong> ₹${formattedAmount}</p>
+                            ${reason ? `<p style="margin: 8px 0 0; color: #e0e0e0;"><strong>Reason:</strong> ${reason}</p>` : ''}
+                        </div>
+                        <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                    </div>
+                </div>`,
+            text: `Hi ${creatorName}, your ${targetName} was ${action === 'credit' ? 'credited' : 'debited'} by ₹${formattedAmount}.${reason ? ` Reason: ${reason}` : ''}`
+        };
+    },
 };
 
 // Pre-built quick templates for admin UI
@@ -618,7 +627,7 @@ async function sendEmail(to, subject, html, text, attachments = []) {
 
 /**
  * Send a templated email to a creator.
- * @param {string} templateName — one of: contentRemoved, channelBanned, channelUnbanned, warning, custom, payoutInitiated, partialPayoutInitiated, payoutCompleted
+ * @param {string} templateName — one of: contentRemoved, channelBanned, channelUnbanned, warning, custom, payoutInitiated, partialPayoutInitiated, payoutCompleted, walletAdjusted, engagementPayoutCredited, referralApprovedReferrer, referralApprovedReferred
  * @param {string} recipientEmail — creator's email address
  * @param {Object} data — template data (creatorName, reason, contentTitle, etc.)
  * @returns {Promise<boolean>}
@@ -738,7 +747,43 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
         }
     }
 
-    return sendEmail(recipientEmail, subject, html, text, attachments);
+    const sent = await sendEmail(recipientEmail, subject, html, text, attachments);
+
+    // Automatically record in EmailLog for admin audit & history tracking (skip OTPs)
+    try {
+        const EmailLog = (await import('../models/emailLog.model.js')).default;
+        const User = (await import('../models/user.model.js')).default;
+        let recipientUser = null;
+        if (data.userId) {
+            recipientUser = await User.findById(data.userId).select('_id contact email').lean();
+        } else if (recipientEmail) {
+            recipientUser = await User.findOne({ $or: [{ contact: recipientEmail }, { email: recipientEmail }] }).select('_id contact email').lean();
+        }
+
+        await EmailLog.create({
+            adminId: data.adminId || null,
+            adminEmail: data.adminEmail || (data.adminName ? `${data.adminName} (Admin)` : (data.adminId ? 'Admin' : 'System Automated')),
+            recipientType: 'individual',
+            recipientIds: recipientUser ? [recipientUser._id] : [],
+            recipientCount: 1,
+            successCount: sent ? 1 : 0,
+            failCount: sent ? 0 : 1,
+            status: sent ? 'success' : 'failed',
+            subject: (subject || '').trim(),
+            body: text || html || '',
+            bodyPreview: (text || html || '').substring(0, 500),
+            templateId: templateName,
+            template: {
+                name: templateName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()),
+                category: 'Admin Notification'
+            },
+            sentAt: new Date()
+        });
+    } catch (logErr) {
+        console.error('[EMAIL_LOG_AUTO_SAVE_ERROR]', logErr.message);
+    }
+
+    return sent;
 }
 
 /**

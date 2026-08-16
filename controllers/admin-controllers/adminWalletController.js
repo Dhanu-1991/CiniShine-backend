@@ -296,7 +296,7 @@ export const adminCreditDebitWallet = async (req, res) => {
                 if (wallet.balance < amount) {
                     return res.status(400).json({
                         success: false,
-                        message: `Insufficient balance. Current primary wallet balance is ₹${wallet.balance.toFixed(2)}, but you are trying to debit ₹${Number(amount).toFixed(2)}.`
+                        message: `Insufficient balance. Current Wallet balance is ₹${wallet.balance.toFixed(2)}, but you are trying to debit ₹${Number(amount).toFixed(2)}.`
                     });
                 }
                 txn = await debitWallet(wallet._id, 'primary', amount, transactionType, { reason }, idempotencyKey);
@@ -311,7 +311,7 @@ export const adminCreditDebitWallet = async (req, res) => {
                 if (wallet.balance < amount) {
                     return res.status(400).json({
                         success: false,
-                        message: `Insufficient balance. Current secondary wallet balance is ₹${wallet.balance.toFixed(2)}, but you are trying to debit ₹${Number(amount).toFixed(2)}.`
+                        message: `Insufficient balance. Current Payout Balance is ₹${wallet.balance.toFixed(2)}, but you are trying to debit ₹${Number(amount).toFixed(2)}.`
                     });
                 }
                 txn = await debitWallet(wallet._id, 'secondary', amount, transactionType, { reason }, idempotencyKey);
@@ -328,8 +328,11 @@ export const adminCreditDebitWallet = async (req, res) => {
                 creatorName,
                 action,
                 amount,
-                walletType: walletType === 'primary' ? 'Primary' : 'Secondary',
+                walletType: walletType === 'primary' ? 'Wallet' : 'Payout Balance',
                 reason,
+                adminId: req.admin?._id,
+                adminEmail: req.admin?.email || req.admin?.name || 'Super Admin',
+                userId: user._id,
             }).catch(err => console.error('[ADMIN_WALLET] Failed to send email:', err.message));
         }
 
