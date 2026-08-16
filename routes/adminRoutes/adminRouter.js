@@ -30,7 +30,7 @@ import {
     adminSendMessage, adminGetMessages, adminGetConversations
 } from '../../controllers/admin-controllers/adminChatController.js';
 import {
-    getKycList, getWalletsList, getSecondaryWalletsList, verifyKyc, rejectKyc
+    getKycList, getWalletsList, getSecondaryWalletsList, verifyKyc, rejectKyc, adminCreditDebitWallet
 } from '../../controllers/admin-controllers/adminWalletController.js';
 import {
     getDailyLedger, getLiveTransfers
@@ -45,13 +45,16 @@ import {
 } from '../../controllers/wallet-controllers/engagementPayoutController.js';
 import {
     listReferrals, getReferralStats, getReferralDetail,
-    handleApproveReferral, handleRejectReferral,
+    handleApproveReferral, handleRejectReferral, handlePartialApproveReferral,
     getReferralSettingsHandler, updateReferralSettingsHandler,
     sendReferralSettingsOtp, verifyReferralSettingsOtp
 } from '../../controllers/admin-controllers/referralController.js';
 import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
+import { listTemplates, getTemplate, createTemplate, updateTemplate, deleteTemplate, seedDefaultTemplates } from '../../controllers/admin-controllers/adminEmailTemplateController.js';
+import { listEmailLogs, getEmailLog } from '../../controllers/admin-controllers/adminEmailLogController.js';
+
 
 const adminRouter = express.Router();
 
@@ -136,7 +139,19 @@ adminRouter.get('/users/:userId/detailed-analytics', getUserDetailedAnalytics);
 adminRouter.post('/emails/send-otp', sendAdminEmailOtp);
 adminRouter.post('/send-email', auditLog('email_sent', 'user'), adminSendEmailHandler);
 
+// Email Templates CRUD
+adminRouter.get('/email-templates', listTemplates);
+adminRouter.get('/email-templates/:id', getTemplate);
+adminRouter.post('/email-templates', auditLog('email_template_created', 'email_template'), createTemplate);
+adminRouter.put('/email-templates/:id', auditLog('email_template_updated', 'email_template'), updateTemplate);
+adminRouter.delete('/email-templates/:id', auditLog('email_template_deleted', 'email_template'), deleteTemplate);
+
+// Email Logs
+adminRouter.get('/email-logs', listEmailLogs);
+adminRouter.get('/email-logs/:id', getEmailLog);
+
 // Admin requests (signup approvals, forgot-password activations)
+
 adminRouter.get('/requests', listRequests);
 
 // Wallet & KYC management
@@ -178,6 +193,7 @@ adminRouter.post('/referrals/settings/send-otp', sendReferralSettingsOtp);
 adminRouter.post('/referrals/settings/verify-otp', auditLog('referral_settings_otp_verified', 'referral'), verifyReferralSettingsOtp);
 adminRouter.get('/referrals/:id', getReferralDetail);
 adminRouter.post('/referrals/:id/approve', auditLog('referral_approved', 'referral'), handleApproveReferral);
+adminRouter.post('/referrals/:id/partial-approve', auditLog('referral_partial_approved', 'referral'), handlePartialApproveReferral);
 adminRouter.post('/referrals/:id/reject', auditLog('referral_rejected', 'referral'), handleRejectReferral);
 
 // ─── SuperAdmin-only routes ──────────────────────────────────────────────────
@@ -192,6 +208,7 @@ adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);
 adminRouter.patch('/creator/:id/stats', requireSuperAdmin, updateCreatorStats);
 adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
 adminRouter.post('/analytics/aggregate', requireSuperAdmin, runAggregation);
+adminRouter.post('/wallets/adjust', requireSuperAdmin, auditLog('wallet_adjusted', 'wallet'), adminCreditDebitWallet);
 // Note: run-single routes moved to regular admin section above
 
 export default adminRouter;

@@ -91,7 +91,7 @@ async function sendRawEmail(to, subject, html, text) {
 }
 
 /**
- * Send Wallet 1 Recharge Confirmation Email
+ * Send Wallet Recharge Confirmation Email
  */
 export async function sendWalletRechargeEmail({ userId, amount, orderId, paymentId }) {
     try {
@@ -110,7 +110,7 @@ export async function sendWalletRechargeEmail({ userId, amount, orderId, payment
         const dateTimeStr = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
         const refId = orderId || paymentId || 'N/A';
 
-        const subject = `[${PLATFORM_NAME}] Wallet 1 Recharged: ₹${formattedAmount}`;
+        const subject = `[${PLATFORM_NAME}] Wallet Recharged: ₹${formattedAmount}`;
 
         const html = `
             <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #0f172a; color: #f8fafc; border-radius: 16px; overflow: hidden; border: 1px solid #1e293b;">
@@ -119,10 +119,10 @@ export async function sendWalletRechargeEmail({ userId, amount, orderId, payment
                     <p style="color: #a7f3d0; margin: 6px 0 0 0; font-size: 13px; font-weight: 600;">Wallet Recharge Confirmation</p>
                 </div>
                 <div style="padding: 32px;">
-                    <h2 style="color: #34d399; margin-top: 0; font-size: 20px;">₹${formattedAmount} Added to Your Wallet 1 🎉</h2>
+                    <h2 style="color: #34d399; margin-top: 0; font-size: 20px;">₹${formattedAmount} Added to Your Wallet 🎉</h2>
                     <p style="font-size: 15px; color: #cbd5e1; line-height: 1.6;">Hi <strong>${userName}</strong>,</p>
                     <p style="font-size: 14px; color: #94a3b8; line-height: 1.6;">
-                        Your <strong>Wallet 1</strong> balance has been successfully credited. You can now use your wallet balance to instantly rent movies, video content, and audio tracks across ${PLATFORM_NAME}.
+                        Your <strong>Wallet</strong> balance has been successfully credited. You can now use your wallet balance to instantly rent movies, video content, and audio tracks across ${PLATFORM_NAME}.
                     </p>
 
                     <div style="background: #1e293b; border: 1px solid #334155; padding: 20px; border-radius: 12px; margin: 24px 0;">
@@ -137,7 +137,7 @@ export async function sendWalletRechargeEmail({ userId, amount, orderId, payment
                             </tr>
                             <tr>
                                 <td style="padding: 8px 0; color: #94a3b8;">Target Wallet:</td>
-                                <td style="padding: 8px 0; color: #f8fafc; text-align: right;">Wallet 1 (Recharge & Spend)</td>
+                                <td style="padding: 8px 0; color: #f8fafc; text-align: right;">Wallet (Recharge & Spend)</td>
                             </tr>
                             <tr>
                                 <td style="padding: 8px 0; color: #94a3b8;">Date & Time:</td>
@@ -157,7 +157,7 @@ export async function sendWalletRechargeEmail({ userId, amount, orderId, payment
             </div>
         `;
 
-        const text = `${PLATFORM_NAME} - Wallet 1 Recharge Confirmation\n\nHi ${userName},\n\n₹${formattedAmount} has been successfully added to your Wallet 1 balance.\n\nOrder Ref: ${refId}\nDate: ${dateTimeStr}\n\nView your balance at: ${FRONTEND_URL}/wallet`;
+        const text = `${PLATFORM_NAME} - Wallet Recharge Confirmation\n\nHi ${userName},\n\n₹${formattedAmount} has been successfully added to your Wallet balance.\n\nOrder Ref: ${refId}\nDate: ${dateTimeStr}\n\nView your balance at: ${FRONTEND_URL}/wallet`;
 
         return await sendRawEmail(recipientEmail, subject, html, text);
     } catch (err) {

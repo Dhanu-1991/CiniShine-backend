@@ -1516,7 +1516,26 @@ export const listAllContent = async (req, res) => {
         if (visibility) filter.visibility = visibility;
         if (contentType) filter.contentType = contentType;
         if (search) {
-            filter.title = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            const searchRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            // Find users matching the search term (search by all name/handle/contact fields)
+            const matchingUsers = await User.find({
+                $or: [
+                    { userName: searchRegex },
+                    { channelName: searchRegex },
+                    { channelHandle: searchRegex },
+                    { fullName: searchRegex },
+                    { contact: searchRegex },
+                ]
+            }).select('_id').lean();
+            const matchingUserIds = matchingUsers.map(u => u._id);
+            
+            filter.$or = [
+                { title: searchRegex },
+                { description: searchRegex },
+                { tags: searchRegex },
+                // Always include userId condition; empty $in gracefully matches nothing
+                { userId: { $in: matchingUserIds } },
+            ];
         }
 
         let needsAggregation = false;

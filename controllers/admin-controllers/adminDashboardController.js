@@ -590,7 +590,8 @@ export const listUsers = async (req, res) => {
             sortBy = 'createdAt',
             sortOrder = 'desc',
             search,
-            channelStatus
+            channelStatus,
+            inactiveDays
         } = req.query;
 
         const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
@@ -631,6 +632,22 @@ export const listUsers = async (req, res) => {
             filter._id = { $in: gstUserIds };
         }
 
+        if (inactiveDays) {
+            const days = parseInt(inactiveDays, 10);
+            if (!isNaN(days)) {
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - days);
+                
+                const activeContentUsers = await Content.distinct('userId', { createdAt: { $gte: cutoffDate } });
+                
+                if (filter._id && filter._id.$in) {
+                    filter._id.$nin = activeContentUsers;
+                } else {
+                    filter._id = { $nin: activeContentUsers };
+                }
+            }
+        }
+
         // Fetch all filtered users first so sorting happens globally (not just inside a single page).
         const users = await User.find(filter)
             .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt')
@@ -651,7 +668,7 @@ export const listUsers = async (req, res) => {
 
         const userIds = users.map((user) => user._id);
 
-        const [fanAgg, contentAgg, kycDocs, primaryWallets, secondaryWallets] = await Promise.all([
+        const [fanAgg, contentAgg, watchtimeAgg, kycDocs, primaryWallets, secondaryWallets] = await Promise.all([
             User.aggregate([
                 { $match: { subscriptions: { $in: userIds } } },
                 { $unwind: '$subscriptions' },
@@ -671,7 +688,16 @@ export const listUsers = async (req, res) => {
                         processingCount: { $sum: { $cond: [{ $eq: ['$status', 'processing'] }, 1, 0] } },
                         completedCount: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
                         failedCount: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
-                        totalWatchTime: { $sum: { $ifNull: ['$totalWatchTime', 0] } }
+                    }
+                }
+            ]),
+            // Aggregate total watch time per user from ContentWatchtime (viewer's own watch time)
+            ContentWatchtime.aggregate([
+                { $match: { userId: { $in: userIds }, userId: { $ne: null } } },
+                {
+                    $group: {
+                        _id: '$userId',
+                        totalWatchTime: { $sum: { $ifNull: ['$activePlayTime', 0] } }
                     }
                 }
             ]),
@@ -697,9 +723,12 @@ export const listUsers = async (req, res) => {
                     processingCount: entry.processingCount || 0,
                     completedCount: entry.completedCount || 0,
                     failedCount: entry.failedCount || 0,
-                    totalWatchTime: entry.totalWatchTime || 0
                 }
             ])
+        );
+
+        const watchtimeMap = new Map(
+            watchtimeAgg.map((entry) => [entry._id.toString(), entry.totalWatchTime || 0])
         );
 
         const enrichedUsers = users.map((user) => {
@@ -711,7 +740,6 @@ export const listUsers = async (req, res) => {
                 processingCount: 0,
                 completedCount: 0,
                 failedCount: 0,
-                totalWatchTime: 0
             };
             const joinedAt = resolveJoinedAt(user);
 
@@ -740,7 +768,7 @@ export const listUsers = async (req, res) => {
                 contentProcessing: contentStats.processingCount,
                 contentCompleted: contentStats.completedCount,
                 contentFailed: contentStats.failedCount,
-                totalWatchTime: contentStats.totalWatchTime,
+                totalWatchTime: watchtimeMap.get(key) || 0,
                 totalWatchCount: 0,
                 wallet1Balance: pWalletMap.get(key) || 0,
                 wallet2Balance: sWalletMap.get(key) || 0,
@@ -1085,6 +1113,25 @@ export const adminSendEmailHandler = async (req, res) => {
             user_agent: req.headers['user-agent'] || '',
             note: `Email broadcast sent to ${sentCount} recipient(s) (${failCount} failed). Subject: "${subject.trim()}"`
         });
+
+        // Log the email batch (skip OTPs)
+        try {
+            const EmailLog = (await import('../../models/emailLog.model.js')).default;
+            await EmailLog.create({
+                adminId: req.admin._id,
+                recipientType: recipientType || 'filtered',
+                recipientIds: eligibleUsers.map(u => u._id),
+                recipientCount: eligibleUsers.length,
+                successCount: sentCount,
+                failCount: failCount,
+                subject: subject.trim(),
+                bodyPreview: body.trim().substring(0, 500),
+                templateId: template || 'custom',
+                filters: filters || {},
+            });
+        } catch (logErr) {
+            console.error('[EMAIL_LOG_ERROR]', logErr.message);
+        }
 
         return res.status(200).json({
             success: true,

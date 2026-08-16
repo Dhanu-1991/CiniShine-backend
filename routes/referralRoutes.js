@@ -57,14 +57,20 @@ referralRouter.get('/my-referrals', async (req, res) => {
 // GET /api/v2/referrals/stats — user's referral stats
 referralRouter.get('/stats', async (req, res) => {
     try {
-        const [total, approved, pending, contentUploaded] = await Promise.all([
+        const [total, approved, pending, contentUploaded, approvedReferrals] = await Promise.all([
             Referral.countDocuments({ referrerId: req.user.id }),
             Referral.countDocuments({ referrerId: req.user.id, status: 'approved' }),
             Referral.countDocuments({ referrerId: req.user.id, status: 'pending' }),
             Referral.countDocuments({ referrerId: req.user.id, status: 'content_uploaded' }),
+            Referral.find({ referrerId: req.user.id, status: 'approved' }).select('referrerBonusAmount').lean(),
         ]);
         const settings = await getReferralSettings();
-        const totalEarned = approved * settings.referrerBonusAmount;
+        const totalEarned = approvedReferrals.reduce((sum, r) => {
+            const amount = (r.referrerBonusAmount !== null && r.referrerBonusAmount !== undefined)
+                ? r.referrerBonusAmount
+                : 25;
+            return sum + amount;
+        }, 0);
         res.json({ success: true, stats: { total, approved, pending, contentUploaded, totalEarned, referrerBonusAmount: settings.referrerBonusAmount, referredBonusAmount: settings.referredBonusAmount, isEnabled: settings.isEnabled } });
     } catch (err) {
         console.error('[REFERRAL_STATS]', err.message);

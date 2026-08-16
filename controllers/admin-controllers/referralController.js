@@ -1,7 +1,7 @@
 import Referral from '../../models/referral.model.js';
 import User from '../../models/user.model.js';
 import ReferralSettings from '../../models/referralSettings.model.js';
-import { approveReferral, rejectReferral, getReferralSettings } from '../../utils/referralService.js';
+import { approveReferral, rejectReferral, partialApproveReferral, getReferralSettings } from '../../utils/referralService.js';
 import crypto from 'crypto';
 import OtpSession from '../../models/adminOtpSession.model.js';
 import Admin from '../../models/admin.model.js';
@@ -139,6 +139,28 @@ export const handleApproveReferral = async (req, res) => {
     } catch (err) {
         console.error('[ADMIN_APPROVE_REFERRAL]', err.message);
         res.status(400).json({ success: false, message: err.message || 'Failed to approve referral' });
+    }
+};
+
+// POST /api/admin/referrals/:id/partial-approve
+export const handlePartialApproveReferral = async (req, res) => {
+    try {
+        const { approveReferrer, approveReferred, rejectionReason } = req.body;
+        
+        // Validate: at least one must be approved
+        if (!approveReferrer && !approveReferred) {
+            return res.status(400).json({ success: false, message: 'At least one party must be approved. Use reject endpoint to reject both.' });
+        }
+        // If one is rejected, reason is required
+        if ((!approveReferrer || !approveReferred) && !rejectionReason) {
+            return res.status(400).json({ success: false, message: 'Rejection reason is required when rejecting one party' });
+        }
+        
+        await partialApproveReferral(req.params.id, req.admin._id, { approveReferrer, approveReferred, rejectionReason });
+        res.json({ success: true, message: 'Referral processed successfully' });
+    } catch (err) {
+        console.error('[ADMIN_PARTIAL_APPROVE_REFERRAL]', err.message);
+        res.status(400).json({ success: false, message: err.message || 'Failed to process referral' });
     }
 };
 

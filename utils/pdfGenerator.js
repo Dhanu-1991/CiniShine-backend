@@ -129,7 +129,7 @@ export function generateSettlementPdf({
       addTableRow('TCS Deducted (Sec 206C, 1.0%)', `- ${tcs}`, '#DC2626');
 
       if (transferredToW1Num > 0) {
-        addTableRow('Transferred to Wallet 1 (Self Transfer)', `- ${transferredToW1}`, '#D97706');
+        addTableRow('Transferred to Wallet (Self Transfer)', `- ${transferredToW1}`, '#D97706');
       }
 
       y += 6;

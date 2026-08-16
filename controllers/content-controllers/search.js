@@ -4,6 +4,15 @@ import SearchHistory from "../../models/searchHistory.model.js";
 import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 
+// Helper for fuzzy search matching
+const generateFuzzyRegex = (word) => {
+    if (word.length < 3) return null; // Too short for fuzzy
+    // Allow one character insertion/substitution between each char
+    const chars = word.split('');
+    const pattern = chars.map(c => `${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.?`).join('');
+    return new RegExp(pattern, 'i');
+};
+
 /**
  * Get search text suggestions (autocomplete)
  * Returns popular/recent search queries, NOT videos
@@ -426,11 +435,27 @@ export const unifiedSearch = async (req, res) => {
         if (wantAll || type === 'post') contentTypes.push('post');
         const wantChannels = wantAll || type === 'channel';
 
+        const fuzzyPatterns = searchWords.map(w => generateFuzzyRegex(w)).filter(Boolean);
+
+        let contentOr = [];
+        if (searchRegex) {
+            contentOr = [
+                { title: searchRegex },
+                { description: searchRegex },
+                { tags: searchRegex },
+                ...fuzzyPatterns.flatMap(fp => [
+                    { title: fp },
+                    { description: fp },
+                    { tags: fp }
+                ])
+            ];
+        }
+
         // Build mongo filter for content — only show completed items
         const contentFilter = {
             visibility: { $in: ['public', 'pay_per_view'] },
             status: 'completed',
-            ...(searchRegex ? { $or: [{ title: searchRegex }, { description: searchRegex }, { tags: searchRegex }] } : {}),
+            ...(contentOr.length > 0 ? { $or: contentOr } : {}),
         };
 
         // Build parallel fetches
@@ -457,6 +482,12 @@ export const unifiedSearch = async (req, res) => {
                     $or: [
                         { channelName: channelRegex },
                         { channelHandle: channelRegex },
+                        { userName: channelRegex },
+                        ...fuzzyPatterns.flatMap(fp => [
+                            { channelName: fp },
+                            { channelHandle: fp },
+                            { userName: fp },
+                        ]),
                     ],
                 })
                     .select('userName channelName channelHandle channelPicture channelDescription bio subscriptions createdAt')

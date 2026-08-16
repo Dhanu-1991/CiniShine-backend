@@ -5,7 +5,7 @@ import { sendOtp } from '../../controllers/auth-controllers/sendotp-signup.js'
 import { verifyOtp } from '../../controllers/auth-controllers/verifyotp.js';
 import { signIn } from '../../controllers/auth-controllers/signin.js';
 import { googleAuth } from '../../controllers/auth-controllers/googleAuth.js';
-import changePassword from '../../controllers/auth-controllers/changepassword.js';
+import changePassword, { changePasswordAuth, sendChangePasswordOtp } from '../../controllers/auth-controllers/changepassword.js';
 import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 import { userData } from '../../controllers/auth-controllers/userdata.js';
 import { updateChannel, checkHandleAvailability, generateHandleSuggestion } from '../../controllers/auth-controllers/updateChannel.js';
@@ -23,6 +23,10 @@ authRouter.post("/signin", adminRateLimiter(10, 60000), signIn);
 authRouter.post("/google-auth", googleAuth);
 authRouter.post("/sendOtp/forgotPass", adminRateLimiter(5, 60000), sendOtp);
 authRouter.post("/signin/changePassword", adminRateLimiter(5, 60000), changePassword);
+
+// Authenticated password update & OTP routes
+authRouter.post("/sendOtp/change-password", universalTokenVerifier, adminRateLimiter(5, 60000), sendChangePasswordOtp);
+authRouter.post("/change-password", universalTokenVerifier, adminRateLimiter(5, 60000), changePasswordAuth);
 
 // Token refresh — uses refresh_token cookie (no auth middleware needed)
 authRouter.post("/refresh", refreshToken);

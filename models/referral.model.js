@@ -20,11 +20,18 @@ const referralSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'content_uploaded', 'approved', 'rejected'],
+        enum: ['pending', 'content_uploaded', 'approved', 'rejected', 'partial_approved'],
         default: 'pending',
     },
     rejectionReason: {
         type: String,
+    },
+    partialRejectionReason: {
+        type: String,
+    },
+    rejectedParty: {
+        type: String,
+        enum: ['referrer', 'referred'],
     },
     contentId: {
         type: mongoose.Schema.Types.ObjectId,

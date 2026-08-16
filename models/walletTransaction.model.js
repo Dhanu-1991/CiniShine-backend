@@ -43,6 +43,8 @@ const walletTransactionSchema = new mongoose.Schema({
             'adjustment',            // Manual adjustment (admin)
             'engagement_earning_credit', // Secondary: creator receives engagement payout
             'referral_bonus_credit',     // Primary/Secondary: referral program bonus
+            'admin_credit',              // Manual admin credit
+            'admin_debit',               // Manual admin debit
         ],
         required: true,
     },

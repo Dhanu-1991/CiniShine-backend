@@ -238,6 +238,31 @@ const templates = {
         text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}. If you have any queries, please contact support@watchinit.com.`
     }),
 
+    inactiveCreatorNudge: ({ creatorName }) => ({
+        subject: `We miss you on ${PLATFORM_NAME}! Your audience is waiting`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #60a5fa; margin-top: 0;">We miss you on Watchin It!</h2>
+                    <p>Hi <strong>${creatorName}</strong>,</p>
+                    <p>It's been a while since you last uploaded content on Watchin It, and we wanted to check in!</p>
+                    <p>Your channel still has viewers discovering your existing content, and they'd love to see more from you. Here are a few reasons to come back:</p>
+                    <ul style="color: #ccc; line-height: 1.6;">
+                        <li>💰 Earn engagement payouts (CPM) on every view your content receives</li>
+                        <li>🎬 Monetize premium content with our Pay-Per-View rental system</li>
+                        <li>👥 Grow your fanbase — your existing followers are still active</li>
+                        <li>🎁 Refer other creators and earn ₹25 per approved referral</li>
+                    </ul>
+                    <p>Log in and upload your next piece today!</p>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${creatorName}, we miss you on ${PLATFORM_NAME}! Your audience is waiting for new content.`
+    }),
+
     payoutCompleted: ({ creatorName, userName, payoutMonth }) => ({
         subject: `[${PLATFORM_NAME}] Payout Settlement Processed: ${payoutMonth}`,
         html: `
@@ -286,10 +311,10 @@ const templates = {
                         <p style="color: #a7f3d0; margin: 6px 0 0 0; font-size: 13px; font-weight: 600;">Engagement Revenue Distribution (${payoutMonth})</p>
                     </div>
                     <div style="padding: 32px;">
-                        <h2 style="color: #34d399; margin-top: 0; font-size: 20px;">₹${formattedAmount} Credited to Your Secondary Wallet ✨</h2>
+                        <h2 style="color: #34d399; margin-top: 0; font-size: 20px;">₹${formattedAmount} Credited to Your Payout Balance ✨</h2>
                         <p style="font-size: 15px; color: #cbd5e1; line-height: 1.6;">Hi <strong>${creatorName}</strong>,</p>
                         <p style="font-size: 14px; color: #94a3b8; line-height: 1.6;">
-                            We are pleased to inform you that your engagement-based content earnings for <strong>${payoutMonth}</strong> have been calculated and successfully credited to your <strong>Secondary Wallet (Wallet 2)</strong>.
+                            We are pleased to inform you that your engagement-based content earnings for <strong>${payoutMonth}</strong> have been calculated and successfully credited to your <strong>Payout Balance</strong>.
                         </p>
 
                         <div style="background: #1e293b; border: 1px solid #334155; padding: 20px; border-radius: 12px; margin: 24px 0;">
@@ -304,7 +329,7 @@ const templates = {
                                 </tr>
                                 <tr>
                                     <td style="padding: 8px 0; color: #94a3b8;">Credited Wallet:</td>
-                                    <td style="padding: 8px 0; color: #f8fafc; text-align: right;">Secondary Wallet (Wallet 2)</td>
+                                    <td style="padding: 8px 0; color: #f8fafc; text-align: right;">Payout Balance</td>
                                 </tr>
                                 <tr>
                                     <td style="padding: 8px 0; color: #94a3b8;">Credit Date:</td>
@@ -341,7 +366,7 @@ const templates = {
                     </div>
                 </div>
             `,
-            text: `${PLATFORM_NAME} - Engagement Earnings Credited\n\nHi ${creatorName},\n\n₹${formattedAmount} has been credited to your Secondary Wallet for ${payoutMonth}.\n\nView details in your wallet: ${FRONTEND_URL}/wallet`
+            text: `${PLATFORM_NAME} - Engagement Earnings Credited\n\nHi ${creatorName},\n\n₹${formattedAmount} has been credited to your Payout Balance for ${payoutMonth}.\n\nView details in your wallet: ${FRONTEND_URL}/wallet`
         };
     },
 
@@ -359,7 +384,7 @@ const templates = {
                     <div style="background: #2a2a3e; border-left: 4px solid #10b981; padding: 16px; border-radius: 4px; margin: 16px 0;">
                         <p style="margin: 0; color: #e0e0e0;"><strong>Bonus Credited:</strong> ₹${bonusAmount}</p>
                     </div>
-                    <p>The bonus has been credited to your settlement wallet (Wallet 2).</p>
+                    <p>The bonus has been credited to your Payout Balance.</p>
                     <p>Keep referring to earn more!</p>
                     <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
@@ -381,7 +406,7 @@ const templates = {
                     <div style="background: #2a2a3e; border-left: 4px solid #10b981; padding: 16px; border-radius: 4px; margin: 16px 0;">
                         <p style="margin: 0; color: #e0e0e0;"><strong>Bonus Credited:</strong> ₹${bonusAmount}</p>
                     </div>
-                    <p>The bonus has been credited to your primary wallet.</p>
+                    <p>The bonus has been credited to your Wallet.</p>
                     <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
@@ -430,6 +455,68 @@ const templates = {
                 </div>
             </div>`,
         text: `Hi ${referredName}, your welcome bonus for joining via ${referrerName} was rejected. Reason: ${reason}`
+    }),
+
+    referralPartialApproved: ({ userName, bonusAmount }) => ({
+        subject: `[${PLATFORM_NAME}] 🎊 Referral Bonus Approved! You earned ₹${bonusAmount}`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #34d399; margin-top: 0;">Referral Bonus Approved!</h2>
+                    <p>Hi <strong>${userName}</strong>,</p>
+                    <p>Great news! Your referral bonus has been credited.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #10b981; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #e0e0e0;"><strong>Bonus Credited:</strong> ₹${bonusAmount}</p>
+                    </div>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${userName}, your referral bonus of ₹${bonusAmount} was approved.`
+    }),
+
+    referralPartialRejected: ({ userName, reason }) => ({
+        subject: `[${PLATFORM_NAME}] Referral Update`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, #e63946 0%, #c1121f 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: #ff6b6b; margin-top: 0;">Referral Not Approved</h2>
+                    <p>Hi <strong>${userName}</strong>,</p>
+                    <p>Unfortunately, your referral was not approved by our team.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid #e63946; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #ff9999;"><strong>Reason:</strong></p>
+                        <p style="margin: 8px 0 0; color: #e0e0e0;">${reason}</p>
+                    </div>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${userName}, your referral was not approved. Reason: ${reason}`
+    }),
+
+    walletAdjusted: ({ creatorName, action, amount, walletType, reason }) => ({
+        subject: `[${PLATFORM_NAME}] Wallet ${action === 'credit' ? 'Credit' : 'Debit'} Notification`,
+        html: `
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #e0e0e0; border-radius: 12px; overflow: hidden;">
+                <div style="background: linear-gradient(135deg, ${action === 'credit' ? '#10b981 0%, #059669' : '#e63946 0%, #c1121f'} 100%); padding: 24px 32px;">
+                    <h1 style="color: white; margin: 0; font-size: 20px;">${PLATFORM_NAME}</h1>
+                </div>
+                <div style="padding: 32px;">
+                    <h2 style="color: ${action === 'credit' ? '#34d399' : '#ff6b6b'}; margin-top: 0;">Wallet ${action === 'credit' ? 'Credited' : 'Debited'}</h2>
+                    <p>Hi <strong>${creatorName}</strong>,</p>
+                    <p>Your ${walletType} wallet has been <strong>${action === 'credit' ? 'credited' : 'debited'}</strong>.</p>
+                    <div style="background: #2a2a3e; border-left: 4px solid ${action === 'credit' ? '#10b981' : '#e63946'}; padding: 16px; border-radius: 4px; margin: 16px 0;">
+                        <p style="margin: 0; color: #e0e0e0;"><strong>Amount:</strong> ₹${amount}</p>
+                        <p style="margin: 8px 0 0; color: #e0e0e0;"><strong>Reason:</strong> ${reason}</p>
+                    </div>
+                    <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
+                </div>
+            </div>`,
+        text: `Hi ${creatorName}, your ${walletType} wallet was ${action === 'credit' ? 'credited' : 'debited'} by ₹${amount}. Reason: ${reason}`
     }),
 };
 

@@ -7,6 +7,8 @@ import SecondaryWallet from '../../models/secondaryWallet.model.js';
 import { decryptBankDetails } from '../../utils/encryption.js';
 import { sendAdminEmail } from '../../services/adminEmailService.js';
 import { getCfUrl } from '../../config/cloudfront.js';
+import User from '../../models/user.model.js';
+import { creditWallet, debitWallet, ensurePrimaryWallet, ensureSecondaryWallet } from '../../utils/walletService.js';
 
 // Setup S3 Client using env vars
 const s3Client = new S3Client({
@@ -259,3 +261,84 @@ export const rejectKyc = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error' });
     }
 };
+
+export const adminCreditDebitWallet = async (req, res) => {
+    try {
+        const { userId, walletType, action, amount, reason } = req.body;
+        
+        if (!userId || !walletType || !action || !amount || !reason) {
+            return res.status(400).json({ success: false, message: 'Missing required fields' });
+        }
+        if (amount <= 0) {
+            return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
+        }
+        if (!['credit', 'debit'].includes(action)) {
+            return res.status(400).json({ success: false, message: 'Action must be credit or debit' });
+        }
+        if (!['primary', 'secondary'].includes(walletType)) {
+            return res.status(400).json({ success: false, message: 'Wallet type must be primary or secondary' });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const idempotencyKey = `admin_${action}_${userId}_${Date.now()}`;
+        const transactionType = action === 'credit' ? 'admin_credit' : 'admin_debit';
+        let txn = null;
+
+        if (walletType === 'primary') {
+            const wallet = await ensurePrimaryWallet(userId);
+
+            // ── Balance guard for debit ──────────────────────────────────────
+            if (action === 'debit') {
+                if (wallet.balance < amount) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Insufficient balance. Current primary wallet balance is ₹${wallet.balance.toFixed(2)}, but you are trying to debit ₹${Number(amount).toFixed(2)}.`
+                    });
+                }
+                txn = await debitWallet(wallet._id, 'primary', amount, transactionType, { reason }, idempotencyKey);
+            } else {
+                txn = await creditWallet(wallet._id, 'primary', amount, transactionType, { reason }, idempotencyKey);
+            }
+        } else {
+            const wallet = await ensureSecondaryWallet(userId);
+
+            // ── Balance guard for debit ──────────────────────────────────────
+            if (action === 'debit') {
+                if (wallet.balance < amount) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Insufficient balance. Current secondary wallet balance is ₹${wallet.balance.toFixed(2)}, but you are trying to debit ₹${Number(amount).toFixed(2)}.`
+                    });
+                }
+                txn = await debitWallet(wallet._id, 'secondary', amount, transactionType, { reason }, idempotencyKey);
+            } else {
+                txn = await creditWallet(wallet._id, 'secondary', amount, transactionType, { reason }, idempotencyKey);
+            }
+        }
+
+        const creatorName = user.channelName || user.userName || 'Creator';
+        const contact = user.contact || user.email;
+
+        if (contact && contact.includes('@')) {
+            sendAdminEmail('walletAdjusted', contact, {
+                creatorName,
+                action,
+                amount,
+                walletType: walletType === 'primary' ? 'Primary' : 'Secondary',
+                reason,
+            }).catch(err => console.error('[ADMIN_WALLET] Failed to send email:', err.message));
+        }
+
+        res.status(200).json({ success: true, message: `Wallet ${action}ed successfully`, transaction: txn });
+    } catch (error) {
+        console.error('[ADMIN_CREDIT_DEBIT_WALLET]', error);
+        // Return 400 for known business-logic errors, 500 for unexpected ones
+        const isBusinessError = error.message?.includes('Insufficient') || error.message?.includes('balance');
+        res.status(isBusinessError ? 400 : 500).json({ success: false, message: error.message || 'Server error' });
+    }
+};
+

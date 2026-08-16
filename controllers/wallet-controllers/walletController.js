@@ -89,7 +89,7 @@ export const getMyWallets = async (req, res) => {
                 balance: secondaryWallet.balance,
                 currency: secondaryWallet.currency,
                 kycStatus: kycDetails?.kycStatus || 'not_started',
-                label: 'Settlement Wallet',
+                label: 'Payout Balance',
                 withdrawable: true,
                 note: 'Paid out automatically at month-end to your bank account, minus 1% maintenance fee.',
             };
@@ -383,7 +383,7 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 /**
- * POST /wallets/transfer/send-otp — Send OTP for transferring Wallet 2 balance to Wallet 1
+ * POST /wallets/transfer/send-otp — Send OTP for transferring Payout Balance to Wallet
  */
 export const sendTransferOtp = async (req, res) => {
     try {
@@ -447,7 +447,7 @@ export const transferToWalletOne = async (req, res) => {
         if (confirmTransfer !== true) {
             return res.status(400).json({
                 error: 'Transfer requires explicit confirmation',
-                warning: 'This transfer is irreversible. Funds moved to Wallet One become non-withdrawable in-app credit and cannot be transferred back or paid out to a bank account.',
+                warning: 'This transfer is irreversible. Funds moved to Wallet become non-withdrawable in-app credit and cannot be transferred back or paid out to a bank account.',
                 requiresConfirmation: true,
             });
         }
@@ -478,7 +478,7 @@ export const transferToWalletOne = async (req, res) => {
 
         res.json({
             success: true,
-            message: `₹${numAmount} transferred to Wallet One`,
+            message: `₹${numAmount} transferred to Wallet`,
             transfer: {
                 amount: numAmount,
                 fromBalance: result.debitTxn.balanceAfter,
@@ -686,7 +686,7 @@ export const submitKyc = async (req, res) => {
             success: true,
             message: isEdit
                 ? 'KYC updated. Status reset to pending for re-verification.'
-                : 'KYC submitted successfully. Settlement wallet is now active.',
+                : 'KYC submitted successfully. Payout Balance is now active.',
             kyc: {
                 status: kycDetails.kycStatus,
                 submittedAt: kycDetails.submittedAt,
@@ -926,7 +926,7 @@ export const purchasePpvWithWallet = async (req, res) => {
             contentId,
             amount: content.price,
             orderId: result.purchase?.orderId || result.purchase?._id?.toString(),
-            paymentMethod: 'Wallet 1 Balance',
+            paymentMethod: 'Wallet Balance',
         }).catch(err => {
             console.error('[WalletPurchase] Failed to send PPV rental email:', err);
         });

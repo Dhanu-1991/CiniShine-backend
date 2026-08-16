@@ -233,6 +233,127 @@ export async function approveReferral(referralId, adminId) {
 }
 
 /**
+ * Partially approve a referral — atomic wallet credit for the approved party.
+ */
+export async function partialApproveReferral(referralId, adminId, { approveReferrer, approveReferred, rejectionReason }) {
+    if (approveReferrer && approveReferred) {
+        return await approveReferral(referralId, adminId);
+    }
+    
+    console.log(`\n=================== [REFERRAL_PARTIAL_APPROVE_INIT] ===================`);
+    console.log(`ReferralID: ${referralId} | AdminID: ${adminId} | Referrer: ${approveReferrer} | Referred: ${approveReferred}`);
+    
+    const referral = await Referral.findById(referralId)
+        .populate('referrerId', 'userName channelName contact')
+        .populate('referredUserId', 'userName channelName contact');
+    
+    if (!referral) throw new Error('Referral not found');
+    if (referral.status === 'approved' || referral.status === 'partial_approved') {
+        throw new Error('Referral is already approved or partially approved');
+    }
+    if (referral.status === 'rejected') throw new Error('Cannot approve a rejected referral');
+    
+    const settings = await getReferralSettings();
+    if (!settings.isEnabled) throw new Error('Referral program is currently disabled');
+    
+    const session = await mongoose.startSession();
+    try {
+        let result;
+        await session.withTransaction(async () => {
+            const freshReferral = await Referral.findById(referralId).session(session);
+            if (freshReferral.referrerCredited || freshReferral.referredCredited) {
+                console.log(`[REFERRAL] Already credited, skipping transaction`);
+                result = freshReferral;
+                return;
+            }
+            
+            let referrerTxn = null;
+            let referredTxn = null;
+            
+            if (approveReferrer) {
+                const referrerSecondaryWallet = await ensureSecondaryWallet(referral.referrerId._id);
+                referrerTxn = await creditWallet(
+                    referrerSecondaryWallet._id,
+                    'secondary',
+                    settings.referrerBonusAmount,
+                    'referral_bonus_credit',
+                    { relatedBuyerId: referral.referredUserId._id },
+                    `referral_partial_approve_referrer_${referralId}`,
+                    session
+                );
+            }
+            
+            if (approveReferred) {
+                const referredPrimaryWallet = await ensurePrimaryWallet(referral.referredUserId._id);
+                referredTxn = await creditWallet(
+                    referredPrimaryWallet._id,
+                    'primary',
+                    settings.referredBonusAmount,
+                    'referral_bonus_credit',
+                    { relatedBuyerId: referral.referrerId._id },
+                    `referral_partial_approve_referred_${referralId}`,
+                    session
+                );
+            }
+            
+            await Referral.findByIdAndUpdate(referralId, {
+                status: 'partial_approved',
+                approvedAt: new Date(),
+                approvedBy: adminId,
+                referrerCredited: approveReferrer,
+                referredCredited: approveReferred,
+                referrerTransactionId: referrerTxn ? referrerTxn._id : undefined,
+                referredTransactionId: referredTxn ? referredTxn._id : undefined,
+                referrerBonusAmount: approveReferrer ? settings.referrerBonusAmount : 0,
+                referredBonusAmount: approveReferred ? settings.referredBonusAmount : 0,
+                partialRejectionReason: rejectionReason,
+                rejectedParty: approveReferrer ? 'referred' : 'referrer'
+            }, { session });
+            
+            result = { referrerTxn, referredTxn };
+        });
+        
+        console.log(`=================== [REFERRAL_PARTIAL_APPROVE_SUCCESS] ===================\n`);
+        
+        const referrerName = referral.referrerId.channelName || referral.referrerId.userName;
+        const referredName = referral.referredUserId.channelName || referral.referredUserId.userName;
+        const referrerEmail = referral.referrerId.contact;
+        const referredEmail = referral.referredUserId.contact;
+        
+        if (approveReferrer && referrerEmail && referrerEmail.includes('@')) {
+            sendAdminEmail('referralPartialApproved', referrerEmail, {
+                userName: referrerName,
+                bonusAmount: settings.referrerBonusAmount,
+            }).catch(err => console.error('[REFERRAL] Failed to send referrer approval email:', err.message));
+        } else if (!approveReferrer && referrerEmail && referrerEmail.includes('@')) {
+            sendAdminEmail('referralPartialRejected', referrerEmail, {
+                userName: referrerName,
+                reason: rejectionReason,
+            }).catch(err => console.error('[REFERRAL] Failed to send referrer rejection email:', err.message));
+        }
+        
+        if (approveReferred && referredEmail && referredEmail.includes('@')) {
+            sendAdminEmail('referralPartialApproved', referredEmail, {
+                userName: referredName,
+                bonusAmount: settings.referredBonusAmount,
+            }).catch(err => console.error('[REFERRAL] Failed to send referred approval email:', err.message));
+        } else if (!approveReferred && referredEmail && referredEmail.includes('@')) {
+            sendAdminEmail('referralPartialRejected', referredEmail, {
+                userName: referredName,
+                reason: rejectionReason,
+            }).catch(err => console.error('[REFERRAL] Failed to send referred rejection email:', err.message));
+        }
+        
+        return result;
+    } catch (err) {
+        console.error(`[REFERRAL_PARTIAL_APPROVE_ERROR] ${err.message}`);
+        throw err;
+    } finally {
+        await session.endSession();
+    }
+}
+
+/**
  * Reject a referral with a reason. Sends rejection emails to both parties.
  */
 export async function rejectReferral(referralId, adminId, reason) {
