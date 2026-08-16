@@ -141,6 +141,7 @@ export const getVideo = async (req, res) => {
             // PPV gate flags
             ppvRequired: !ppvGranted && video.visibility === 'pay_per_view',
             price: video.visibility === 'pay_per_view' ? video.price : undefined,
+            rentalDuration: video.visibility === 'pay_per_view' ? (video.rentalDuration || 2) : undefined,
         });
 
     } catch (error) {
@@ -834,6 +835,7 @@ export const getVideoStatus = async (req, res) => {
             contentType: video.contentType,
             visibility: video.visibility,
             price: video.visibility === 'pay_per_view' ? video.price : undefined,
+            rentalDuration: video.visibility === 'pay_per_view' ? (video.rentalDuration || 2) : undefined,
             trailerContentId: video.trailerContentId || video.spoilerContentId || null,
             spoilerContentId: video.spoilerContentId || video.trailerContentId || null,
             spoilerText: video.spoilerText || null,
@@ -857,7 +859,8 @@ export const uploadInit = async (req, res) => {
             price,
             isAgeRestricted,
             commentsEnabled,
-            selectedRoles
+            selectedRoles,
+            rentalDuration
         } = req.body;
         const userId = req.user?.id;
 
@@ -868,11 +871,15 @@ export const uploadInit = async (req, res) => {
         const fileId = new mongoose.Types.ObjectId();
         const key = `uploads/${userId}/${fileId}_${fileName}`;
 
-        // Validate PPV price
+        // Validate PPV price & rental window
+        const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
         if (visibility === 'pay_per_view') {
             const numPrice = Number(price);
             if (!numPrice || numPrice < 1) {
                 return res.status(400).json({ error: "Price is required and must be at least ₹1 for Pay Per View content" });
+            }
+            if (rentalDuration !== undefined && !VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
+                return res.status(400).json({ error: "Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days." });
             }
         }
 
@@ -885,6 +892,7 @@ export const uploadInit = async (req, res) => {
             category: category || '',
             visibility: visibility || 'public',
             price: visibility === 'pay_per_view' ? Number(price) : null,
+            rentalDuration: visibility === 'pay_per_view' && [2,3,5,7,14,28].includes(Number(rentalDuration)) ? Number(rentalDuration) : 2,
             isAgeRestricted: isAgeRestricted || false,
             commentsEnabled: commentsEnabled !== false,
             selectedRoles: selectedRoles || [],

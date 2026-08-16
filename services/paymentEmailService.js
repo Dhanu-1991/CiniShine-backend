@@ -202,7 +202,7 @@ export async function sendPpvRentalEmail({ userId, contentId, amount, orderId, p
 
         const [user, content] = await Promise.all([
             User.findById(userId).select('email contact userName channelName').lean(),
-            Content.findById(contentId).select('title contentType duration').lean(),
+            Content.findById(contentId).select('title contentType duration rentalDuration').lean(),
         ]);
 
         if (!user || !content) return false;
@@ -220,8 +220,10 @@ export async function sendPpvRentalEmail({ userId, contentId, amount, orderId, p
         const formattedAmount = Number(amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         const refId = orderId || paymentId || 'N/A';
 
-        // 48 hours expiry date formatted
-        const expiryDate = new Date(Date.now() + 48 * 60 * 60 * 1000);
+        // Creator configured rental window duration (in days)
+        const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
+        const rentalDays = VALID_RENTAL_DAYS.includes(content.rentalDuration) ? content.rentalDuration : 2;
+        const expiryDate = new Date(Date.now() + rentalDays * 24 * 60 * 60 * 1000);
         const expiryFormatted = expiryDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
 
         const contentRoute = isAudio ? `/audio/${contentId}` : `/watch/${contentId}`;
@@ -240,7 +242,7 @@ export async function sendPpvRentalEmail({ userId, contentId, amount, orderId, p
                     <h2 style="color: #818cf8; margin-top: 0; font-size: 20px;">You've Rented "${contentTitle}" 🍿</h2>
                     <p style="font-size: 15px; color: #cbd5e1; line-height: 1.6;">Hi <strong>${userName}</strong>,</p>
                     <p style="font-size: 14px; color: #94a3b8; line-height: 1.6;">
-                        Thank you for your purchase! You have been granted <strong>48 hours of unlimited access</strong> to watch or listen to this ${contentTypeLabel.toLowerCase()}.
+                        Thank you for your purchase! You have been granted <strong>${rentalDays} days (${rentalDays * 24} hours) of unlimited access</strong> to watch or listen to this ${contentTypeLabel.toLowerCase()}.
                     </p>
 
                     <div style="background: #1e293b; border: 1px solid #334155; padding: 20px; border-radius: 12px; margin: 24px 0;">

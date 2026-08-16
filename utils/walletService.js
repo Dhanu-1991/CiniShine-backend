@@ -181,7 +181,7 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
  * Execute a PPV purchase — single atomic transaction:
  * 1. Debit buyer's primary wallet (full price)
  * 2. Credit creator's secondary wallet (70% of price)
- * 3. Create Purchase record with 48h expiry
+ * 3. Create Purchase record with creator-defined rental window expiry
  *
  * The remaining 30% is platform revenue — not stored in any wallet.
  *
@@ -191,9 +191,9 @@ export async function debitWallet(walletId, walletType, amount, type, meta, idem
  * @param {number} amount - price of the content
  * @returns {{ purchase, buyerTxn, creatorTxn, creatorAmount, platformAmount }}
  */
-export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, amount) {
+export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, amount, rentalDuration) {
     console.log(`\n=================== [PPV_PURCHASE_WALLET_INIT] ===================`);
-    console.log(`Buyer: ${buyerUserId} | Creator: ${creatorUserId} | Content: ${contentId} | Price: ₹${amount}`);
+    console.log(`Buyer: ${buyerUserId} | Creator: ${creatorUserId} | Content: ${contentId} | Price: ₹${amount} | Rental: ${rentalDuration || 2}d`);
 
     const tax = calculateTaxBreakdown(amount);
     const creatorAmount = tax.creatorPayout;
@@ -225,6 +225,11 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
             const orderId = `WALLET_PPV_${Date.now()}_${buyerUserId.toString().slice(-6)}`;
             const purchaseIdempotencyKey = `ppv_purchase_${contentId}_${buyerUserId}_${orderId}`;
 
+            // Resolve rental duration from content model (creator-configurable: 2/3/5/7/14/28 days)
+            const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
+            const rentalDays = VALID_RENTAL_DAYS.includes(rentalDuration) ? rentalDuration : 2;
+            const expiresAtDate = new Date(Date.now() + rentalDays * 24 * 60 * 60 * 1000);
+
             // Create Purchase record with full tax breakdown
             const [purchase] = await Purchase.create([{
                 contentId,
@@ -241,7 +246,7 @@ export async function executePpvPurchase(buyerUserId, creatorUserId, contentId, 
                 tcsAmount: tax.tcsAmount,
                 creatorPayout: tax.creatorPayout,
                 status: 'active',
-                expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000), // 48 hours
+                expiresAt: expiresAtDate,
             }], { session });
 
             console.log(`[PPV_PURCHASE_RECORD_CREATED] PurchaseID: ${purchase._id} | OrderID: ${orderId} | Status: active | ExpiresAt: ${purchase.expiresAt}`);

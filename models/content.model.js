@@ -55,6 +55,13 @@ const ContentSchema = new mongoose.Schema({
         default: null,
         min: 1,
     },
+    // Rental viewing window (in days). Creator-configurable for PPV content.
+    // Valid options: 2, 3, 5, 7, 14, 28. Defaults to 2 (48 hours).
+    rentalDuration: {
+        type: Number,
+        default: 2,
+        enum: [2, 3, 5, 7, 14, 28],
+    },
     // PPV-only fields: trailer and spoiler are links to other content on the platform
     trailerContentId: {
         type: mongoose.Schema.Types.ObjectId,

@@ -91,8 +91,21 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
   const tax = calculateTaxBreakdown(amount);
   console.log(`[PPV_PG_TAX_BREAKDOWN] Selling: ₹${tax.sellingPrice} | Base: ₹${tax.basePrice} | GST: ₹${tax.gstAmount} | Platform Comm: ₹${tax.platformCommission} | GST on Comm: ₹${tax.gstOnCommission} | TDS: ₹${tax.tdsAmount} | TCS: ₹${tax.tcsAmount} | Creator Net Payout: ₹${tax.creatorPayout}`);
 
-  // 1. Create Purchase & Update PaymentDetails
-  const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  // 1. Resolve rental duration from content settings (creator-configurable: 2/3/5/7/14/28 days)
+  const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
+  let rentalDays = 2; // fallback default
+  if (contentId) {
+    try {
+      const contentDoc = await Content.findById(contentId).select('rentalDuration').lean();
+      if (contentDoc && VALID_RENTAL_DAYS.includes(contentDoc.rentalDuration)) {
+        rentalDays = contentDoc.rentalDuration;
+      }
+    } catch (e) {
+      console.warn('[PPV_PG_FULFILL] Failed to fetch rentalDuration, using default 2 days:', e.message);
+    }
+  }
+  const expiresAt = new Date(Date.now() + rentalDays * 24 * 60 * 60 * 1000);
+  console.log(`[PPV_PG_FULFILL] Rental window: ${rentalDays} days | ExpiresAt: ${expiresAt}`);
   const purchase = await Purchase.create({
     contentId,
     buyerId: userId,

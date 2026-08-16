@@ -85,6 +85,7 @@ export const multipartInit = async (req, res) => {
             isAgeRestricted,
             commentsEnabled,
             selectedRoles,
+            rentalDuration,
         } = req.body;
 
         const userId = req.user?.id;
@@ -113,11 +114,15 @@ export const multipartInit = async (req, res) => {
             return res.status(400).json({ error: "File size exceeds 20GB limit" });
         }
 
-        // Validate PPV price
+        // Validate PPV price & rental window
+        const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
         if (visibility === 'pay_per_view') {
             const numPrice = Number(price);
             if (!numPrice || numPrice < 1) {
                 return res.status(400).json({ error: "Price is required and must be at least ₹1 for Pay Per View content" });
+            }
+            if (rentalDuration !== undefined && !VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
+                return res.status(400).json({ error: "Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days." });
             }
         }
 
@@ -157,6 +162,7 @@ export const multipartInit = async (req, res) => {
             category: category || "",
             visibility: visibility || "public",
             price: visibility === 'pay_per_view' ? Number(price) : null,
+            rentalDuration: visibility === 'pay_per_view' && [2, 3, 5, 7, 14, 28].includes(Number(rentalDuration)) ? Number(rentalDuration) : 2,
             trailerContentId: parsedTrailerId,
             spoilerText: visibility === 'pay_per_view' ? spoilerText : null,
             isAgeRestricted: isAgeRestricted || false,

@@ -119,6 +119,7 @@ export const getMyContent = async (req, res) => {
                 rentalPrice: item.rentalPrice || 0,
                 rentalValidityDays: item.rentalValidityDays || 30,
                 price: item.price || item.ppvPrice || 0,
+                rentalDuration: item.rentalDuration || 2,
                 commentsEnabled: item.commentsEnabled,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
@@ -176,7 +177,7 @@ export const updateContent = async (req, res) => {
             return res.status(403).json({ error: 'Your channel has been banned. Content settings cannot be modified.' });
         }
 
-        const { title, description, visibility, price, trailerContentId, spoilerContentId, spoilerText, commentsEnabled, tags, category } = req.body;
+        const { title, description, visibility, price, trailerContentId, spoilerContentId, spoilerText, commentsEnabled, tags, category, rentalDuration } = req.body;
 
         // Extract 24-char MongoDB ID from a full watchinit URL, string ID, or populated object
         const extractId = (val) => {
@@ -206,6 +207,8 @@ export const updateContent = async (req, res) => {
         const update = {};
         if (title !== undefined) update.title = title;
         if (description !== undefined) update.description = description;
+        const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
+
         if (visibility !== undefined && ['public', 'unlisted', 'private', 'pay_per_view'].includes(visibility)) {
             update.visibility = visibility;
             // When switching to PPV, price is required
@@ -215,6 +218,12 @@ export const updateContent = async (req, res) => {
                     return res.status(400).json({ error: 'Price is required and must be at least ₹1 for Pay Per View content' });
                 }
                 update.price = numPrice;
+                if (rentalDuration !== undefined) {
+                    if (!VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
+                        return res.status(400).json({ error: 'Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days.' });
+                    }
+                    update.rentalDuration = Number(rentalDuration);
+                }
                 if (rawTrailerId !== undefined) {
                     update.trailerContentId = parsedTrailerId;
                     update.spoilerContentId = parsedTrailerId;
@@ -237,6 +246,13 @@ export const updateContent = async (req, res) => {
                 }
                 update.price = numPrice;
             }
+            // Allow updating rental duration when staying in PPV mode
+            if (rentalDuration !== undefined) {
+                if (!VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
+                    return res.status(400).json({ error: 'Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days.' });
+                }
+                update.rentalDuration = Number(rentalDuration);
+            }
             if (rawTrailerId !== undefined) {
                 update.trailerContentId = parsedTrailerId;
                 update.spoilerContentId = parsedTrailerId;
@@ -258,6 +274,7 @@ export const updateContent = async (req, res) => {
                 description: updated.description,
                 visibility: updated.visibility,
                 price: updated.price,
+                rentalDuration: updated.rentalDuration,
                 trailerContentId: updated.trailerContentId,
                 spoilerContentId: updated.spoilerContentId || updated.trailerContentId,
                 spoilerText: updated.spoilerText,
@@ -761,6 +778,7 @@ export const getContentAnalytics = async (req, res) => {
                 status: content.status,
                 visibility: content.visibility,
                 price: content.price,
+                rentalDuration: content.rentalDuration || 2,
                 trailerContentId: content.trailerContentId || content.spoilerContentId || null,
                 spoilerContentId: content.spoilerContentId || content.trailerContentId || null,
                 spoilerText: content.spoilerText || '',

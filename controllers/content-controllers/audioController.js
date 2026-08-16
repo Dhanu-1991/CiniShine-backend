@@ -27,11 +27,16 @@ const s3Client = new S3Client({
  */
 export const audioUploadInit = async (req, res) => {
     try {
-        const { fileName, fileType, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles, price } = req.body;
+        const { fileName, fileType, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles, price, rentalDuration } = req.body;
         const userId = req.user?.id;
 
         if (!userId) return res.status(401).json({ error: 'User not authenticated' });
         if (!fileName || !fileType) return res.status(400).json({ error: 'fileName and fileType are required' });
+
+        const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
+        if (visibility === 'pay_per_view' && rentalDuration !== undefined && !VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
+            return res.status(400).json({ error: "Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days." });
+        }
 
         const fileId = new mongoose.Types.ObjectId();
         const key = `audio/${userId}/${fileId}_${fileName}`;
@@ -55,6 +60,7 @@ export const audioUploadInit = async (req, res) => {
             mimeType: fileType,
             status: 'uploading',
             price: visibility === 'pay_per_view' ? (parseFloat(price) || 0) : 0,
+            rentalDuration: visibility === 'pay_per_view' && [2, 3, 5, 7, 14, 28].includes(Number(rentalDuration)) ? Number(rentalDuration) : 2,
         });
 
         const command = new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, ContentType: fileType });
@@ -73,7 +79,7 @@ export const audioUploadInit = async (req, res) => {
  */
 export const audioUploadComplete = async (req, res) => {
     try {
-        const { fileId, fileSize, duration, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles, price } = req.body;
+        const { fileId, fileSize, duration, title, description, tags, category, audioCategory, artist, album, visibility, isAgeRestricted, commentsEnabled, selectedRoles, price, rentalDuration } = req.body;
         const userId = req.user?.id;
 
         if (!fileId) return res.status(400).json({ error: 'fileId is required' });
@@ -82,6 +88,12 @@ export const audioUploadComplete = async (req, res) => {
         const content = await Content.findById(fileId);
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
+
+        const finalVisibilityCheck = visibility || content.visibility;
+        const VALID_RENTAL_DAYS = [2, 3, 5, 7, 14, 28];
+        if (finalVisibilityCheck === 'pay_per_view' && rentalDuration !== undefined && !VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
+            return res.status(400).json({ error: "Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days." });
+        }
 
         const updateData = { status: 'completed', fileSize: fileSize || 0, duration: duration || 0, processingEnd: new Date() };
         if (title) updateData.title = title;
@@ -98,6 +110,9 @@ export const audioUploadComplete = async (req, res) => {
         // Set price only for PPV visibility
         const finalVisibility = updateData.visibility || content.visibility;
         updateData.price = finalVisibility === 'pay_per_view' ? (parseFloat(price) || content.price || 0) : 0;
+        if (finalVisibility === 'pay_per_view' && rentalDuration && [2, 3, 5, 7, 14, 28].includes(Number(rentalDuration))) {
+            updateData.rentalDuration = Number(rentalDuration);
+        }
 
         await Content.findByIdAndUpdate(fileId, updateData);
 
@@ -144,7 +159,8 @@ async function formatAudioContent(content) {
         channelPicture: content.userId?.channelPicture,
         userId: content.userId?._id || content.userId,
         artist: content.artist, album: content.album, audioCategory: content.audioCategory, tags: content.tags,
-        visibility: content.visibility, price: content.price
+        visibility: content.visibility, price: content.price,
+        rentalDuration: content.visibility === 'pay_per_view' ? (content.rentalDuration || 2) : undefined
     };
 }
 

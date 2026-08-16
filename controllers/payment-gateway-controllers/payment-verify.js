@@ -74,9 +74,10 @@ const paymentVerify = async (req, res) => {
     let paymentDetailsObj = response ? (response.toObject ? response.toObject() : { ...response }) : null;
     if (paymentDetailsObj && paymentDetailsObj.contentId) {
       const Content = mongoose.model("Content");
-      const contentDoc = await Content.findById(paymentDetailsObj.contentId).select("contentType").lean();
+      const contentDoc = await Content.findById(paymentDetailsObj.contentId).select("contentType rentalDuration").lean();
       if (contentDoc) {
         paymentDetailsObj.contentType = contentDoc.contentType;
+        paymentDetailsObj.rentalDuration = contentDoc.rentalDuration || 2;
       }
     }
 

@@ -918,7 +918,7 @@ export const purchasePpvWithWallet = async (req, res) => {
         }
 
         // Execute atomic wallet purchase (70% to creator, 30% platform)
-        const result = await executePpvPurchase(userId, content.userId.toString(), contentId, content.price);
+        const result = await executePpvPurchase(userId, content.userId.toString(), contentId, content.price, content.rentalDuration);
 
         // Trigger automated PPV rental email notification asynchronously
         sendPpvRentalEmail({
