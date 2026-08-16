@@ -29,6 +29,17 @@ const payPerViewAccess = async (req, res, next) => {
             return res.status(404).json({ error: 'Content not found' });
         }
 
+        // ── Check private visibility ──
+        if (content.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = content.userId ? (content.userId._id ? content.userId._id.toString() : content.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
+        }
+
         // Not PPV → pass through
         if (content.visibility !== 'pay_per_view') {
             return next();

@@ -307,6 +307,17 @@ export const getRecommendationsWithShorts = async (req, res) => {
             .lean();
         if (!current) return res.status(404).json({ error: 'Content not found' });
 
+        // ── Check private visibility ──
+        if (current.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = current.userId ? (current.userId._id ? current.userId._id.toString() : current.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
+        }
+
         // Build user profile once so all content types can receive explicit history weighting.
         const userProfile = userId ? await watchHistoryEngine.buildUserProfile(userId) : null;
 

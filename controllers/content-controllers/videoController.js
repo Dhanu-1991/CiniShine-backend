@@ -53,6 +53,17 @@ export const getVideo = async (req, res) => {
             return res.status(410).json({ error: 'This content has been removed and is no longer available' });
         }
 
+        // ── Check private visibility ──
+        if (video.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
+        }
+
         // Generate CloudFront URL for thumbnail (optional)
         const thumbnailUrl = getCfUrl(video.thumbnailKey);
 
@@ -164,6 +175,17 @@ export const getHLSMasterPlaylist = async (req, res) => {
         if (!video) {
             console.error('❌ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // ── Check private visibility ──
+        if (video.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
         }
 
         // ── PPV controller-level check (second layer after route middleware) ──
@@ -326,6 +348,17 @@ export const getHLSVariantPlaylist = async (req, res) => {
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
 
+        // ── Check private visibility ──
+        if (video.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
+        }
+
         // ── PPV controller-level check (second layer after route middleware) ──
         if (video.visibility === 'pay_per_view') {
             const granted = await hasPpvAccess(video, req.user?.id);
@@ -465,6 +498,17 @@ export const getHLSSegment = async (req, res) => {
         const video = await Content.findById(videoId);
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
+
+        // ── Check private visibility ──
+        if (video.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
+        }
 
         // ── PPV controller-level check (second layer after route middleware) ──
         if (video.visibility === 'pay_per_view') {
@@ -702,7 +746,13 @@ export const getSpecificContent = async (req, res) => {
         const roles = Array.isArray(creator.roles) ? creator.roles : [];
 
         // Build query for videos by this creator
+        const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+        const isOwner = requesterId && requesterId === creatorId.toString();
+        const isAdmin = req.admin || req.user?.role === 'admin';
         const baseQuery = { userId: creatorId, status: 'completed', contentType: 'video' };
+        if (!isOwner && !isAdmin) {
+            baseQuery.visibility = { $ne: 'private' };
+        }
 
         // Fetch paginated videos for that creator
         const videos = await Content.find(baseQuery)
@@ -793,6 +843,17 @@ export const getRecommendations = async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
+        // ── Check private visibility ──
+        if (currentVideo.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = currentVideo.userId ? (currentVideo.userId._id ? currentVideo.userId._id.toString() : currentVideo.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
+        }
+
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
 
@@ -814,6 +875,17 @@ export const getVideoStatus = async (req, res) => {
         const video = await Content.findById(req.params.id);
         if (!video) {
             return res.status(404).json({ error: 'Video not found' });
+        }
+
+        // ── Check private visibility ──
+        if (video.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Video not found' });
+            }
         }
 
         let estimatedTimeRemaining = null;

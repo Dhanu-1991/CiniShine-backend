@@ -137,11 +137,11 @@ export async function sendWelcomeEmail({ email, userName }) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${subject}</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #0b0f19; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #e2e8f0;">
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #0b0f19; padding: 40px 10px;">
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #e2e8f0;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 40px 10px;">
     <tr>
       <td align="center">
-        <table width="100%" max-width="600" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #111827; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6); border: 1px solid #1f2937;">
+        <table width="100%" max-width="600" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #111827; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); border: 1px solid #e2e8f0;">
           
           <!-- Header Banner -->
           <tr>
@@ -184,10 +184,6 @@ export async function sendWelcomeEmail({ email, userName }) {
                 </a>
               </div>
 
-              <p style="color: #94a3b8; margin: 24px 0 16px 0; font-size: 14px;">
-                If you have any questions, just reply to this email, we're happy to help.
-              </p>
-
               <div style="margin-top: 24px; border-top: 1px solid #1f2937; padding-top: 20px;">
                 <p style="margin: 0; color: #f8fafc; font-weight: 600;">Welcome aboard.</p>
                 <p style="margin: 4px 0 0 0; color: #818cf8; font-weight: 700; letter-spacing: 0.5px;">WATCHINIT</p>
@@ -222,8 +218,6 @@ Here's what you can do next:
 Complete your profile so we can start personalising your feed
 Explore content from creators you won't find anywhere else
 If you're a creator, start building your presence and unlock monetization through rentals, subscriptions, and engagement earnings
-
-If you have any questions, just reply to this email, we're happy to help.
 
 Welcome aboard.
 WATCHINIT
@@ -276,15 +270,15 @@ export async function sendSigninAlertEmail({
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${subject}</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #0b0f19; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #e2e8f0;">
-  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #0b0f19; padding: 40px 10px;">
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #e2e8f0;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 40px 10px;">
     <tr>
       <td align="center">
-        <table width="100%" max-width="600" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #111827; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6); border: 1px solid #1f2937;">
+        <table width="100%" max-width="600" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #0f172a; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1); border: 1px solid #cbd5e1;">
           
           <!-- Header Banner -->
           <tr>
-            <td style="background: linear-gradient(135deg, #111827 0%, #0b0f19 100%); padding: 30px 40px; text-align: left; border-bottom: 2px solid #3b82f6;">
+            <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 30px 40px; text-align: left; border-bottom: 2px solid #3b82f6;">
               <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">WATCHIN IT</h1>
               <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 13px; font-weight: 500;">Account Security Notification</p>
             </td>
@@ -292,7 +286,7 @@ export async function sendSigninAlertEmail({
 
           <!-- Body Content -->
           <tr>
-            <td style="padding: 36px 40px; color: #cbd5e1; font-size: 15px; line-height: 1.6;">
+            <td style="padding: 36px 40px; background-color: #0f172a; color: #cbd5e1; font-size: 15px; line-height: 1.6;">
               <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 18px;">
                 <span style="font-size: 22px;">🔐</span>
                 <h2 style="margin: 0; color: #f8fafc; font-size: 19px; font-weight: 600;">New Sign-in Detected</h2>
@@ -303,23 +297,23 @@ export async function sendSigninAlertEmail({
               </p>
 
               <!-- Details Card -->
-              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #0b0f19; border-radius: 12px; overflow: hidden; border: 1px solid #1f2937; margin: 20px 0;">
+              <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #0b1120; border-radius: 12px; overflow: hidden; border: 1px solid #1e293b; margin: 20px 0;">
                 <tr>
-                  <td style="padding: 14px 20px; border-bottom: 1px solid #1f2937; color: #64748b; font-size: 13px; width: 130px; font-weight: 600;">Time:</td>
-                  <td style="padding: 14px 20px; border-bottom: 1px solid #1f2937; color: #f1f5f9; font-size: 13px; font-weight: 500;">
+                  <td style="padding: 14px 20px; border-bottom: 1px solid #1e293b; color: #64748b; font-size: 13px; width: 130px; font-weight: 600;">Time:</td>
+                  <td style="padding: 14px 20px; border-bottom: 1px solid #1e293b; color: #f1f5f9; font-size: 13px; font-weight: 500;">
                     ${formattedDate} <span style="color: #64748b; font-size: 11px;">(IST)</span><br/>
                     <span style="color: #64748b; font-size: 12px;">${utcDate}</span>
                   </td>
                 </tr>
                 <tr>
-                  <td style="padding: 14px 20px; border-bottom: 1px solid #1f2937; color: #64748b; font-size: 13px; font-weight: 600;">Device & Browser:</td>
+                  <td style="padding: 14px 20px; border-bottom: 1px solid #1e293b; color: #64748b; font-size: 13px; font-weight: 600;">Device & Browser:</td>
                   <td style="padding: 14px 20px; border-bottom: 1px solid #1f2937; color: #f1f5f9; font-size: 13px; font-weight: 500;">
                     ${deviceSummary}
                   </td>
                 </tr>
                 <tr>
-                  <td style="padding: 14px 20px; border-bottom: 1px solid #1f2937; color: #64748b; font-size: 13px; font-weight: 600;">IP Address:</td>
-                  <td style="padding: 14px 20px; border-bottom: 1px solid #1f2937; color: #f1f5f9; font-size: 13px; font-family: 'Courier New', monospace; font-weight: 600;">
+                  <td style="padding: 14px 20px; border-bottom: 1px solid #1e293b; color: #64748b; font-size: 13px; font-weight: 600;">IP Address:</td>
+                  <td style="padding: 14px 20px; border-bottom: 1px solid #1e293b; color: #f1f5f9; font-size: 13px; font-family: 'Courier New', monospace; font-weight: 600;">
                     ${displayIp}
                   </td>
                 </tr>
@@ -345,7 +339,7 @@ export async function sendSigninAlertEmail({
 
           <!-- Footer -->
           <tr>
-            <td style="background-color: #0b0f19; padding: 24px 40px; border-top: 1px solid #1f2937; text-align: center; color: #475569; font-size: 12px;">
+            <td style="background-color: #0b1120; padding: 24px 40px; border-top: 1px solid #1e293b; text-align: center; color: #64748b; font-size: 12px;">
               <p style="margin: 0 0 6px 0;">This is an automated security notification sent to ${email}.</p>
               <p style="margin: 0;">&copy; ${new Date().getFullYear()} WATCHIN IT. All rights reserved.</p>
             </td>

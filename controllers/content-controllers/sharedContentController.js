@@ -109,6 +109,17 @@ export const getContent = async (req, res) => {
         const content = await Content.findById(contentId).populate('userId', 'userName channelName channelHandle channelPicture profilePicture');
         if (!content) return res.status(404).json({ error: 'Content not found' });
 
+        // ── Check private visibility ──
+        if (content.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = content.userId ? (content.userId._id ? content.userId._id.toString() : content.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Content not found' });
+            }
+        }
+
         const thumbnailUrl = getCfUrl(content.thumbnailKey);
         const imageUrl = getCfUrl(content.imageKey);
         let audioUrl = null;
@@ -229,6 +240,17 @@ export const getSingleContent = async (req, res) => {
         const content = await Content.findById(id).populate('userId', 'userName channelName channelHandle channelPicture');
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.status === 'removed') return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+
+        // ── Check private visibility ──
+        if (content.visibility === 'private') {
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = content.userId ? (content.userId._id ? content.userId._id.toString() : content.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            if (!isOwner && !isAdmin) {
+                return res.status(404).json({ error: 'Content not found' });
+            }
+        }
 
         const commentCount = await Comment.countDocuments({ videoId: content._id, onModel: 'Content', parentCommentId: null });
         const thumbnailUrl = getCfUrl(content.thumbnailKey);
