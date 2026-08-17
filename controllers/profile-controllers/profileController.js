@@ -18,6 +18,7 @@ import WatchHistory from '../../models/watchHistory.model.js';
 import VideoReaction from '../../models/videoReaction.model.js';
 import ContentView from '../../models/contentView.model.js';
 import Purchase from '../../models/purchase.model.js';
+import ContentShare from '../../models/contentShare.model.js';
 import { isAdminUser } from '../../utils/ppvGuard.js';
 import { PLATFORM_CUT_PERCENT } from '../../utils/paymentFulfillmentService.js';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
@@ -92,8 +93,7 @@ export const getMyContent = async (req, res) => {
         // Enrich with engagement stats and signed URLs
         const enrichedContents = await Promise.all(contents.map(async (item) => {
             const commentCount = await Comment.countDocuments({
-                videoId: item._id,
-                parentCommentId: { $exists: false }
+                videoId: item._id
             });
 
             const mediaKey = item.processedKey || item.originalKey;
@@ -669,16 +669,24 @@ export const getContentAnalytics = async (req, res) => {
 
         const isPpv = content.visibility === 'pay_per_view' || content.visibility === 'ppv' || Boolean(content.isPayPerView) || Boolean(content.price && content.price > 0);
 
-        // Parallel fetch: comments, reactions, watch history, signed URLs, unique viewers, viewer breakdown, PPV purchases
-        const [commentCount, likes, dislikes, watchEntries, uniqueViewers, signedInUniquesCount, anonymousUniquesCount, thumbnailUrl, imageUrl, ppvData] = await Promise.all([
-            Comment.countDocuments({ videoId: id, parentCommentId: { $exists: false } }),
+        // Parallel fetch: comments, reactions, watch history, signed URLs, unique viewers, viewer breakdown, PPV purchases, shares
+        const [commentCount, likes, dislikes, sharesCount, contentViewBreakdown, watchEntries, thumbnailUrl, imageUrl, ppvData] = await Promise.all([
+            Comment.countDocuments({ videoId: id }),
             VideoReaction.countDocuments({ videoId: id, type: 'like' }),
             VideoReaction.countDocuments({ videoId: id, type: 'dislike' }),
+            ContentShare.countDocuments({ contentId: id }),
+            // ContentView is IMMUTABLE — aggregate both exact view counts and unique viewers per viewer type
+            ContentView.aggregate([
+                { $match: { contentId: new mongoose.Types.ObjectId(id) } },
+                {
+                    $group: {
+                        _id: '$viewerType',
+                        totalViews: { $sum: '$viewCount' },
+                        totalUniques: { $sum: 1 }
+                    }
+                }
+            ]),
             WatchHistory.find({ contentId: id }).select('sessions watchTime watchPercentage completedWatch').lean(),
-            // ContentView is IMMUTABLE — never deleted even when user clears history → reliable unique viewer count
-            ContentView.countDocuments({ contentId: id }),
-            ContentView.countDocuments({ contentId: id, viewerType: 'authenticated' }),
-            ContentView.countDocuments({ contentId: id, viewerType: 'anonymous' }),
             getCfUrl(content.thumbnailKey),
             getCfUrl(content.imageKey),
             // PPV analytics: purchase count, revenue, and recent purchases
@@ -733,8 +741,23 @@ export const getContentAnalytics = async (req, res) => {
             })() : null,
         ]);
 
-        const signedInUniqueViewers = content.authenticatedUniqueViewers || signedInUniquesCount;
-        const anonymousUniqueViewers = content.anonymousUniqueViewers || anonymousUniquesCount;
+        let aggregatedAuthViews = 0;
+        let aggregatedAnonViews = 0;
+        let aggregatedAuthUniques = 0;
+        let aggregatedAnonUniques = 0;
+
+        (contentViewBreakdown || []).forEach(b => {
+            if (b._id === 'authenticated') {
+                aggregatedAuthViews = b.totalViews || 0;
+                aggregatedAuthUniques = b.totalUniques || 0;
+            } else if (b._id === 'anonymous') {
+                aggregatedAnonViews = b.totalViews || 0;
+                aggregatedAnonUniques = b.totalUniques || 0;
+            }
+        });
+
+        const signedInUniqueViewers = Math.max(content.authenticatedUniqueViewers || 0, aggregatedAuthUniques);
+        const anonymousUniqueViewers = Math.max(content.anonymousUniqueViewers || 0, aggregatedAnonUniques);
         const splitUniqueViewers = signedInUniqueViewers + anonymousUniqueViewers;
         const completionRate = content.completionRate !== null && content.completionRate !== undefined
             ? content.completionRate
@@ -766,8 +789,37 @@ export const getContentAnalytics = async (req, res) => {
             ? watchEntries.reduce((acc, e) => acc + (e.watchPercentage || 0), 0) / watchEntries.length
             : 0;
 
-        const engagementRate = content.views > 0
-            ? parseFloat(((likes + commentCount) / content.views * 100).toFixed(1))
+        const totalViews = content.views || 0;
+        const totalLikes = Math.max(content.likeCount || 0, likes || 0);
+        const totalDislikes = Math.max(content.dislikeCount || 0, dislikes || 0);
+        const totalShares = Math.max(content.shareCount || 0, sharesCount || 0);
+        const totalComments = commentCount;
+
+        let signedInViews = content.authenticatedViews || aggregatedAuthViews;
+        let anonymousViews = content.anonymousViews || aggregatedAnonViews;
+
+        if (signedInViews + anonymousViews === 0 && totalViews > 0) {
+            if (signedInUniqueViewers > 0 || anonymousUniqueViewers > 0) {
+                const totalUniques = signedInUniqueViewers + anonymousUniqueViewers;
+                signedInViews = Math.round((signedInUniqueViewers / totalUniques) * totalViews);
+                anonymousViews = totalViews - signedInViews;
+            } else {
+                signedInViews = totalViews;
+                anonymousViews = 0;
+            }
+        } else if ((signedInViews + anonymousViews) !== totalViews && totalViews > 0) {
+            const sum = signedInViews + anonymousViews;
+            if (sum > 0) {
+                signedInViews = Math.round((signedInViews / sum) * totalViews);
+                anonymousViews = totalViews - signedInViews;
+            } else {
+                signedInViews = totalViews;
+                anonymousViews = 0;
+            }
+        }
+
+        const engagementRate = totalViews > 0
+            ? parseFloat(((totalLikes + totalComments + totalShares) / totalViews * 100).toFixed(1))
             : 0;
 
         res.json({
@@ -792,16 +844,16 @@ export const getContentAnalytics = async (req, res) => {
                 imageUrl,
             },
             stats: {
-                views: content.views || 0,
-                signedInViews: (content.authenticatedViews || 0) > 0 ? content.authenticatedViews : signedInUniqueViewers,
-                anonymousViews: (content.anonymousViews || 0) > 0 ? content.anonymousViews : anonymousUniqueViewers,
-                likes,
-                dislikes,
-                shares: content.shareCount || 0,
-                shareCount: content.shareCount || 0,
+                views: totalViews,
+                signedInViews,
+                anonymousViews,
+                likes: totalLikes,
+                dislikes: totalDislikes,
+                shares: totalShares,
+                shareCount: totalShares,
                 fansGained: content.fansGained || content.subscribersGained || 0,
                 subscribersGained: content.subscribersGained || content.fansGained || 0,
-                commentCount,
+                commentCount: totalComments,
                 averageWatchTime: content.averageWatchTime || 0,
                 totalWatchTime: content.totalWatchTime || 0,
                 completionRate: completionRate === null ? null : parseFloat(Number(completionRate).toFixed(1)),

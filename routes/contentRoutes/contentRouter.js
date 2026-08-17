@@ -31,6 +31,7 @@ import { getAudioPlayerFeed } from '../../controllers/content-controllers/audioC
 import { getSubscriptionPosts } from '../../controllers/content-controllers/postsController.js';
 
 import { multipartInit, multipartComplete, multipartAbort } from '../../controllers/content-controllers/multipartUploadController.js';
+import { shareContent } from '../../controllers/content-controllers/interactions.js';
 import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 import payPerViewAccess from '../../middlewares/payPerViewAccess.js';
 
@@ -78,8 +79,9 @@ router.get('/audio/feed', optionalTokenVerifier, getAudioPlayerFeed);
 router.get('/posts/feed', optionalTokenVerifier, getSubscriptionPosts);
 
 // ============================================
-// ENGAGEMENT ROUTES (like/dislike for shorts, audio, posts)
+// ENGAGEMENT ROUTES (like/dislike/share for shorts, audio, posts)
 // ============================================
+router.post('/:id/share', optionalTokenVerifier, shareContent);
 router.post('/:id/engagement', universalTokenVerifier, updateContentEngagement);
 router.get('/:id/engagement/status', universalTokenVerifier, getContentEngagementStatus);
 router.post('/:id/watch-time', optionalTokenVerifier, updateContentWatchTime);
