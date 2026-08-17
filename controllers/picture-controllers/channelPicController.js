@@ -167,7 +167,7 @@ export const updateChannelPicture = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Channel picture updated successfully",
+            message: "Account picture updated successfully",
             channelPicture: getCfUrl(s3Key),
             user: {
                 _id: user._id,
