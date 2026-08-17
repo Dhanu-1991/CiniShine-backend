@@ -1053,7 +1053,7 @@ export const requestBanChannel = async (req, res) => {
 export const updateContentStats = async (req, res) => {
     try {
         const { id } = req.params;
-        const { views, totalWatchTime, likeCount } = req.body;
+        const { views, totalWatchTime, likeCount, dislikeCount, duration, fansGained, subscribersGained } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid content ID' });
@@ -1088,6 +1088,32 @@ export const updateContentStats = async (req, res) => {
             }
             updates.likeCount = parsed;
             content.likeCount = parsed;
+        }
+        if (dislikeCount !== undefined) {
+            const parsed = parseInt(dislikeCount, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Dislike count must be a non-negative integer' });
+            }
+            updates.dislikeCount = parsed;
+            content.dislikeCount = parsed;
+        }
+        if (duration !== undefined) {
+            const parsed = parseFloat(duration);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Duration must be a non-negative number' });
+            }
+            updates.duration = parsed;
+            content.duration = parsed;
+        }
+        if (fansGained !== undefined || subscribersGained !== undefined) {
+            const parsed = parseInt(fansGained !== undefined ? fansGained : subscribersGained, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Fans gained must be a non-negative integer' });
+            }
+            updates.fansGained = parsed;
+            updates.subscribersGained = parsed;
+            content.fansGained = parsed;
+            content.subscribersGained = parsed;
         }
 
         if (Object.keys(updates).length === 0) {
@@ -1834,6 +1860,8 @@ export const getContentDetailedAnalytics = async (req, res) => {
             totalLikes: content.likeCount || 0,
             totalDislikes: content.dislikeCount || 0,
             totalShares: content.shareCount || 0,
+            fansGained: content.fansGained || content.subscribersGained || 0,
+            subscribersGained: content.subscribersGained || content.fansGained || 0,
             totalComments,
             likeToViewRatio
         };

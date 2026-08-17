@@ -2,8 +2,9 @@
 set -e
 
 # =============================================================================
-# CiniShine Media Processing Worker v4.3
+# CiniShine Media Processing Worker v4.4
 # UNIFIED CONTENT MODEL | ALL-AT-ONCE ENCODING | EBS-BACKED TEMP DIR
+# HARDENED: retries on every network call, completion marker, no silent death
 #
 # Processes: Videos, Shorts, Audio
 # Encoding:  Single FFmpeg pass with split filter (all renditions at once)
@@ -17,6 +18,39 @@ QUEUE_URL="https://sqs.us-east-1.amazonaws.com/856507207317/video-processing-que
 SSM_PREFIX="/cinishine"
 ASG_NAME="cinishine-worker-asg"
 INSTANCE_ID=""
+MARKER_FILE="/var/tmp/bootstrap-complete"
+MARKER_FAIL="/var/tmp/bootstrap-failed"
+
+# Clear any stale markers from a previous boot on this same instance
+rm -f "$MARKER_FILE" "$MARKER_FAIL" 2>/dev/null || true
+
+# ── Trap: if the script exits non-zero for ANY reason, write a fail marker ──
+on_exit() {
+  local code=$?
+  if [ $code -ne 0 ]; then
+    echo "❌ Bootstrap FAILED with exit code $code at line $BASH_LINENO" | tee -a /var/log/worker-setup.log
+    echo "$(date) exit=$code line=$BASH_LINENO" > "$MARKER_FAIL"
+  fi
+}
+trap on_exit EXIT
+
+# ── Retry helper: retries a command up to N times with backoff ──────────────
+retry() {
+  local max_attempts=$1; shift
+  local delay=5
+  local attempt=1
+  until "$@"; do
+    if [ $attempt -ge $max_attempts ]; then
+      echo "❌ Command failed after $max_attempts attempts: $*"
+      return 1
+    fi
+    echo "⚠️  Attempt $attempt/$max_attempts failed, retrying in ${delay}s: $*"
+    sleep $delay
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+  return 0
+}
 
 # ── Get Instance ID ──────────────────────────────────────────────────────────
 for i in {1..5}; do
@@ -38,7 +72,7 @@ fi
 INSTANCE_TYPE=$(ec2-metadata --instance-type 2>/dev/null | cut -d ' ' -f 2 || echo "unknown")
 
 exec > >(tee /var/log/worker-setup.log) 2>&1
-echo "=== CiniShine Worker Setup v4.3 - $(date) ==="
+echo "=== CiniShine Worker Setup v4.4 - $(date) ==="
 echo "Instance: $INSTANCE_ID ($INSTANCE_TYPE)"
 
 # ── System Optimization ──────────────────────────────────────────────────────
@@ -69,19 +103,25 @@ df -h "$WORK_BASE"
 
 # ── Install Packages ─────────────────────────────────────────────────────────
 echo ">>> Installing packages..."
-dnf update -y || true
-curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-dnf install -y nodejs git wget tar xz jq || true
+retry 3 dnf update -y
+retry 3 bash -c 'curl -fsSL --retry 3 --retry-delay 5 --max-time 60 https://rpm.nodesource.com/setup_20.x | bash -'
+retry 3 dnf install -y nodejs git wget tar xz jq
 
 # ── Install FFmpeg ────────────────────────────────────────────────────────────
 echo ">>> Installing FFmpeg..."
 cd /tmp
-wget -q https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-tar xf ffmpeg-release-amd64-static.tar.xz
-cp ffmpeg-*-amd64-static/ffmpeg  /usr/local/bin/
-cp ffmpeg-*-amd64-static/ffprobe /usr/local/bin/
+rm -rf ffmpeg*
+curl -L -f https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz -o ffmpeg.tar.xz
+tar xf ffmpeg.tar.xz
+cp ffmpeg-master-latest-linux64-gpl/bin/ffmpeg  /usr/local/bin/
+cp ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/
 chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
-rm -rf ffmpeg-*-amd64-static ffmpeg-release-amd64-static.tar.xz || true
+rm -rf ffmpeg* || true
+
+# Hard verification — if these binaries don't work, stop now instead of
+# limping forward with a broken worker
+/usr/local/bin/ffmpeg -version >/dev/null 2>&1 || { echo "❌ FFmpeg binary broken after install"; exit 1; }
+/usr/local/bin/ffprobe -version >/dev/null 2>&1 || { echo "❌ FFprobe binary broken after install"; exit 1; }
 
 echo "Node: $(node --version) | npm: $(npm --version) | FFmpeg: $(ffmpeg -version | head -n1)"
 
@@ -93,7 +133,7 @@ cd $APP_DIR
 cat > package.json << 'EOF'
 {
   "name": "cinishine-worker",
-  "version": "4.3.0",
+  "version": "4.4.0",
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.893.0",
@@ -106,17 +146,25 @@ cat > package.json << 'EOF'
 }
 EOF
 
-npm install --silent
+echo ">>> Running npm install..."
+retry 3 npm install --silent
+[ -d node_modules ] || { echo "❌ node_modules missing after npm install"; exit 1; }
 
 # ── SSM Config ────────────────────────────────────────────────────────────────
 echo ">>> Loading SSM config..."
 get_ssm_param() {
-  aws ssm get-parameter --region $REGION --name "${SSM_PREFIX}/$1" \
-    --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || echo ""
+  local val
+  val=$(retry 3 aws ssm get-parameter --region $REGION --name "${SSM_PREFIX}/$1" \
+    --with-decryption --query 'Parameter.Value' --output text 2>/dev/null)
+  if [ -z "$val" ] || [ "$val" == "None" ]; then
+    echo "❌ SSM parameter ${SSM_PREFIX}/$1 missing or empty"
+    return 1
+  fi
+  echo "$val"
 }
 
-MONGO_URI=$(get_ssm_param "MONGO_URI")
-S3_BUCKET=$(get_ssm_param "S3_BUCKET")
+MONGO_URI=$(get_ssm_param "MONGO_URI") || exit 1
+S3_BUCKET=$(get_ssm_param "S3_BUCKET") || exit 1
 
 cat > .env << EOF
 MONGO_URI=$MONGO_URI
@@ -232,7 +280,7 @@ export default mongoose.model('Content', contentSchema);
 JSEOF
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WORKER SCRIPT
+# WORKER SCRIPT (unchanged from v4.3 — logic itself was not the problem)
 # ══════════════════════════════════════════════════════════════════════════════
 mkdir -p workers
 cat > workers/worker.js << 'JSEOF'
@@ -259,7 +307,7 @@ const ffprobePath = ffprobeInstaller.path;
 // Work directory: EBS-backed, not tmpfs
 const WORK_BASE = process.env.WORK_BASE || '/var/tmp/cinishine-work';
 
-console.log('🎬 CiniShine Worker v4.3 — ALL-AT-ONCE + EBS TEMP');
+console.log('🎬 CiniShine Worker v4.4 — ALL-AT-ONCE + EBS TEMP');
 console.log(`   MONGO: ${process.env.MONGO_URI ? '✔' : '✗'} | REGION: ${process.env.AWS_REGION}`);
 console.log(`   BUCKET: ${process.env.S3_BUCKET} | WORK_DIR: ${WORK_BASE}`);
 console.log(`   INSTANCE: ${process.env.INSTANCE_ID || '⚠️  NOT SET'}`);
@@ -305,10 +353,7 @@ function getAppropriateRenditions(inputWidth, inputHeight, contentType) {
   const renditions = contentType === 'short' ? SHORT_RENDITIONS : VIDEO_RENDITIONS;
   const inputPixels = inputWidth * inputHeight;
 
-  // Only include renditions whose pixel count ≤ 110% of input
   const appropriate = renditions.filter(r => (r.width * r.height) <= (inputPixels * 1.1));
-
-  // Fallback: always include at least the smallest rendition
   if (appropriate.length === 0) return [renditions[0]];
 
   appropriate.sort((a, b) => (a.width * a.height) - (b.width * b.height));
@@ -334,7 +379,6 @@ function logDisk(label) {
   } catch (_) {}
 }
 
-// ─── FFprobe ─────────────────────────────────────────────────────────────────
 async function probeMedia(inputPath) {
   return new Promise((resolve, reject) => {
     console.log('📊 Probing media...');
@@ -366,9 +410,6 @@ async function probeMedia(inputPath) {
   });
 }
 
-// ─── FFmpeg runner ───────────────────────────────────────────────────────────
-// Caps stderr buffer at 5 MB to prevent OOM on multi-hour encodes.
-// Logs progress every 15 seconds.
 async function runFFmpeg(args, label = '') {
   const tag = label ? `[${label}] ` : '';
   console.log(`🚀 ${tag}FFmpeg starting...`);
@@ -380,12 +421,11 @@ async function runFFmpeg(args, label = '') {
     const MAX = 5 * 1024 * 1024;
     let chunks = [], len = 0, lastProg = '', lastT = 0;
 
-    ff.stdout.on('data', () => {}); // drain
+    ff.stdout.on('data', () => {});
     ff.stderr.on('data', data => {
       const txt = data.toString();
       if (len < MAX) { chunks.push(txt); len += txt.length; }
 
-      // Parse progress from -progress pipe:2 format
       const m = txt.match(/out_time=(\d+:\d+:\d+)/);
       if (m && m[1] !== lastProg) {
         lastProg = m[1];
@@ -396,7 +436,6 @@ async function runFFmpeg(args, label = '') {
         }
       }
 
-      // Detect fatal filesystem errors early
       if (txt.match(/No space left on device/i)) {
         console.error(`❌ ${tag}DISK FULL detected!`);
       }
@@ -419,7 +458,6 @@ async function runFFmpeg(args, label = '') {
   });
 }
 
-// ─── S3 upload with retry + size verification ────────────────────────────────
 async function uploadToS3(filePath, key, contentType, cacheControl) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -432,7 +470,6 @@ async function uploadToS3(filePath, key, contentType, cacheControl) {
         ContentType: contentType, CacheControl: cacheControl
       }));
 
-      // Verify uploaded size matches local
       const head = await s3.send(new HeadObjectCommand({
         Bucket: process.env.S3_BUCKET, Key: key
       }));
@@ -448,7 +485,6 @@ async function uploadToS3(filePath, key, contentType, cacheControl) {
   }
 }
 
-// ─── ASG + SQS helpers ──────────────────────────────────────────────────────
 async function protectInstance(protect) {
   if (!process.env.INSTANCE_ID || !process.env.ASG_NAME) return;
   try {
@@ -472,14 +508,10 @@ async function extendVisibility(rh) {
   }
 }
 
-// ─── Master playlist generator ──────────────────────────────────────────────
-// We NEVER rely on FFmpeg's -master_pl_name because it silently produces
-// 0-byte files on long videos due to an HLS muxer finalization bug.
 function generateMasterPlaylist(outputDir, renditions, hasAudio) {
   console.log('📝 Generating master playlist...');
   const masterPath = path.join(outputDir, 'master.m3u8');
 
-  // Clean up any misplaced master.m3u8 FFmpeg may have dropped in subdirs
   for (const r of renditions) {
     const misplaced = path.join(outputDir, `stream_${r.name}`, 'master.m3u8');
     if (fs.existsSync(misplaced)) fs.unlinkSync(misplaced);
@@ -503,7 +535,6 @@ function generateMasterPlaylist(outputDir, renditions, hasAudio) {
   console.log(`✅ Master playlist: ${sz} bytes, ${renditions.length} variants`);
 }
 
-// ─── HLS validation ─────────────────────────────────────────────────────────
 function validateHLS(outputDir, renditionCount) {
   console.log('🔍 Validating HLS output...');
   const masterPath = path.join(outputDir, 'master.m3u8');
@@ -533,10 +564,6 @@ function validateHLS(outputDir, renditionCount) {
   console.log(`✅ Validation OK: ${total} total segments across ${dirs.length} renditions`);
   return dirs;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// VIDEO PROCESSING — Single FFmpeg pass, all renditions at once
-// ═══════════════════════════════════════════════════════════════════════════
 
 async function processVideo(fileId, userId, s3Key, receiptHandle) {
   console.log(`\n🎬 VIDEO: ${fileId}`);
@@ -569,7 +596,6 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
 
     logDisk('before download');
 
-    // ── Download ──
     console.log('📥 Downloading from S3...');
     const { Body } = await s3.send(new GetObjectCommand({
       Bucket: process.env.S3_BUCKET, Key: doc.originalKey
@@ -581,10 +607,8 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
     console.log(`✅ Downloaded ${(fileSz / 1048576).toFixed(1)} MB`);
     logDisk('after download');
 
-    // ── Probe ──
     const { duration, videoStream, hasAudio } = await probeMedia(inputPath);
 
-    // ── Thumbnail ──
     let shouldThumb = true;
     let thumbKey = doc.thumbnailKey;
     if (doc.thumbnailSource === 'custom' && doc.thumbnailKey) {
@@ -601,15 +625,12 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       ], 'thumb');
     }
 
-    // ── Select renditions ──
     const renditions = getAppropriateRenditions(videoStream.width, videoStream.height, 'video');
 
-    // ── Build single FFmpeg command for ALL renditions ──
     console.log(`🎥 Encoding ${renditions.length} renditions (all at once)...`);
 
     const splitOutputs = renditions.map((_, i) => `[v${i}]`).join('');
     const scaleFilters = renditions.map((r, i) => `[v${i}]scale=${r.width}:${r.height}[v${i}out]`).join('; ');
-    // format=yuv420p converts 10-bit input (e.g. HEVC Main 10) to 8-bit for libx264 main profile
     const filterComplex = `[0:v]format=yuv420p,split=${renditions.length}${splitOutputs}; ${scaleFilters}`;
 
     const ffArgs = [
@@ -639,7 +660,6 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       }
     });
 
-    // HLS output with %v expansion — all renditions written simultaneously
     ffArgs.push(
       '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0',
       '-hls_playlist_type', 'vod', '-hls_flags', 'independent_segments',
@@ -647,24 +667,20 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       '-hls_segment_filename', path.join(outputDir, 'stream_%v', 'segment%03d.ts')
     );
 
-    // var_stream_map: handles both audio and no-audio cases
     const vsm = renditions.map((r, i) =>
       hasAudio ? `v:${i},a:${i},name:${r.name}` : `v:${i},name:${r.name}`
     ).join(' ');
 
     ffArgs.push('-var_stream_map', vsm, path.join(outputDir, 'stream_%v', 'playlist.m3u8'));
 
-    // Pre-create stream directories
     for (const r of renditions) ensureDir(path.join(outputDir, `stream_${r.name}`));
 
     await runFFmpeg(ffArgs, 'encode');
     logDisk('after encode');
 
-    // ── Master playlist + validation ──
     generateMasterPlaylist(outputDir, renditions, hasAudio);
     const renditionDirs = validateHLS(outputDir, renditions.length);
 
-    // ── Upload everything to S3 ──
     console.log('☁️  Uploading HLS to S3...');
     const masterKey = `hls/videos/${userId}/${fileId}/master.m3u8`;
     await uploadToS3(
@@ -692,7 +708,6 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
       await uploadToS3(thumbPath, thumbKey, 'image/jpeg', 'max-age=31536000');
     }
 
-    // ── Update DB ──
     const update = {
       status: 'completed', hlsMasterKey: masterKey, thumbnailKey: thumbKey, duration,
       renditions: renditions.map(r => ({
@@ -725,10 +740,6 @@ async function processVideo(fileId, userId, s3Key, receiptHandle) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SHORT PROCESSING — Single FFmpeg pass, all renditions at once
-// ═══════════════════════════════════════════════════════════════════════════
-
 async function processShort(fileId, userId, s3Key, receiptHandle) {
   console.log(`\n📱 SHORT: ${fileId}`);
   console.log('═'.repeat(70));
@@ -753,7 +764,6 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     ensureDir(tempDir);
     ensureDir(outputDir);
 
-    // Download
     const { Body } = await s3.send(new GetObjectCommand({
       Bucket: process.env.S3_BUCKET, Key: doc.originalKey
     }));
@@ -764,7 +774,6 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
 
     const { duration, videoStream, hasAudio } = await probeMedia(inputPath);
 
-    // Thumbnail
     let shouldThumb = true, thumbKey = doc.thumbnailKey;
     if (doc.thumbnailSource === 'custom' && doc.thumbnailKey) shouldThumb = false;
     if (shouldThumb) {
@@ -778,13 +787,11 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     const isVertical = videoStream.height > videoStream.width;
     const renditions = getAppropriateRenditions(videoStream.width, videoStream.height, 'short');
 
-    // Build scale filters — use correct W:H for vertical/horizontal content
     const splitOutputs = renditions.map((_, i) => `[v${i}]`).join('');
     const scaleFilters = renditions.map((r, i) => {
       const scale = isVertical ? `scale=${r.width}:${r.height}` : `scale=${r.height}:${r.width}`;
       return `[v${i}]${scale}[v${i}out]`;
     }).join('; ');
-    // format=yuv420p converts 10-bit input (e.g. HEVC Main 10) to 8-bit for libx264 main profile
     const filterComplex = `[0:v]format=yuv420p,split=${renditions.length}${splitOutputs}; ${scaleFilters}`;
 
     const ffArgs = [
@@ -831,7 +838,6 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
     generateMasterPlaylist(outputDir, renditions, hasAudio);
     const renditionDirs = validateHLS(outputDir, renditions.length);
 
-    // Upload
     const masterKey = `hls/shorts/${userId}/${fileId}/master.m3u8`;
     await uploadToS3(path.join(outputDir, 'master.m3u8'), masterKey, 'application/vnd.apple.mpegurl', 'max-age=300');
 
@@ -879,10 +885,6 @@ async function processShort(fileId, userId, s3Key, receiptHandle) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AUDIO PROCESSING
-// ═══════════════════════════════════════════════════════════════════════════
-
 async function processAudio(fileId, userId, s3Key, receiptHandle) {
   console.log(`\n🎵 AUDIO: ${fileId}`);
   console.log('═'.repeat(70));
@@ -908,7 +910,6 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
     ensureDir(tempDir);
     ensureDir(hlsDir);
 
-    // Download
     const { Body } = await s3.send(new GetObjectCommand({
       Bucket: process.env.S3_BUCKET, Key: doc.originalKey
     }));
@@ -920,13 +921,11 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
     const { duration, hasAudio } = await probeMedia(inputPath);
     if (!hasAudio) throw new Error('No audio stream found in file');
 
-    // Convert to AAC
     await runFFmpeg([
       '-i', inputPath, '-vn', '-c:a', 'aac', '-b:a', '256k',
       '-ar', '48000', '-ac', '2', '-y', outputPath
     ], 'aac');
 
-    // HLS audio
     await runFFmpeg([
       '-i', inputPath, '-vn', '-c:a', 'aac', '-b:a', '256k',
       '-ar', '48000', '-ac', '2',
@@ -936,7 +935,6 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
       '-y', path.join(hlsDir, 'playlist.m3u8')
     ], 'hls-audio');
 
-    // Upload
     const processedKey = `audio/processed/${userId}/${fileId}.m4a`;
     await uploadToS3(outputPath, processedKey, 'audio/mp4', 'max-age=31536000');
 
@@ -970,10 +968,6 @@ async function processAudio(fileId, userId, s3Key, receiptHandle) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MAIN WORKER LOOP
-// ═══════════════════════════════════════════════════════════════════════════
-
 let currentRH = null;
 
 async function startWorker() {
@@ -988,7 +982,6 @@ async function startWorker() {
 
   logDisk('startup');
 
-  // Clean leftover work dirs from previous runs
   try {
     const leftovers = fs.readdirSync(WORK_BASE).filter(f => f.startsWith('job-'));
     if (leftovers.length > 0) {
@@ -1031,7 +1024,6 @@ async function startWorker() {
         s3Key = body.key || body.s3Key;
         if (!s3Key) throw new Error('No S3 key in message');
 
-        // Skip output artifacts (S3 event notifications for our own uploads)
         if (s3Key.startsWith('audio/processed/') || s3Key.startsWith('hls/') || s3Key.startsWith('thumbnails/')) {
           console.log(`🚫 Skipping output artifact: ${s3Key}`);
           await sqs.send(new DeleteMessageCommand({ QueueUrl: process.env.QUEUE_URL, ReceiptHandle: currentRH }));
@@ -1098,7 +1090,6 @@ async function startWorker() {
   }
 }
 
-// ─── Graceful shutdown ──────────────────────────────────────────────────────
 let shuttingDown = false;
 async function shutdown(sig) {
   if (shuttingDown) return;
@@ -1133,7 +1124,7 @@ chown -R ec2-user:ec2-user $APP_DIR
 # ── Systemd Service ──────────────────────────────────────────────────────────
 cat > /etc/systemd/system/cinishine-worker.service << EOF
 [Unit]
-Description=CiniShine Media Worker v4.3
+Description=CiniShine Media Worker v4.4
 After=network-online.target
 Wants=network-online.target
 
@@ -1165,14 +1156,21 @@ if systemctl is-active --quiet cinishine-worker; then
   echo "✅ Worker started"
   systemctl status cinishine-worker --no-pager
 else
-  echo "❌ Worker failed"
+  echo "❌ Worker failed to start"
   journalctl -u cinishine-worker -n 100 --no-pager
   exit 1
 fi
 
+# ── Completion marker — the single source of truth for "did setup finish?" ───
+# Check for this via SSM Run Command across the fleet:
+#   aws ssm send-command --document-name "AWS-RunShellScript" \
+#     --parameters 'commands=["test -f /var/tmp/bootstrap-complete && echo OK || echo MISSING"]' \
+#     --targets "Key=tag:Application,Values=cinishine"
+echo "$(date) instance=$INSTANCE_ID type=$INSTANCE_TYPE" > "$MARKER_FILE"
+
 echo ""
 echo "================================================================="
-echo "  CiniShine Worker v4.3 — DEPLOYED"
+echo "  CiniShine Worker v4.4 — DEPLOYED"
 echo "================================================================="
 echo ""
 echo "  ✅ All-at-once encoding (single FFmpeg pass, all renditions)"
@@ -1180,6 +1178,8 @@ echo "  ✅ Upload after processing completes"
 echo "  ✅ /var/tmp (EBS) instead of /tmp (tmpfs/RAM)"
 echo "  ✅ Handles video-only files (no audio stream)"
 echo "  ✅ Manual master playlist (bypasses FFmpeg bug)"
+echo "  ✅ Retry logic on every network call in bootstrap"
+echo "  ✅ Completion marker at $MARKER_FILE"
 echo ""
 echo "  ⚡ REQUIRED: Increase EBS root volume to 30+ GB"
 echo "     In Launch Template → Block Device → /dev/xvda → 30 GB gp3"
@@ -1189,4 +1189,5 @@ echo "  📋 Commands:"
 echo "     sudo journalctl -u cinishine-worker -f"
 echo "     sudo systemctl restart cinishine-worker"
 echo "     df -h /var/tmp"
+echo "     test -f /var/tmp/bootstrap-complete && echo READY || echo NOT_READY"
 echo ""

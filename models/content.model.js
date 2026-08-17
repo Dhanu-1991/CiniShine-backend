@@ -185,6 +185,14 @@ const ContentSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    subscribersGained: {
+        type: Number,
+        default: 0
+    },
+    fansGained: {
+        type: Number,
+        default: 0
+    },
 
     // ============================================
     // VIDEO/SHORTS ANALYTICS

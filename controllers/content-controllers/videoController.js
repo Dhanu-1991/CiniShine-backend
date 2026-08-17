@@ -12,6 +12,7 @@ import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
 import { hasPpvAccess } from '../../utils/ppvGuard.js';
 import Bookmark from '../../models/bookmark.model.js';
+import Purchase from '../../models/purchase.model.js';
 
 const s3Client = new S3Client({
     region: process.env.AWS_REGION,
@@ -120,6 +121,20 @@ export const getVideo = async (req, res) => {
 
         // ── PPV controller-level check (second layer after route middleware) ──
         const ppvGranted = await hasPpvAccess(video, req.user?.id);
+        const isCreator = Boolean(req.user?.id && (video.userId?._id?.toString() === req.user.id.toString() || video.userId?.toString() === req.user.id.toString()));
+
+        let rentalExpiresAt = null;
+        if (req.user?.id && video.visibility === 'pay_per_view') {
+            const activePurchase = await Purchase.findOne({
+                contentId: video._id,
+                buyerId: req.user.id,
+                status: 'active',
+                expiresAt: { $gt: new Date() }
+            }).select('expiresAt').lean();
+            if (activePurchase) {
+                rentalExpiresAt = activePurchase.expiresAt;
+            }
+        }
 
         res.json({
             _id: video._id,
@@ -149,10 +164,12 @@ export const getVideo = async (req, res) => {
             category: video.category || '',
             visibility: video.visibility || 'public',
             commentsEnabled: video.commentsEnabled !== false,
-            // PPV gate flags
+            // PPV gate flags & rental details
             ppvRequired: !ppvGranted && video.visibility === 'pay_per_view',
             price: video.visibility === 'pay_per_view' ? video.price : undefined,
             rentalDuration: video.visibility === 'pay_per_view' ? (video.rentalDuration || 2) : undefined,
+            rentalExpiresAt,
+            isCreator,
         });
 
     } catch (error) {

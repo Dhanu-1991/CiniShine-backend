@@ -1,7 +1,7 @@
 /**
  * interactions.js — VIDEO engagement & watch time tracking
  *
- * View counting: min(30s, 30% of duration) threshold.
+ * View counting: min(15s, 5% of duration) threshold.
  * Supports both authenticated (userId) and anonymous (IP+fingerprint) viewers.
  * Watch time tracking delegated to shared watchAnalytics.js helper.
  */
@@ -209,11 +209,18 @@ export const subscribeToUser = async (req, res) => {
 
         // Check if already subscribed
         const isSubscribed = user.subscriptions.includes(targetUserId);
+        const contentId = req.body?.contentId || req.query?.contentId;
 
         if (isSubscribed) {
             // Unsubscribe
             user.subscriptions = user.subscriptions.filter(id => id.toString() !== targetUserId);
             await user.save();
+
+            if (contentId && mongoose.Types.ObjectId.isValid(contentId)) {
+                await Content.findByIdAndUpdate(contentId, {
+                    $inc: { subscribersGained: -1, fansGained: -1 }
+                }).catch(err => console.error("Error updating content subscribersGained:", err));
+            }
 
             res.json({
                 message: "Unsubscribed successfully",
@@ -224,6 +231,12 @@ export const subscribeToUser = async (req, res) => {
             // Subscribe
             user.subscriptions.push(targetUserId);
             await user.save();
+
+            if (contentId && mongoose.Types.ObjectId.isValid(contentId)) {
+                await Content.findByIdAndUpdate(contentId, {
+                    $inc: { subscribersGained: 1, fansGained: 1 }
+                }).catch(err => console.error("Error updating content subscribersGained:", err));
+            }
 
             res.json({
                 message: "Subscribed successfully",

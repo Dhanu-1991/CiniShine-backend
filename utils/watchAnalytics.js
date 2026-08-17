@@ -4,10 +4,41 @@ import Content from '../models/content.model.js';
 import ContentView from '../models/contentView.model.js';
 import ContentWatchtime from '../models/contentWatchtime.model.js';
 
-const getWatchThreshold = (contentType, durationSeconds = 0) => {
+/**
+ * View Count Threshold Algorithm:
+ * - 'post': 1 second (static content reading)
+ * - 'short' (Frames):
+ *   minimum of 2 seconds and 5% of duration:
+ *   Math.max(0.5, Math.min(2, duration * 0.05))
+ *   Examples:
+ *     - 10s frame: min(2s, 0.5s)  = 0.5 seconds (or loop/completion)
+ *     - 15s frame: min(2s, 0.75s) = 0.75 seconds (or loop/completion)
+ *     - 30s frame: min(2s, 1.5s)  = 1.5 seconds (or loop/completion)
+ *     - 40s frame: min(2s, 2.0s)  = 2.0 seconds (or loop/completion)
+ *     - 60s frame: min(2s, 3.0s)  = 2.0 seconds (capped at 2s)
+ * - 'video' & 'audio':
+ *   minimum of 5% of duration and 15 seconds (with a floor of 1 second):
+ *   Math.max(1, Math.min(15, duration * 0.05))
+ *   Examples:
+ *     - 60s (1 min) video:  min(15s, 3s)    = 3.0 seconds
+ *     - 120s (2 min) video: min(15s, 6s)    = 6.0 seconds
+ *     - 246s (4:06) video:  min(15s, 12.3s) = 12.3 seconds
+ *     - 300s (5 min) video: min(15s, 15s)   = 15.0 seconds
+ *     - 600s (10 min) video: min(15s, 30s)  = 15.0 seconds (capped at 15s)
+ *     - 1 hour video:        min(15s, 180s) = 15.0 seconds (capped at 15s)
+ */
+export const getWatchThreshold = (contentType, durationSeconds = 0) => {
     if (contentType === 'post') return 1;
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 5;
-    return Math.max(1, Math.min(30, durationSeconds * 0.3));
+    const duration = Number(durationSeconds);
+
+    if (contentType === 'short') {
+        if (!Number.isFinite(duration) || duration <= 0) return 2;
+        return Math.max(0.5, Math.min(2, duration * 0.05));
+    }
+
+    // 'video' and 'audio'
+    if (!Number.isFinite(duration) || duration <= 0) return 5;
+    return Math.max(1, Math.min(15, duration * 0.05));
 };
 
 const resolveAnonymousViewerId = (req, event) => {
