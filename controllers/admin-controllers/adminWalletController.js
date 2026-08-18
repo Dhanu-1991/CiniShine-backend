@@ -320,7 +320,7 @@ export const adminCreditDebitWallet = async (req, res) => {
             }
         }
 
-        const creatorName = user.channelName || user.userName || 'Creator';
+        const creatorName = user.userName || user.channelName || 'Creator';
         const contact = user.contact || user.email;
 
         if (contact && contact.includes('@')) {

@@ -932,7 +932,7 @@ async function _sendCreatorPayoutEmail(creatorId, group, payoutMonth) {
         const recipientEmail = creatorUser?.email || (creatorUser?.contact && creatorUser.contact.includes('@') ? creatorUser.contact : null);
         if (recipientEmail) {
             await sendAdminEmail('engagementPayoutCredited', recipientEmail, {
-                creatorName: creatorUser.channelName || creatorUser.userName || 'Creator',
+                creatorName: creatorUser.userName || creatorUser.channelName || 'Creator',
                 totalAmount: group.totalPayout,
                 contentCount: group.contents.length,
                 payoutMonth,

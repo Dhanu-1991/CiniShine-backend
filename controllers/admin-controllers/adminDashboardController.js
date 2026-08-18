@@ -1083,7 +1083,7 @@ export const adminSendEmailHandler = async (req, res) => {
         let failCount = 0;
 
         for (const user of eligibleUsers) {
-            const recipientName = user.channelName || user.userName || user.fullName || 'User';
+            const recipientName = user.userName || user.channelName || user.fullName || 'User';
             
             let formattedBody = body.trim();
 

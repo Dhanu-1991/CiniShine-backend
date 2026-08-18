@@ -639,7 +639,17 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
         return false;
     }
 
-    const { subject, html, text } = templateFn(data);
+    // Ensure userName is prioritized over channelName for all email greetings
+    const preferredName = data.userName || data.creatorName || data.referrerName || data.referredName || 'User';
+    const normalizedData = {
+        ...data,
+        creatorName: data.userName || data.creatorName || 'User',
+        userName: data.userName || data.creatorName || 'User',
+        referrerName: data.referrerUserName || data.referrerName || data.userName || 'User',
+        referredName: data.referredUserName || data.referredName || 'User',
+    };
+
+    const { subject, html, text } = templateFn(normalizedData);
     let attachments = [];
 
     // If sending completed payout settlement email, fetch saved PDF from AWS S3 (or generate if first time) and attach!

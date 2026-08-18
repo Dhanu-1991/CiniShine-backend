@@ -34,8 +34,8 @@ export function generateSettlementPdf({
       doc.on('end', () => resolve(Buffer.concat(buffers)));
       doc.on('error', (err) => reject(err));
 
-      const cName = creatorName || userName || 'Creator';
-      const uName = userName || cName;
+      const uName = userName || creatorName || 'Creator';
+      const cName = uName;
       const handleStr = userHandle ? (userHandle.startsWith('@') ? userHandle : `@${userHandle}`) : '@creator';
       const gstStr = gstin && String(gstin).trim().length > 3 ? String(gstin).trim().toUpperCase() : 'N/A (Unregistered)';
 

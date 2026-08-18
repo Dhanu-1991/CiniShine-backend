@@ -202,8 +202,8 @@ export async function approveReferral(referralId, adminId) {
         console.log(`=================== [REFERRAL_APPROVE_SUCCESS] ===================\n`);
         
         // Send emails asynchronously (non-blocking)
-        const referrerName = referral.referrerId.channelName || referral.referrerId.userName;
-        const referredName = referral.referredUserId.channelName || referral.referredUserId.userName;
+        const referrerName = referral.referrerId.userName || referral.referrerId.channelName || 'User';
+        const referredName = referral.referredUserId.userName || referral.referredUserId.channelName || 'User';
         const referrerEmail = referral.referrerId.contact;
         const referredEmail = referral.referredUserId.contact;
         
@@ -315,8 +315,8 @@ export async function partialApproveReferral(referralId, adminId, { approveRefer
         
         console.log(`=================== [REFERRAL_PARTIAL_APPROVE_SUCCESS] ===================\n`);
         
-        const referrerName = referral.referrerId.channelName || referral.referrerId.userName;
-        const referredName = referral.referredUserId.channelName || referral.referredUserId.userName;
+        const referrerName = referral.referrerId.userName || referral.referrerId.channelName || 'User';
+        const referredName = referral.referredUserId.userName || referral.referredUserId.channelName || 'User';
         const referrerEmail = referral.referrerId.contact;
         const referredEmail = referral.referredUserId.contact;
         
@@ -377,8 +377,8 @@ export async function rejectReferral(referralId, adminId, reason) {
     await referral.save();
     
     // Send rejection emails asynchronously
-    const referrerName = referral.referrerId.channelName || referral.referrerId.userName;
-    const referredName = referral.referredUserId.channelName || referral.referredUserId.userName;
+    const referrerName = referral.referrerId.userName || referral.referrerId.channelName || 'User';
+    const referredName = referral.referredUserId.userName || referral.referredUserId.channelName || 'User';
     const referrerEmail = referral.referrerId.contact;
     const referredEmail = referral.referredUserId.contact;
     

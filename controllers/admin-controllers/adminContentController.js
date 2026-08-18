@@ -882,7 +882,7 @@ export const banChannel = async (req, res) => {
         // Auto-email creator about ban (non-blocking)
         if (user.contact && user.contact.includes('@')) {
             sendAdminEmail('channelBanned', user.contact, {
-                creatorName: user.channelName || user.userName || 'Creator',
+                creatorName: user.userName || user.channelName || 'Creator',
                 reason: reason || '',
                 adminName: req.admin.name || 'Admin'
             }).catch(err => console.error('[AdminEmail] Failed to send ban email:', err.message));
@@ -962,7 +962,7 @@ export const unbanChannel = async (req, res) => {
         // Auto-email creator about unban (non-blocking)
         if (user.contact && user.contact.includes('@')) {
             sendAdminEmail('channelUnbanned', user.contact, {
-                creatorName: user.channelName || user.userName || 'Creator',
+                creatorName: user.userName || user.channelName || 'Creator',
                 adminName: req.admin.name || 'Admin'
             }).catch(err => console.error('[AdminEmail] Failed to send unban email:', err.message));
         }

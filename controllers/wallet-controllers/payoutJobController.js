@@ -734,7 +734,7 @@ export const runSingleCreatorPayout = async (req, res) => {
                 if (creatorEmail && creatorEmail.includes('@')) {
                     const emailType = payoutType === 'partial' ? 'partialPayoutInitiated' : 'payoutInitiated';
                     const emailData = {
-                        creatorName: user.channelName || user.userName || 'Creator',
+                        creatorName: user.userName || user.channelName || 'Creator',
                         netAmount: createdPayout.netAmount,
                         grossAmount: createdPayout.grossAmount,
                         payoutMonth,
@@ -899,7 +899,7 @@ export const completePayoutSettlement = async (req, res) => {
         try {
             await sendAdminEmail('payoutCompleted', creatorEmail, {
                 payoutId: payout._id.toString(),
-                creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+                creatorName: payout.userId.userName || payout.userId.channelName || 'Creator',
                 userName: payout.userId.userName || '',
                 userHandle: payout.userId.channelHandle || '',
                 gstin: kyc?.gstNumber || '',
@@ -987,7 +987,7 @@ export const completeBulkPayoutSettlement = async (req, res) => {
             try {
                 await sendAdminEmail('payoutCompleted', creatorEmail, {
                     payoutId: payout._id.toString(),
-                    creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+                    creatorName: payout.userId.userName || payout.userId.channelName || 'Creator',
                     userName: payout.userId.userName || '',
                     userHandle: payout.userId.channelHandle || '',
                     gstin: kyc?.gstNumber || '',
@@ -1073,7 +1073,7 @@ export const resendSettlementEmail = async (req, res) => {
         await sendAdminEmail('payoutCompleted', creatorEmail, {
             payoutId: payout._id.toString(),
             invoiceS3Key: payout.invoiceS3Key,
-            creatorName: payout.userId.channelName || payout.userId.userName || 'Creator',
+            creatorName: payout.userId.userName || payout.userId.channelName || 'Creator',
             userName: payout.userId.userName || '',
             userHandle: payout.userId.channelHandle || '',
             gstin: kyc?.gstNumber || '',
@@ -1152,7 +1152,7 @@ export const getCreatorInvoices = async (req, res) => {
                     }
                     const userObj = await User.findById(p.userId).select('userName channelName channelHandle').lean();
                     const pdfBuffer = await generateSettlementPdf({
-                        creatorName: userObj?.channelName || userObj?.userName || 'Creator',
+                        creatorName: userObj?.userName || userObj?.channelName || 'Creator',
                         userName: userObj?.userName || '',
                         userHandle: userObj?.channelHandle || '',
                         gstin: kyc?.gstNumber || '',
@@ -1285,7 +1285,7 @@ export const getPayoutInvoicePdf = async (req, res) => {
         }
 
         const pdfBuffer = await generateSettlementPdf({
-            creatorName: payout.userId?.channelName || payout.userId?.userName || 'Creator',
+            creatorName: payout.userId?.userName || payout.userId?.channelName || 'Creator',
             userName: payout.userId?.userName || '',
             userHandle: payout.userId?.channelHandle || '',
             gstin: kyc?.gstNumber || '',
