@@ -1089,18 +1089,11 @@ export const adminSendEmailHandler = async (req, res) => {
 
             try {
                 let sent = false;
-                if (template && template !== 'custom' && template !== 'platform_updates') {
-                    sent = await sendAdminEmail(template, user.contact, {
-                        creatorName: recipientName,
-                        reason: reason || body || '',
-                        warningMessage: body || reason || '',
-                        adminName,
-                        subject: subject.trim(),
-                        body: formattedBody,
-                    });
-                } else {
-                    sent = await sendCustomEmail(user.contact, subject.trim(), formattedBody, recipientName, adminName);
-                }
+                
+                // All emails sent through the broadcast UI use the custom template wrapper.
+                // The UI passes the edited subject and body, and 'template' is just the DB ObjectId.
+                // System templates (like contentRemoved) are triggered automatically by other controllers, not here.
+                sent = await sendCustomEmail(user.contact, subject.trim(), formattedBody, recipientName, adminName);
 
                 if (sent) sentCount++;
                 else failCount++;
@@ -1140,7 +1133,7 @@ export const adminSendEmailHandler = async (req, res) => {
         }
 
         if (sentCount === 0) {
-            return res.status(502).json({
+            return res.status(400).json({
                 success: false,
                 sent: false,
                 count: 0,
