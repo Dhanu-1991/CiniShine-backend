@@ -25,12 +25,12 @@ const emailTemplateSchema = new mongoose.Schema({
     },
     subject: {
         type: String,
-        required: true,
+        default: '',
         trim: true,
     },
     body: {
         type: String,
-        required: true,
+        default: '',
     },
     isSystem: {
         type: Boolean,

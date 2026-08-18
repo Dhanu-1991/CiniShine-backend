@@ -438,7 +438,13 @@ export const replyToEnquiry = async (req, res) => {
         const emailSubject = subject || 'Response to your enquiry — WatchInIt';
 
         // Send email via email service
-        await sendCustomEmail(enquiry.email, emailSubject, message.trim(), 'User', adminName);
+        const sent = await sendCustomEmail(enquiry.email, emailSubject, message.trim(), 'User', adminName);
+        if (!sent) {
+            return res.status(502).json({
+                success: false,
+                message: `Failed to deliver email reply to ${enquiry.email}. Please verify Resend email configuration.`
+            });
+        }
 
         enquiry.status = 'resolved';
         enquiry.adminReply = message.trim();
@@ -1133,12 +1139,24 @@ export const adminSendEmailHandler = async (req, res) => {
             console.error('[EMAIL_LOG_ERROR]', logErr.message);
         }
 
+        if (sentCount === 0) {
+            return res.status(502).json({
+                success: false,
+                sent: false,
+                count: 0,
+                failCount,
+                message: `Failed to deliver email to any recipients (${failCount} failed). Please check Resend API key and domain configuration.`
+            });
+        }
+
         return res.status(200).json({
             success: true,
-            sent: sentCount > 0,
+            sent: true,
             count: sentCount,
             failCount,
-            message: `Successfully sent email to ${sentCount} user(s)${failCount > 0 ? ` (${failCount} failed)` : ''}.`
+            message: failCount > 0
+                ? `Sent email to ${sentCount} user(s), but ${failCount} failed.`
+                : `Successfully sent email broadcast to ${sentCount} user(s)!`
         });
     } catch (error) {
         console.error('Send email error:', error);

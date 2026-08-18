@@ -21,7 +21,7 @@ import Purchase from '../../models/purchase.model.js';
 import ContentShare from '../../models/contentShare.model.js';
 import { isAdminUser } from '../../utils/ppvGuard.js';
 import { PLATFORM_CUT_PERCENT } from '../../utils/paymentFulfillmentService.js';
-import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 
 const s3Client = new S3Client({
@@ -870,5 +870,200 @@ export const getContentAnalytics = async (req, res) => {
     } catch (error) {
         console.error('❌ Error fetching content analytics:', error);
         res.status(500).json({ error: 'Failed to fetch analytics' });
+    }
+};
+
+/**
+ * Check if content has active (non-expired) rentals
+ * Returns rental count and max remaining time for UX
+ */
+export const checkContentActiveRentals = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+        if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid content ID' });
+
+        const content = await Content.findById(id).select('userId title');
+        if (!content) return res.status(404).json({ error: 'Content not found' });
+        if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
+
+        const now = new Date();
+        const activeRentals = await Purchase.find({
+            contentId: id,
+            status: 'active',
+            expiresAt: { $gt: now },
+        }).select('expiresAt buyerId').lean();
+
+        if (activeRentals.length === 0) {
+            return res.json({
+                hasActiveRentals: false,
+                activeRentalCount: 0,
+                maxRemainingMs: 0,
+                maxRemainingText: null,
+            });
+        }
+
+        // Find the latest expiry among all active rentals
+        const maxExpiry = activeRentals.reduce((max, r) => {
+            return r.expiresAt > max ? r.expiresAt : max;
+        }, now);
+
+        const remainingMs = maxExpiry.getTime() - now.getTime();
+        const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+        const hours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+        const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+        let maxRemainingText = '';
+        if (days > 0) maxRemainingText += `${days}d `;
+        if (hours > 0) maxRemainingText += `${hours}h `;
+        maxRemainingText += `${minutes}m`;
+        maxRemainingText = maxRemainingText.trim();
+
+        return res.json({
+            hasActiveRentals: true,
+            activeRentalCount: activeRentals.length,
+            maxRemainingMs: remainingMs,
+            maxRemainingText,
+        });
+    } catch (error) {
+        console.error('❌ Error checking active rentals:', error);
+        res.status(500).json({ error: 'Failed to check active rentals' });
+    }
+};
+
+/**
+ * Permanently delete content — comprehensive S3 + MongoDB cleanup
+ * Requires ?confirm=true query param for safety
+ * Blocks deletion if active rentals exist (returns 409 with rental info)
+ * Only the creator can permanently delete their own content
+ */
+export const permanentlyDeleteContent = async (req, res) => {
+    try {
+        const userId = req.user?.id;
+        const { id } = req.params;
+        const { confirm } = req.query;
+
+        if (!userId) return res.status(401).json({ error: 'Authentication required' });
+        if (confirm !== 'true') return res.status(400).json({ error: 'Confirmation required. Add ?confirm=true' });
+        if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid content ID' });
+
+        const content = await Content.findById(id);
+        if (!content) return res.status(404).json({ error: 'Content not found' });
+        if (content.userId.toString() !== userId) return res.status(403).json({ error: 'Not authorized' });
+
+        // Block if active rentals exist
+        const now = new Date();
+        const activeRentals = await Purchase.find({
+            contentId: id,
+            status: 'active',
+            expiresAt: { $gt: now },
+        }).select('expiresAt').lean();
+
+        if (activeRentals.length > 0) {
+            const maxExpiry = activeRentals.reduce((max, r) => r.expiresAt > max ? r.expiresAt : max, now);
+            const remainingMs = maxExpiry.getTime() - now.getTime();
+            const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+            const hours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+            const minutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+            let timeText = '';
+            if (days > 0) timeText += `${days}d `;
+            if (hours > 0) timeText += `${hours}h `;
+            timeText += `${minutes}m`;
+
+            return res.status(409).json({
+                error: 'Cannot delete content with active rentals',
+                activeRentalCount: activeRentals.length,
+                maxRemainingMs: remainingMs,
+                maxRemainingText: timeText.trim(),
+                suggestion: 'Make the content private instead, or try again after all rentals expire.',
+            });
+        }
+
+        // ── Clean up all related MongoDB data ──
+        const ContentWatchtime = (await import('../../models/contentWatchtime.model.js')).default;
+        await Promise.all([
+            Comment.deleteMany({ videoId: id }),
+            VideoReaction.deleteMany({ videoId: id }),
+            WatchHistory.deleteMany({ contentId: id }),
+            ContentView.deleteMany({ contentId: id }),
+            ContentWatchtime.deleteMany({ contentId: id }),
+            ContentShare.deleteMany({ contentId: id }),
+            // Delete expired/non-active purchases (active ones were blocked above)
+            Purchase.deleteMany({ contentId: id }),
+        ]);
+
+        // ── Clean up ALL S3 objects ──
+        const bucket = process.env.S3_BUCKET;
+        const keysToDelete = [
+            content.originalKey,
+            content.processedKey,
+            content.thumbnailKey,
+            content.imageKey,
+            content.hlsMasterKey,
+            content.hlsKey,
+        ].filter(Boolean);
+
+        // Collect multiple image keys (for posts)
+        if (content.imageKeys?.length > 0) {
+            keysToDelete.push(...content.imageKeys);
+        }
+
+        // Collect rendition playlist keys
+        if (content.renditions?.length > 0) {
+            for (const rendition of content.renditions) {
+                if (rendition.playlistKey) keysToDelete.push(rendition.playlistKey);
+            }
+        }
+
+        // ── Delete ALL files under HLS prefix (segments, playlists, variants) ──
+        // Determine the HLS directory prefix from hlsMasterKey or hlsKey
+        const hlsRef = content.hlsMasterKey || content.hlsKey;
+        if (hlsRef) {
+            const hlsDir = hlsRef.substring(0, hlsRef.lastIndexOf('/'));
+            if (hlsDir) {
+                try {
+                    let continuationToken;
+                    do {
+                        const listResult = await s3Client.send(new ListObjectsV2Command({
+                            Bucket: bucket,
+                            Prefix: hlsDir + '/',
+                            ContinuationToken: continuationToken,
+                        }));
+                        if (listResult.Contents) {
+                            keysToDelete.push(...listResult.Contents.map(o => o.Key));
+                        }
+                        continuationToken = listResult.IsTruncated ? listResult.NextContinuationToken : undefined;
+                    } while (continuationToken);
+                } catch (err) {
+                    console.error('Error listing HLS prefix for deletion:', err.message);
+                }
+            }
+        }
+
+        // Deduplicate keys and delete all S3 objects
+        const uniqueKeys = [...new Set(keysToDelete)];
+        if (uniqueKeys.length > 0) {
+            await Promise.all(
+                uniqueKeys.map(key =>
+                    s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+                        .catch(err => console.error(`Failed to delete S3 key ${key}:`, err.message))
+                )
+            );
+        }
+
+        // ── Delete the content record ──
+        await Content.findByIdAndDelete(id);
+
+        console.log(`🗑️ Permanently deleted content ${id} — ${uniqueKeys.length} S3 objects removed`);
+
+        res.json({
+            success: true,
+            message: 'Content permanently deleted',
+            s3ObjectsDeleted: uniqueKeys.length,
+        });
+    } catch (error) {
+        console.error('❌ Error permanently deleting content:', error);
+        res.status(500).json({ error: 'Failed to permanently delete content' });
     }
 };

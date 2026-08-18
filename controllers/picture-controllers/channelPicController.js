@@ -171,9 +171,9 @@ export const updateChannelPicture = async (req, res) => {
             channelPicture: getCfUrl(s3Key),
             user: {
                 _id: user._id,
-                username: user.username,
+                userName: user.userName,
                 channelPicture: getCfUrl(s3Key),
-                channelName: user.channelName || user.username,
+                channelName: user.channelName || user.userName,
                 updatedAt: user.updatedAt,
             },
         });
@@ -216,7 +216,7 @@ export const removeChannelPicture = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: "Channel picture removed successfully",
+            message: "Account picture removed successfully",
         });
     } catch (error) {
         console.error("Remove channel picture error:", error);
@@ -235,7 +235,7 @@ export const getChannelPicture = async (req, res) => {
         const { userId } = req.params;
 
         const user = await User.findById(userId).select(
-            "channelPicture username channelName"
+            "channelPicture userName channelName"
         );
 
         if (!user) {
@@ -248,7 +248,7 @@ export const getChannelPicture = async (req, res) => {
         return res.status(200).json({
             success: true,
             channelPicture: getCfUrl(user.channelPicture),
-            channelName: user.channelName || user.username,
+            channelName: user.channelName || user.userName,
         });
     } catch (error) {
         console.error("Get channel picture error:", error);

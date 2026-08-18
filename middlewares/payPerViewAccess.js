@@ -12,7 +12,7 @@
  */
 
 import Content from '../models/content.model.js';
-import { hasPpvAccess } from '../utils/ppvGuard.js';
+import { hasPpvAccess, hasActiveRental } from '../utils/ppvGuard.js';
 
 const payPerViewAccess = async (req, res, next) => {
     try {
@@ -24,18 +24,21 @@ const payPerViewAccess = async (req, res, next) => {
             return next();
         }
 
-        const content = await Content.findById(contentId).select('visibility userId price trailerContentId spoilerContentId spoilerText rentalDuration');
+        const content = await Content.findById(contentId).select('visibility userId price trailerContentId spoilerContentId spoilerText rentalDuration status');
         if (!content) {
             return res.status(404).json({ error: 'Content not found' });
         }
 
         // ── Check private visibility ──
+        // Allow active rental holders through even when creator sets content to private.
+        // Admin removal (status: 'removed') is checked separately and still blocks access.
         if (content.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = content.userId ? (content.userId._id ? content.userId._id.toString() : content.userId.toString()) : null;
             const isOwner = requesterId && ownerId && requesterId === ownerId;
             const isAdmin = req.admin || req.user?.role === 'admin';
-            if (!isOwner && !isAdmin) {
+            const hasRental = requesterId ? await hasActiveRental(content._id, requesterId) : false;
+            if (!isOwner && !isAdmin && !hasRental) {
                 return res.status(404).json({ error: 'Video not found' });
             }
         }

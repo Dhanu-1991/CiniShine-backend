@@ -6,6 +6,7 @@ const DEFAULT_TEMPLATES = [
         name: '✨ Platform Updates (Wallets, Engagement, Rentals & Referrals)',
         category: 'Announcements',
         icon: '✨',
+        subject: '✨ Important Platform Updates: Wallets, Engagement Payouts, Rentals & Referrals — Watchin It',
         body: `We've glad to announce you that we have rolled out exciting new features and monetization upgrades on Watchin It, designed to empower creators and viewers alike. Here is everything you need to know.\n\n1. Wallet & Payout Balance System\n\nWallet: Your in app balance for renting content and purchasing future subscriptions. Easily rechargeable via UPI or Net Banking, secured by a 4 digit PIN. This wallet is non withdrawable.\n\nPayout Balance: Receives all your content earnings, engagement payouts, and referral rewards after tax and platform cuts. Eligible balances are automatically paid out to your verified bank account at month end, so there's no need for manual withdrawal requests.\n\n2. Engagement Payouts (CPM Earnings)\n\nEarn money directly from audience engagement. Creators are rewarded with CPM earnings based on total views, watch time, completion rates, and video performance. All approved engagement earnings are credited directly to your Payout Balance.\n\n3. Content Rentals (Pay Per View)\n\nMonetize your premium videos and audio tracks with customizable rental pricing. Viewers unlock a 48 hour viewing access window. Your net earnings, after a 32% platform fee, 18% GST on the platform's cut, 0.1% TDS, and 1% TCS, go straight to your Payout Balance.\n\n4. Referral Program\n\nInvite fellow creators to join Watchin It. Earn ₹25 in your Payout Balance for every approved creator referral who signs up and uploads copyright-free film content, while your referred friend receives ₹25 in their Wallet to explore and rent content on the platform.\n\nLog in to your Watchin It dashboard today to explore these new features and start creating and monetizing.\n\nhttps://watchinit.com\n\nBest wishes,\nWatchin It\nHouse of Cinema`,
         isSystem: true,
     },
@@ -68,19 +69,22 @@ const DEFAULT_TEMPLATES = [
         name: '✏️ Custom Email',
         category: 'General',
         icon: '✏️',
-        subject: '',
-        body: '',
+        subject: 'Announcement from Watchin It',
+        body: 'Write your announcement message here...',
         isSystem: true,
     },
 ];
 
 export const seedDefaultTemplates = async () => {
     try {
-        const count = await EmailTemplate.countDocuments();
-        if (count === 0) {
-            await EmailTemplate.insertMany(DEFAULT_TEMPLATES);
-            console.log('[SEED] Default email templates inserted');
+        for (const tpl of DEFAULT_TEMPLATES) {
+            await EmailTemplate.findOneAndUpdate(
+                { templateId: tpl.templateId },
+                { $set: tpl },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
         }
+        console.log('[SEED] Default email templates verified/inserted');
     } catch (err) {
         console.error('[SEED_ERROR]', err);
     }

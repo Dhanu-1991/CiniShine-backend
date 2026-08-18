@@ -189,6 +189,7 @@ export const getLiveTransfers = async (req, res) => {
                 status: t.status,
                 createdAt: t.createdAt,
                 orderId: t.relatedOrderId,
+                gatewayTransactionId: t.gatewayTransactionId || null,
                 walletUser: t.walletUser ? {
                     id: t.walletUser._id?.toString(),
                     name: t.walletUser.userName,

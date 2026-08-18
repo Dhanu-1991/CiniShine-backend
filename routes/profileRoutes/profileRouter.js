@@ -14,6 +14,8 @@ import {
     getProfileSettings,
     getRecommendedProfiles,
     getContentAnalytics,
+    checkContentActiveRentals,
+    permanentlyDeleteContent,
 } from '../../controllers/profile-controllers/profileController.js';
 import { universalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 
@@ -31,6 +33,10 @@ router.delete('/content/:id', universalTokenVerifier, deleteContent);
 
 // Content analytics
 router.get('/content/:id/analytics', universalTokenVerifier, getContentAnalytics);
+
+// Content rental check & permanent deletion
+router.get('/content/:id/active-rentals', universalTokenVerifier, checkContentActiveRentals);
+router.delete('/content/:id/permanent', universalTokenVerifier, permanentlyDeleteContent);
 
 // Comment deletion (user can only delete own comments)
 router.delete('/comments/:commentId', universalTokenVerifier, deleteComment);

@@ -32,7 +32,7 @@ export async function fulfillWalletRecharge({ orderId, paymentId, amount, curren
         'primary',
         amount,
         'recharge',
-        { relatedOrderId: orderId, relatedBuyerId: userId },
+        { relatedOrderId: orderId, relatedBuyerId: userId, gatewayTransactionId: paymentId },
         `recharge_${orderId}`,
         session
       );
@@ -168,6 +168,7 @@ export async function fulfillPpvPurchase({ orderId, paymentId, amount, currency,
                 relatedPurchaseId: purchase._id,
                 relatedOrderId: orderId,
                 relatedBuyerId: userId,
+                gatewayTransactionId: paymentId,
                 taxBreakdown: tax,
               },
               `ppv_earning_${orderId}`, session

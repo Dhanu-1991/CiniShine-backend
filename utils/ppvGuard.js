@@ -157,3 +157,26 @@ export async function batchCheckPpvAccess(items, userId) {
 
     return accessSet;
 }
+
+/**
+ * Check if a user has an active (non-expired) rental/purchase for a specific content,
+ * regardless of the content's current visibility state.
+ *
+ * Used to honour paid rental windows even when a creator changes visibility
+ * (e.g., pay_per_view → private). Admin-level removal (status: 'removed')
+ * is handled separately and still blocks access.
+ *
+ * @param {string|ObjectId} contentId - The content's _id
+ * @param {string|null} userId - The requesting user's ID string
+ * @returns {Promise<boolean>} true if an active rental exists
+ */
+export async function hasActiveRental(contentId, userId) {
+    if (!contentId || !userId) return false;
+    const purchase = await Purchase.findOne({
+        contentId,
+        buyerId: userId,
+        status: 'active',
+        expiresAt: { $gt: new Date() },
+    }).lean();
+    return !!purchase;
+}

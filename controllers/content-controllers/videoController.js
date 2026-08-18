@@ -10,7 +10,7 @@ import { updateViews } from "./videoParameters.js";
 import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.js";
 import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
-import { hasPpvAccess } from '../../utils/ppvGuard.js';
+import { hasPpvAccess, hasActiveRental } from '../../utils/ppvGuard.js';
 import Bookmark from '../../models/bookmark.model.js';
 import Purchase from '../../models/purchase.model.js';
 
@@ -55,12 +55,14 @@ export const getVideo = async (req, res) => {
         }
 
         // ── Check private visibility ──
+        // Allow active rental holders through even when creator sets content to private
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
             const isOwner = requesterId && ownerId && requesterId === ownerId;
             const isAdmin = req.admin || req.user?.role === 'admin';
-            if (!isOwner && !isAdmin) {
+            const hasRental = requesterId ? await hasActiveRental(video._id, requesterId) : false;
+            if (!isOwner && !isAdmin && !hasRental) {
                 return res.status(404).json({ error: 'Video not found' });
             }
         }
@@ -195,12 +197,14 @@ export const getHLSMasterPlaylist = async (req, res) => {
         }
 
         // ── Check private visibility ──
+        // Allow active rental holders through even when creator sets content to private
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
             const isOwner = requesterId && ownerId && requesterId === ownerId;
             const isAdmin = req.admin || req.user?.role === 'admin';
-            if (!isOwner && !isAdmin) {
+            const hasRental = requesterId ? await hasActiveRental(video._id, requesterId) : false;
+            if (!isOwner && !isAdmin && !hasRental) {
                 return res.status(404).json({ error: 'Video not found' });
             }
         }

@@ -93,8 +93,14 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const watcherIsAuthenticated = !!req.user?.id;
     const userId = watcherIsAuthenticated ? req.user.id : null;
     const anonymousViewerId = watcherIsAuthenticated ? null : resolveAnonymousViewerId(req, event);
-    const watchSessionId = event.watchSessionId || event.sessionId || null;
-    const eventId = String(event.eventId || `${contentRecord._id}-${watchSessionId || userId || anonymousViewerId || 'anon'}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
+    
+    // For legacy endpoints that don't send a watchSessionId, generate a deterministic one based on the current hour.
+    // This prevents every heartbeat from generating a new random ID (which would bypass deduplication and massively overcount views).
+    const currentHourBucket = `${dateBucket}-${new Date().getHours()}`;
+    const fallbackSessionId = `legacy-${contentRecord._id}-${userId || anonymousViewerId || 'anon'}-${currentHourBucket}`;
+    const watchSessionId = event.watchSessionId || event.sessionId || fallbackSessionId;
+    
+    const eventId = String(event.eventId || `${contentRecord._id}-${watchSessionId}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
     const eventType = event.eventType || 'heartbeat';
     const rawActivePlay = Number(event.activePlayTime) || 0;
     const normalizedPlayTime = rawActivePlay > 500 ? rawActivePlay / 1000 : rawActivePlay;
@@ -287,10 +293,14 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         const sessionResult = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: true });
 
         if (sessionResult) {
-            // Existing viewer, new session → increment views only
+            // Existing viewer, new session → increment views
+            // If viewCount === 1, this is their very first counted view (previously only below-threshold)
+            const isFirstEverView = sessionResult.viewCount === 1;
+            
             const contentInc = watcherIsAuthenticated
-                ? { views: 1, authenticatedViews: 1 }
-                : { views: 1, anonymousViews: 1 };
+                ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
+                : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
+                
             await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc });
             viewCounted = true;
         } else {

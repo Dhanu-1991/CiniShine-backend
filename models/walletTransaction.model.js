@@ -53,6 +53,7 @@ const walletTransactionSchema = new mongoose.Schema({
     relatedContentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Content', default: null },
     relatedPurchaseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Purchase', default: null },
     relatedOrderId: { type: String, default: null },
+    gatewayTransactionId: { type: String, default: null },
     // Privacy-sensitive: only for reconciliation, NEVER exposed to creators
     relatedBuyerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     // Flexible metadata for engagement payouts (content breakdown, payout run info, etc.)
