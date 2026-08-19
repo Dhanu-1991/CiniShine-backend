@@ -464,7 +464,7 @@ export const unifiedSearch = async (req, res) => {
             // Fetch all needed content types in one query, then split
             queries.push(
                 Content.find({ ...contentFilter, contentType: { $in: contentTypes } })
-                    .populate('userId', 'userName channelName channelHandle channelPicture subscriptions')
+                    .populate('userId', 'userName channelName channelHandle channelPicture subscriptions subscriberCount')
                     .sort({ createdAt: -1 })
                     .limit(300)
                     .lean()
@@ -490,7 +490,7 @@ export const unifiedSearch = async (req, res) => {
                         ]),
                     ],
                 })
-                    .select('userName channelName channelHandle channelPicture channelDescription bio subscriptions createdAt')
+                    .select('userName channelName channelHandle channelPicture channelDescription bio subscriptions subscriberCount createdAt')
                     .limit(50)
                     .lean()
             );

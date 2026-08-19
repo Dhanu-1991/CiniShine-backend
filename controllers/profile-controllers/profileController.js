@@ -454,7 +454,7 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned'
+            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount'
         ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -474,9 +474,8 @@ export const getProfileSettings = async (req, res) => {
         const counts = { video: 0, short: 0, audio: 0, post: 0 };
         contentCounts.forEach(c => { counts[c._id] = c.count; });
 
-        const subscriberCount = (user.subscriberCountOverride !== null && user.subscriberCountOverride !== undefined)
-            ? user.subscriberCountOverride
-            : await User.countDocuments({ subscriptions: user._id });
+        // Subscriber count from cached field (consistent with channel / account page)
+        const subscriberCount = user.subscriberCount || 0;
 
         // For subscriptions avoid expensive S3 head/URL checks — return stored picture key/url as-is.
         const subscriptions = (user.subscriptions || []).slice(0, 20).map((sub) => ({
@@ -558,11 +557,10 @@ export const getRecommendedProfiles = async (req, res) => {
 
         const seedProfiles = await User.aggregate([
             { $match: { _id: { $in: followingObjectIds } } },
-            { $lookup: { from: 'users', localField: '_id', foreignField: 'subscriptions', as: '_followers' } },
             {
                 $addFields: {
                     followerCount: {
-                        $ifNull: ['$subscriberCountOverride', { $size: '$_followers' }]
+                        $ifNull: ['$subscriberCount', 0]
                     }
                 }
             },
@@ -597,11 +595,10 @@ export const getRecommendedProfiles = async (req, res) => {
 
         const candidates = await User.aggregate([
             { $match: { _id: { $in: candidateIds } } },
-            { $lookup: { from: 'users', localField: '_id', foreignField: 'subscriptions', as: '_followers' } },
             {
                 $addFields: {
                     followerCount: {
-                        $ifNull: ['$subscriberCountOverride', { $size: '$_followers' }]
+                        $ifNull: ['$subscriberCount', 0]
                     }
                 }
             },
