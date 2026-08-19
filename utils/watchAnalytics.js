@@ -42,9 +42,21 @@ export const getWatchThreshold = (contentType, durationSeconds = 0) => {
 };
 
 const resolveAnonymousViewerId = (req, event) => {
-    const supplied = event.anonymousViewerId || event.viewerId || event.sessionId || event.watchSessionId;
-    if (supplied) return String(supplied);
+    // Prefer the client-supplied persistent anonymous viewer ID.
+    // Only fall back to session/watchSession IDs as a last resort since they
+    // change per-session and would create duplicate viewer records.
+    const persistentId = event.anonymousViewerId || event.viewerId;
+    if (persistentId && typeof persistentId === 'string' && persistentId.trim().length > 0) {
+        return String(persistentId).trim();
+    }
 
+    // Secondary: use session-level identifiers (less ideal but better than nothing)
+    const sessionFallback = event.sessionId || event.watchSessionId;
+    if (sessionFallback && typeof sessionFallback === 'string' && sessionFallback.trim().length > 0) {
+        return String(sessionFallback).trim();
+    }
+
+    // Last resort: compute a fingerprint hash from request properties
     const ip = req?.ip || req?.headers?.['x-forwarded-for'] || req?.connection?.remoteAddress || 'unknown';
     const ua = typeof req?.get === 'function' ? req.get('User-Agent') : (req?.headers?.['user-agent'] || '');
     const lang = typeof req?.get === 'function' ? req.get('Accept-Language') : (req?.headers?.['accept-language'] || '');
@@ -276,6 +288,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 watchSessionId,
                 lastPlayheadSeconds: playheadSeconds,
                 lastWatchEventAt: now,
+                lastCountedAt: now,
                 lastCountedWatchSessionId: watchSessionId,
                 ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
             },
@@ -301,7 +314,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
                 : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
                 
-            await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc });
+            await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
             viewCounted = true;
         } else {
             // Either new viewer entirely, or same session already counted.
@@ -319,6 +332,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                             lastPlayheadSeconds: playheadSeconds,
                             bestPlayheadSeconds: playheadSeconds || 0,
                             lastWatchEventAt: now,
+                            lastCountedAt: now,
                             lastCountedWatchSessionId: watchSessionId,
                             ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
                         },
@@ -335,7 +349,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                     const contentInc = watcherIsAuthenticated
                         ? { views: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
                         : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
-                    await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc });
+                    await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
                     viewCounted = true;
                 }
                 // else: same session already counted → no-op (deduplication working correctly)
