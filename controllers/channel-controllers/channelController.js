@@ -40,10 +40,8 @@ export const getChannelPage = async (req, res) => {
 
         if (!user) return res.status(404).json({ error: 'Channel not found' });
 
-        // Subscriber/follower count: use override if set by superadmin, else count actual
-        const subscriberCount = (user.subscriberCountOverride !== null && user.subscriberCountOverride !== undefined)
-            ? user.subscriberCountOverride
-            : await User.countDocuments({ subscriptions: user._id });
+        // Subscriber/follower count: always use real live count
+        const subscriberCount = await User.countDocuments({ subscriptions: user._id });
 
         // Check if current user is subscribed
         let isSubscribed = false;
@@ -329,9 +327,7 @@ export const getChannelFollowers = async (req, res) => {
                 channelName: f.channelName,
                 channelHandle: f.channelHandle,
                 channelPicture: f.channelPicture ? getCfUrl(f.channelPicture) : null,
-                followerCount: f.subscriberCountOverride != null
-                    ? f.subscriberCountOverride
-                    : await User.countDocuments({ subscriptions: f._id })
+                followerCount: await User.countDocuments({ subscriptions: f._id })
             }))
         );
 

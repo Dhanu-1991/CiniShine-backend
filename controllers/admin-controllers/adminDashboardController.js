@@ -656,7 +656,7 @@ export const listUsers = async (req, res) => {
 
         // Fetch all filtered users first so sorting happens globally (not just inside a single page).
         const users = await User.find(filter)
-            .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt')
+            .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt subscriberCountOverride')
             .lean();
 
         if (users.length === 0) {

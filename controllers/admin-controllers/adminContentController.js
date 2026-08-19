@@ -343,7 +343,7 @@ export const deleteContent = async (req, res) => {
         const contentId = archive.content_id;
         await Promise.all([
             Content.deleteOne({ _id: contentId }),
-            Comment.deleteMany({ contentId }),
+            Comment.deleteMany({ videoId: contentId }),
             VideoReaction.deleteMany({ contentId }),
             WatchHistory.deleteMany({ contentId }),
             ContentView.deleteMany({ contentId }),
@@ -501,7 +501,7 @@ export const getCreatorAnalytics = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
         }
 
-        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriptions subscriberCountOverride uniqueViewersOverride');
+        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriptions subscriberCountOverride');
         if (!creator) {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
@@ -529,19 +529,8 @@ export const getCreatorAnalytics = async (req, res) => {
             { $group: { _id: '$contentType', count: { $sum: 1 }, views: { $sum: '$views' } } }
         ]);
 
-        // Unique viewers
-        const computedUniqueViewers = await ContentView.countDocuments({
-            contentId: { $in: await Content.find({ userId: id }).distinct('_id') }
-        });
-        const uniqueViewers = creator.uniqueViewersOverride !== null && creator.uniqueViewersOverride !== undefined
-            ? creator.uniqueViewersOverride
-            : computedUniqueViewers;
-
         // Subscriber count (users who have this creator in their subscriptions)
-        const computedSubscriberCount = await User.countDocuments({ subscriptions: id });
-        const subscriberCount = creator.subscriberCountOverride !== null && creator.subscriberCountOverride !== undefined
-            ? creator.subscriberCountOverride
-            : computedSubscriberCount;
+        const subscriberCount = await User.countDocuments({ subscriptions: id });
 
         return res.status(200).json({
             success: true,
@@ -556,9 +545,7 @@ export const getCreatorAnalytics = async (req, res) => {
             },
             analytics: {
                 ...(stats || { totalContent: 0, totalViews: 0, totalLikes: 0, totalDislikes: 0, totalShares: 0, totalWatchTime: 0, avgWatchTime: 0 }),
-                uniqueViewers,
                 subscriberCount,
-                subscriberCountOverride: creator.subscriberCountOverride,
                 contentByType
             }
         });
@@ -638,9 +625,7 @@ export const getCreatorProfile = async (req, res) => {
         }
 
         const [subscriberCount, contentCount, communities, wallet, pendingPayout, allPayouts, kycDetails] = await Promise.all([
-            creator.subscriberCountOverride !== null && creator.subscriberCountOverride !== undefined
-                ? Promise.resolve(creator.subscriberCountOverride)
-                : User.countDocuments({ subscriptions: id }),
+            User.countDocuments({ subscriptions: id }),
             Content.countDocuments({ userId: id, status: { $in: ['completed', 'removed'] } }),
             CommunityMember.find({ userId: id, status: 'ACTIVE' })
                 .populate('communityId', 'name slug type avatarUrl')
@@ -802,8 +787,8 @@ export const getCreatorStudio = async (req, res) => {
         // Fetch comments count for all content
         const allContentIds = contents.map(c => c._id);
         const commentCounts = await Comment.aggregate([
-            { $match: { contentId: { $in: allContentIds } } },
-            { $group: { _id: '$contentId', count: { $sum: 1 } } }
+            { $match: { videoId: { $in: allContentIds } } },
+            { $group: { _id: '$videoId', count: { $sum: 1 } } }
         ]);
         const commentMap = Object.fromEntries(commentCounts.map(c => [c._id.toString(), c.count]));
 
@@ -1150,7 +1135,7 @@ export const updateContentStats = async (req, res) => {
 export const updateCreatorStats = async (req, res) => {
     try {
         const { id } = req.params;
-        const { subscriberCount, totalWatchTime, totalViews, totalLikes, uniqueViewers } = req.body;
+        const { totalWatchTime, totalViews, totalLikes } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
@@ -1162,15 +1147,6 @@ export const updateCreatorStats = async (req, res) => {
         }
 
         const updates = {};
-
-        if (subscriberCount !== undefined) {
-            const parsed = parseInt(subscriberCount, 10);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Subscriber count must be a non-negative integer' });
-            }
-            user.subscriberCountOverride = parsed;
-            updates.subscriberCount = parsed;
-        }
 
         const contentList = await Content.find({ userId: id, status: { $ne: 'removed' } });
 
@@ -1251,16 +1227,8 @@ export const updateCreatorStats = async (req, res) => {
             updates.avgWatchTime = totalViewsNow > 0 ? Math.round(parsed / totalViewsNow) : 0;
         }
 
-        if (uniqueViewers !== undefined) {
-            const parsed = parseInt(uniqueViewers, 10);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Unique viewers must be a non-negative integer' });
-            }
-            updates.uniqueViewers = parsed;
-            // Note: uniqueViewers is computed from ContentView documents.
-            // We store the override value and return it in analytics.
-            user.uniqueViewersOverride = parsed;
-        }
+        // uniqueViewers field removed — it was a misleading metric
+        // (summed per-content unique viewers instead of truly distinct people)
 
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({ success: false, message: 'No valid fields to update' });
@@ -1285,6 +1253,75 @@ export const updateCreatorStats = async (req, res) => {
         });
     } catch (error) {
         console.error('Update creator stats error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/creator/:id/stats/reset
+ * SuperAdmin: Reset all stat overrides to original computed values.
+ * Clears subscriberCountOverride so the real subscriber count is used.
+ * Recalculates totalViews, totalLikes, totalWatchTime from actual Content documents.
+ */
+export const resetCreatorStats = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid creator ID' });
+        }
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'Creator not found' });
+        }
+
+        // Clear overrides
+        user.subscriberCountOverride = null;
+        user.uniqueViewersOverride = null;
+        await user.save();
+
+        // Recompute real values from database
+        const [stats] = await Content.aggregate([
+            { $match: { userId: new mongoose.Types.ObjectId(id), status: { $ne: 'removed' } } },
+            {
+                $group: {
+                    _id: null,
+                    totalViews: { $sum: '$views' },
+                    totalLikes: { $sum: '$likeCount' },
+                    totalWatchTime: { $sum: '$totalWatchTime' },
+                    avgWatchTime: { $avg: '$averageWatchTime' }
+                }
+            }
+        ]);
+
+        const computedSubscriberCount = await User.countDocuments({ subscriptions: id });
+
+        const resetValues = {
+            subscriberCount: computedSubscriberCount,
+            totalViews: stats?.totalViews || 0,
+            totalLikes: stats?.totalLikes || 0,
+            totalWatchTime: stats?.totalWatchTime || 0,
+            avgWatchTime: stats?.avgWatchTime || 0,
+        };
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'stats_reset',
+            target_type: 'user',
+            target_id: user._id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: `Reset creator stats to computed values: ${JSON.stringify(resetValues)}`
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Creator stats reset to original values',
+            analytics: resetValues
+        });
+    } catch (error) {
+        console.error('Reset creator stats error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
@@ -1651,8 +1688,8 @@ export const listAllContent = async (req, res) => {
         // Fetch counts for each content
         const [commentCounts, purchaseAgg] = await Promise.all([
             Comment.aggregate([
-                { $match: { contentId: { $in: contentIds } } },
-                { $group: { _id: '$contentId', count: { $sum: 1 } } }
+                { $match: { videoId: { $in: contentIds } } },
+                { $group: { _id: '$videoId', count: { $sum: 1 } } }
             ]),
             Purchase.aggregate([
                 { $match: { contentId: { $in: contentIds }, status: { $in: ['active', 'expired'] } } },
@@ -1853,7 +1890,7 @@ export const getContentDetailedAnalytics = async (req, res) => {
             { $sort: { _id: 1 } }
         ]);
 
-        const totalComments = await Comment.countDocuments({ contentId: id });
+        const totalComments = await Comment.countDocuments({ videoId: id });
         const likeToViewRatio = content.views > 0 ? ((content.likeCount || 0) / content.views) : 0;
 
         const engagementMetrics = {
