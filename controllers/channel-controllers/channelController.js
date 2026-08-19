@@ -40,8 +40,8 @@ export const getChannelPage = async (req, res) => {
 
         if (!user) return res.status(404).json({ error: 'Channel not found' });
 
-        // Subscriber/follower count: always use real live count
-        const subscriberCount = await User.countDocuments({ subscriptions: user._id });
+        // Subscriber/follower count — read from cached field (synced on subscribe/unsubscribe)
+        const subscriberCount = user.subscriberCount || 0;
 
         // Check if current user is subscribed
         let isSubscribed = false;
@@ -316,20 +316,18 @@ export const getChannelFollowers = async (req, res) => {
             subscriptions: user._id,
             channelName: { $exists: true, $nin: [null, ''] }
         })
-            .select('_id channelName channelHandle channelPicture subscriberCountOverride')
+            .select('_id channelName channelHandle channelPicture subscriberCount')
             .limit(50)
             .lean();
 
-        // Get follower counts efficiently with parallel individual queries
-        const followers = await Promise.all(
-            rawFollowers.map(async (f) => ({
-                _id: f._id,
-                channelName: f.channelName,
-                channelHandle: f.channelHandle,
-                channelPicture: f.channelPicture ? getCfUrl(f.channelPicture) : null,
-                followerCount: await User.countDocuments({ subscriptions: f._id })
-            }))
-        );
+        // Use cached subscriberCount field — no extra queries needed
+        const followers = rawFollowers.map((f) => ({
+            _id: f._id,
+            channelName: f.channelName,
+            channelHandle: f.channelHandle,
+            channelPicture: f.channelPicture ? getCfUrl(f.channelPicture) : null,
+            followerCount: f.subscriberCount || 0
+        }));
 
         // Sort by follower count and take top 20
         followers.sort((a, b) => b.followerCount - a.followerCount);

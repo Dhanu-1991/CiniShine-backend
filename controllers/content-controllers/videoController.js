@@ -93,11 +93,9 @@ export const getVideo = async (req, res) => {
             "channelName : ", video.userId?.channelName
         );
 
-        // Get subscriber/follower count for the channel (use override if set)
-        const creator = await User.findById(video.userId._id).select('subscriberCountOverride');
-        const subscriberCount = (creator?.subscriberCountOverride !== null && creator?.subscriberCountOverride !== undefined)
-            ? creator.subscriberCountOverride
-            : await User.countDocuments({ subscriptions: video.userId._id });
+        // Get subscriber/follower count from cached field (synced on subscribe/unsubscribe)
+        const creator = await User.findById(video.userId._id).select('subscriberCount');
+        const subscriberCount = creator?.subscriberCount || 0;
 
         // Check if current user is subscribed (if authenticated)
         let isSubscribed = false;

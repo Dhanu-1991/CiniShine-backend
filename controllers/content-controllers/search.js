@@ -567,15 +567,9 @@ export const unifiedSearch = async (req, res) => {
             });
         });
 
-        // Compute actual follower counts for all channels in parallel
-        // subscriberCount = number of users who have this channel in their subscriptions array
-        const channelFollowerCounts = await Promise.all(
-            channelDocs.map(user => User.countDocuments({ subscriptions: user._id }))
-        );
-
-        // Score channels with actual follower counts
+        // Use cached subscriberCount from user documents — no extra queries needed
         const scoredChannels = channelDocs
-            .map((user, idx) => {
+            .map((user) => {
                 const score = scoreChannel(user);
                 return score > 0 ? {
                     _id: user._id,
@@ -585,7 +579,7 @@ export const unifiedSearch = async (req, res) => {
                     channelHandle: user.channelHandle,
                     channelPicture: user.channelPicture,
                     channelDescription: user.channelDescription || user.bio,
-                    subscriberCount: channelFollowerCounts[idx] || 0,
+                    subscriberCount: user.subscriberCount || 0,
                     createdAt: user.createdAt,
                     searchScore: score,
                 } : null;

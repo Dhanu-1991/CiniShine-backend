@@ -31,6 +31,7 @@ import analyticsRouter from "./routes/analyticsRoutes/analyticsRouter.js";
 import walletRouter from "./routes/walletRoutes/walletRouter.js";
 import referralRouter from "./routes/referralRoutes.js";
 import { startViewCountFlusher, stopViewCountFlusher } from "./utils/viewCountQueue.js";
+import { runSubscriberCountMigration } from "./scripts/migrateSubscriberCounts.js"; // [TEMP-MIGRATION]
 
 // ── Global crash handlers — prevent silent 521 ─────────────────────────
 process.on("uncaughtException", (err) => {
@@ -175,6 +176,14 @@ const connectWithRetry = async () => {
     });
     console.log("✅ MongoDB connected successfully");
     startViewCountFlusher();
+
+    // ── [TEMP-MIGRATION] One-time sync of cached subscriber counts on startup ──
+    try {
+      await runSubscriberCountMigration(true);
+    } catch (migErr) {
+      console.error("⚠️ [Migration] Initial boot subscriber migration error:", migErr);
+    }
+    // ───────────────────────────────────────────────────────────────────────────
   } catch (err) {
     console.error("❌ DB connection attempt failed, retrying in 3s...", err.message);
     setTimeout(connectWithRetry, 3000);

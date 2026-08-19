@@ -216,21 +216,29 @@ export const subscribeToUser = async (req, res) => {
             user.subscriptions = user.subscriptions.filter(id => id.toString() !== targetUserId);
             await user.save();
 
+            // Decrement creator's cached subscriber count
+            await User.findByIdAndUpdate(targetUserId, { $inc: { subscriberCount: -1 } });
+
             if (contentId && mongoose.Types.ObjectId.isValid(contentId)) {
                 await Content.findByIdAndUpdate(contentId, {
                     $inc: { subscribersGained: -1, fansGained: -1 }
                 }).catch(err => console.error("Error updating content subscribersGained:", err));
             }
 
+            const updatedTarget = await User.findById(targetUserId).select('subscriberCount');
             res.json({
                 message: "Unsubscribed successfully",
                 subscribed: false,
-                subscriberCount: user.subscriptions.length
+                subscriberCount: updatedTarget?.subscriberCount || 0
             });
         } else {
-            // Subscribe
-            user.subscriptions.push(targetUserId);
-            await user.save();
+            // Subscribe — use $addToSet to prevent duplicate entries
+            await User.findByIdAndUpdate(userId, {
+                $addToSet: { subscriptions: targetUserId }
+            });
+
+            // Increment creator's cached subscriber count
+            await User.findByIdAndUpdate(targetUserId, { $inc: { subscriberCount: 1 } });
 
             if (contentId && mongoose.Types.ObjectId.isValid(contentId)) {
                 await Content.findByIdAndUpdate(contentId, {
@@ -238,10 +246,11 @@ export const subscribeToUser = async (req, res) => {
                 }).catch(err => console.error("Error updating content subscribersGained:", err));
             }
 
+            const updatedTarget = await User.findById(targetUserId).select('subscriberCount');
             res.json({
                 message: "Subscribed successfully",
                 subscribed: true,
-                subscriberCount: user.subscriptions.length
+                subscriberCount: updatedTarget?.subscriberCount || 0
             });
         }
 

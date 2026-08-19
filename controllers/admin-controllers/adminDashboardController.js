@@ -656,7 +656,7 @@ export const listUsers = async (req, res) => {
 
         // Fetch all filtered users first so sorting happens globally (not just inside a single page).
         const users = await User.find(filter)
-            .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt subscriberCountOverride')
+            .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt channelBanned channelBannedAt lastLoginAt subscriberCount')
             .lean();
 
         if (users.length === 0) {
@@ -674,13 +674,8 @@ export const listUsers = async (req, res) => {
 
         const userIds = users.map((user) => user._id);
 
-        const [fanAgg, contentAgg, watchtimeAgg, kycDocs, primaryWallets, secondaryWallets] = await Promise.all([
-            User.aggregate([
-                { $match: { subscriptions: { $in: userIds } } },
-                { $unwind: '$subscriptions' },
-                { $match: { subscriptions: { $in: userIds } } },
-                { $group: { _id: '$subscriptions', fanCount: { $sum: 1 } } }
-            ]),
+        // Fan count is now read directly from user.subscriberCount (cached field)
+        const [contentAgg, watchtimeAgg, kycDocs, primaryWallets, secondaryWallets] = await Promise.all([
             Content.aggregate([
                 { $match: { userId: { $in: userIds } } },
                 {
@@ -716,9 +711,7 @@ export const listUsers = async (req, res) => {
         const pWalletMap = new Map(primaryWallets.map(w => [w.userId.toString(), w.balance]));
         const sWalletMap = new Map(secondaryWallets.map(w => [w.userId.toString(), w.balance]));
 
-        const fanMap = new Map(
-            fanAgg.map((entry) => [entry._id.toString(), entry.fanCount || 0])
-        );
+
         const contentMap = new Map(
             contentAgg.map((entry) => [
                 entry._id.toString(),
@@ -761,7 +754,7 @@ export const listUsers = async (req, res) => {
                 lastLoginAt: user.lastLoginAt,
                 channelBanned: user.channelBanned || false,
                 channelBannedAt: user.channelBannedAt,
-                fanCount: fanMap.get(key) || 0,
+                fanCount: user.subscriberCount || 0,
                 totalContent: contentStats.totalContent,
                 removedContentCount: contentStats.removedContentCount,
                 contentUploadBreakdown: {

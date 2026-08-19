@@ -501,7 +501,7 @@ export const getCreatorAnalytics = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
         }
 
-        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriptions subscriberCountOverride');
+        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriberCount');
         if (!creator) {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
@@ -529,8 +529,8 @@ export const getCreatorAnalytics = async (req, res) => {
             { $group: { _id: '$contentType', count: { $sum: 1 }, views: { $sum: '$views' } } }
         ]);
 
-        // Subscriber count (users who have this creator in their subscriptions)
-        const subscriberCount = await User.countDocuments({ subscriptions: id });
+        // Subscriber count — read from cached field (kept in sync via subscribe/unsubscribe)
+        const subscriberCount = creator.subscriberCount || 0;
 
         return res.status(200).json({
             success: true,
@@ -625,7 +625,7 @@ export const getCreatorProfile = async (req, res) => {
         }
 
         const [subscriberCount, contentCount, communities, wallet, pendingPayout, allPayouts, kycDetails] = await Promise.all([
-            User.countDocuments({ subscriptions: id }),
+            Promise.resolve(creator.subscriberCount || 0),
             Content.countDocuments({ userId: id, status: { $in: ['completed', 'removed'] } }),
             CommunityMember.find({ userId: id, status: 'ACTIVE' })
                 .populate('communityId', 'name slug type avatarUrl')
@@ -1135,7 +1135,7 @@ export const updateContentStats = async (req, res) => {
 export const updateCreatorStats = async (req, res) => {
     try {
         const { id } = req.params;
-        const { totalWatchTime, totalViews, totalLikes } = req.body;
+        const { subscriberCount, totalWatchTime, totalViews, totalLikes } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
@@ -1147,6 +1147,15 @@ export const updateCreatorStats = async (req, res) => {
         }
 
         const updates = {};
+
+        if (subscriberCount !== undefined) {
+            const parsed = parseInt(subscriberCount, 10);
+            if (isNaN(parsed) || parsed < 0) {
+                return res.status(400).json({ success: false, message: 'Subscriber count must be a non-negative integer' });
+            }
+            user.subscriberCount = parsed;
+            updates.subscriberCount = parsed;
+        }
 
         const contentList = await Content.find({ userId: id, status: { $ne: 'removed' } });
 
@@ -1276,12 +1285,12 @@ export const resetCreatorStats = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
 
-        // Clear overrides
-        user.subscriberCountOverride = null;
-        user.uniqueViewersOverride = null;
+        // Recompute real subscriber count and save to cached field
+        const computedSubscriberCount = await User.countDocuments({ subscriptions: id });
+        user.subscriberCount = computedSubscriberCount;
         await user.save();
 
-        // Recompute real values from database
+        // Recompute real content stats from database
         const [stats] = await Content.aggregate([
             { $match: { userId: new mongoose.Types.ObjectId(id), status: { $ne: 'removed' } } },
             {
@@ -1294,8 +1303,6 @@ export const resetCreatorStats = async (req, res) => {
                 }
             }
         ]);
-
-        const computedSubscriberCount = await User.countDocuments({ subscriptions: id });
 
         const resetValues = {
             subscriberCount: computedSubscriberCount,

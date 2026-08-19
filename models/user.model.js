@@ -125,15 +125,11 @@ const userSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
-    // Subscriber count override (superadmin can set this)
-    subscriberCountOverride: {
+    // Cached subscriber/fan count — incremented/decremented atomically on subscribe/unsubscribe.
+    // Reset button recalculates from actual subscriptions data.
+    subscriberCount: {
         type: Number,
-        default: null
-    },
-    // Unique viewers override (superadmin can set this)
-    uniqueViewersOverride: {
-        type: Number,
-        default: null
+        default: 0
     },
     // Admin channel ban
     channelBanned: {
