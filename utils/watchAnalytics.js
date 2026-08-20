@@ -316,23 +316,13 @@ export async function recordWatchSignal({ req, content, contentId, event, device
 
     let viewCounted = false;
     if (shouldCountView) {
-        // ── Simplified atomic view counting ──
-        // Single findOneAndUpdate with upsert:true. The session dedup filter
-        // (lastCountedWatchSessionId !== current) prevents double-counting.
-        // On E11000 (concurrent insert race with below-threshold upsert),
-        // retry WITHOUT upsert to update the just-created document.
-        // A 30-second cooldown on lastCountedAt prevents multi-tab ping-pong:
-        // if same viewer has 2 tabs open with different watchSessionIds, they'd
-        // alternate lastCountedWatchSessionId and count a view every heartbeat.
-        const VIEW_COOLDOWN_MS = 30000;
+        // ── Atomic view counting ──
+        // Simple filter: viewer identity + session dedup. NO $or clause — using
+        // $or with findOneAndUpdate+upsert breaks MongoDB's partial unique index
+        // matching, causing the query to always miss the existing document.
         const sessionFilter = {
             ...viewerQuery,
             lastCountedWatchSessionId: { $ne: watchSessionId },
-            $or: [
-                { lastCountedAt: null },
-                { lastCountedAt: { $exists: false } },
-                { lastCountedAt: { $lt: new Date(now.getTime() - VIEW_COOLDOWN_MS) } },
-            ],
         };
 
         const viewerUpdate = {
@@ -359,16 +349,13 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         let result = null;
         try {
             // Attempt 1: atomic upsert — works for both new viewers and returning viewers
-            result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: true, new: true });
+            result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: true, new: false });
         } catch (err) {
             if (err?.code === 11000) {
                 // E11000 = ContentView was just created by a concurrent below-threshold upsert.
                 // The document now exists. Retry WITHOUT upsert to atomically update it.
                 try {
-                    result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: true });
-                    if (!watcherIsAuthenticated) {
-                        console.log(`🔁 [ViewCount] E11000 retry ${result ? 'SUCCESS' : 'null (session already counted)'}`);
-                    }
+                    result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: false });
                 } catch (retryErr) {
                     console.error(`❌ [ViewCount] E11000 retry failed:`, retryErr.message);
                 }
@@ -377,17 +364,38 @@ export async function recordWatchSignal({ req, content, contentId, event, device
             }
         }
 
-        if (result) {
-            const isFirstEverView = result.viewCount === 1;
-            const contentInc = watcherIsAuthenticated
-                ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
-                : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
+        if (result !== null) {
+            // result is the document BEFORE update (new: false).
+            // Multi-tab ping-pong guard: if lastCountedAt is very recent (< 30s),
+            // another tab just counted a view — roll back this one.
+            const VIEW_COOLDOWN_MS = 30000;
+            const prevCountedAt = result.lastCountedAt;
+            const tooSoon = prevCountedAt && (now.getTime() - new Date(prevCountedAt).getTime()) < VIEW_COOLDOWN_MS;
 
-            await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
-            viewCounted = true;
+            if (tooSoon) {
+                // Roll back: decrement viewCount, restore previous lastCountedWatchSessionId
+                await ContentView.updateOne(viewerQuery, {
+                    $inc: { viewCount: -1 },
+                    $set: {
+                        lastCountedWatchSessionId: result.lastCountedWatchSessionId,
+                        lastCountedAt: result.lastCountedAt,
+                    },
+                });
+                if (!watcherIsAuthenticated) {
+                    console.log(`⏭️ [ViewCount] anonymous view ROLLED BACK (multi-tab cooldown, last counted ${Math.round((now.getTime() - new Date(prevCountedAt).getTime()) / 1000)}s ago)`);
+                }
+            } else {
+                const isFirstEverView = (result.viewCount || 0) === 0;
+                const contentInc = watcherIsAuthenticated
+                    ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
+                    : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
 
-            if (!watcherIsAuthenticated) {
-                console.log(`✅ [ViewCount] anonymous view COUNTED | viewCount=${result.viewCount} | contentInc=${JSON.stringify(contentInc)}`);
+                await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
+                viewCounted = true;
+
+                if (!watcherIsAuthenticated) {
+                    console.log(`✅ [ViewCount] anonymous view COUNTED | viewCount=${(result.viewCount || 0) + 1} | contentInc=${JSON.stringify(contentInc)}`);
+                }
             }
         } else {
             // sessionFilter didn't match → same watchSessionId already counted → correct dedup
