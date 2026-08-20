@@ -43,9 +43,10 @@ export const getWatchThreshold = (contentType, durationSeconds = 0) => {
 
 const resolveAnonymousViewerId = (req, event) => {
     // Prefer the client-supplied persistent anonymous viewer ID.
+    // Also check req.body in case the event spread didn't include it.
     // Only fall back to session/watchSession IDs as a last resort since they
     // change per-session and would create duplicate viewer records.
-    const persistentId = event.anonymousViewerId || event.viewerId;
+    const persistentId = event.anonymousViewerId || event.viewerId || req?.body?.anonymousViewerId;
     if (persistentId && typeof persistentId === 'string' && persistentId.trim().length > 0) {
         return String(persistentId).trim();
     }

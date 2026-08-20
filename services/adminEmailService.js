@@ -235,7 +235,7 @@ const templates = {
                     <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
-        text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining Payout Balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}. If you have any queries, please contact support@watchinit.com.`
+        text: `Hi ${creatorName}, a partial payout of ₹${netAmount} for ${payoutMonth} has been initiated. Reason: ${reason}. Remaining Payout Balance: ₹${typeof remainingBalance === 'number' ? remainingBalance.toFixed(2) : remainingBalance}. If you have any queries, please contact admin@watchinit.com.`
     }),
 
     inactiveCreatorNudge: ({ creatorName }) => ({
@@ -500,8 +500,8 @@ const templates = {
 
     walletAdjusted: ({ creatorName, action, amount, walletType, reason }) => {
         const isPayout = typeof walletType === 'string' && (
-            walletType.toLowerCase().includes('payout') || 
-            walletType.toLowerCase().includes('secondary') || 
+            walletType.toLowerCase().includes('payout') ||
+            walletType.toLowerCase().includes('secondary') ||
             walletType.toLowerCase().includes('settlement')
         );
         const targetName = isPayout ? 'Payout Balance' : 'Wallet';
@@ -677,7 +677,7 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
                 try {
                     console.log(`[AdminEmail] Fetching existing saved PDF invoice from AWS S3: s3://${s3Bucket}/${s3Key}`);
                     const { GetObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
-                    const s3Client = new S3Client({ 
+                    const s3Client = new S3Client({
                         region: REGION,
                         credentials: {
                             accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -704,13 +704,13 @@ export async function sendAdminEmail(templateName, recipientEmail, data = {}) {
             if (!pdfBuffer) {
                 console.log(`[AdminEmail] No existing saved S3 PDF found. Generating new settlement PDF invoice...`);
                 pdfBuffer = await generateSettlementPdf(data);
-                
+
                 // Save generated PDF to AWS S3 before dispatch
                 if (s3Bucket) {
                     try {
                         const newS3Key = `settlement-invoices/${data.payoutMonth || 'general'}/${data.userId || data.creatorId || 'creator'}_Tax_Invoice_${Date.now()}.pdf`;
                         const { PutObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
-                        const s3Client = new S3Client({ 
+                        const s3Client = new S3Client({
                             region: REGION,
                             credentials: {
                                 accessKeyId: process.env.AWS_ACCESS_KEY_ID,
