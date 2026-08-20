@@ -217,9 +217,44 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         );
     } catch (error) {
         if (error?.code === 11000) {
-            return { success: true, duplicate: true, viewCounted: false };
+            // Concurrent insert for same {watchSessionId, contentId} — retry as update
+            try {
+                previousDoc = await ContentWatchtime.findOneAndUpdate(
+                    sessionUpsertKey,
+                    {
+                        $set: {
+                            userId,
+                            anonymousViewerId,
+                            isAuthenticated: watcherIsAuthenticated,
+                            sessionId: event.sessionId || watchSessionId || eventId,
+                            eventType,
+                            contentType: contentRecord.contentType,
+                            playheadSeconds,
+                            contentDuration,
+                            consumptionPercent,
+                            completed,
+                            totalBufferTime: Math.max(Number(event.bufferTime) || 0, 0),
+                            totalPauseTime: Math.max(Number(event.pauseTime) || 0, 0),
+                            totalSeekTime: Math.max(Number(event.seekTime) || 0, 0),
+                            readTime: Math.max(Number(event.readTime) || 0, 0),
+                            creatorId: event.creatorId || contentRecord.userId || null,
+                            dateBucket,
+                            monthBucket,
+                            device,
+                            ...typeSpecific,
+                        },
+                        $max: { activePlayTime },
+                    },
+                    { upsert: false, new: false }
+                );
+            } catch (retryErr) {
+                // If retry also fails, log but don't crash — data will self-correct on next heartbeat
+                console.error('[ContentWatchtime] E11000 retry failed:', retryErr.message);
+                return { success: true, duplicate: true, viewCounted: false };
+            }
+        } else {
+            throw error;
         }
-        throw error;
     }
 
     // Compute delta from the atomic previous state (null means new insert)
@@ -246,9 +281,12 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     }
 
     // Running average completion: only increment sum/count when a session ends
-    // (ended, unload, pagehide) to avoid inflating the count on every heartbeat
+    // (ended, unload, pagehide) to avoid inflating the count on every heartbeat.
+    // Guard against double-counting: if the previous event for this session was
+    // already a session-end type, don't increment again (e.g. ended then unload).
     const isSessionEnd = eventType === 'ended' || eventType === 'unload' || eventType === 'pagehide';
-    if (isSessionEnd && thisSessionCompletion !== null && thisSessionCompletion > 0) {
+    const prevWasSessionEnd = previousDoc?.eventType === 'ended' || previousDoc?.eventType === 'unload' || previousDoc?.eventType === 'pagehide';
+    if (isSessionEnd && !prevWasSessionEnd && thisSessionCompletion !== null && thisSessionCompletion > 0) {
         contentIncs.completionSumPercent = thisSessionCompletion;
         contentIncs.completionSessionCount = 1;
     }
@@ -268,23 +306,33 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const threshold = getWatchThreshold(contentRecord.contentType, contentDuration);
     const shouldCountView = activePlayTime >= threshold || completed || eventType === 'ended';
 
-    // ── DIAGNOSTIC: trace anonymous view counting ──
-    if (!watcherIsAuthenticated) {
-        console.log(`🔍 [ViewCount] anonymous | contentId=${contentRecord._id} | contentType=${contentRecord.contentType} | activePlayTime=${activePlayTime} | threshold=${threshold} | shouldCountView=${shouldCountView} | anonymousViewerId=${anonymousViewerId} | watchSessionId=${watchSessionId} | eventType=${eventType}`);
-    }
+    const viewerQuery = watcherIsAuthenticated
+        ? { contentId: contentRecord._id, userId }
+        : { contentId: contentRecord._id, anonymousViewerId };
+
+    const identityFields = watcherIsAuthenticated
+        ? { userId }
+        : { anonymousViewerId, visitorFingerprint: anonymousViewerId };
 
     let viewCounted = false;
     if (shouldCountView) {
-        const viewerQuery = watcherIsAuthenticated
-            ? { contentId: contentRecord._id, userId }
-            : { contentId: contentRecord._id, anonymousViewerId };
-
-        // ── Atomic view counting (race-condition safe) ──
-        // Use findOneAndUpdate with the session check IN the filter, so two concurrent
-        // requests for the same watchSessionId cannot both see "no match" and both increment.
+        // ── Simplified atomic view counting ──
+        // Single findOneAndUpdate with upsert:true. The session dedup filter
+        // (lastCountedWatchSessionId !== current) prevents double-counting.
+        // On E11000 (concurrent insert race with below-threshold upsert),
+        // retry WITHOUT upsert to update the just-created document.
+        // A 30-second cooldown on lastCountedAt prevents multi-tab ping-pong:
+        // if same viewer has 2 tabs open with different watchSessionIds, they'd
+        // alternate lastCountedWatchSessionId and count a view every heartbeat.
+        const VIEW_COOLDOWN_MS = 30000;
         const sessionFilter = {
             ...viewerQuery,
             lastCountedWatchSessionId: { $ne: watchSessionId },
+            $or: [
+                { lastCountedAt: null },
+                { lastCountedAt: { $exists: false } },
+                { lastCountedAt: { $lt: new Date(now.getTime() - VIEW_COOLDOWN_MS) } },
+            ],
         };
 
         const viewerUpdate = {
@@ -296,7 +344,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 lastWatchEventAt: now,
                 lastCountedAt: now,
                 lastCountedWatchSessionId: watchSessionId,
-                ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
+                ...identityFields,
             },
             $max: { bestPlayheadSeconds: playheadSeconds || 0 },
             $inc: { viewCount: 1 },
@@ -308,126 +356,50 @@ export async function recordWatchSignal({ req, content, contentId, event, device
             },
         };
 
-        // Try to match existing viewer with a different session → new session for existing viewer
-        const sessionResult = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: true });
-
-        if (!watcherIsAuthenticated) {
-            console.log(`🔍 [ViewCount] sessionResult=${sessionResult ? `found(viewCount=${sessionResult.viewCount})` : 'null'}`);
+        let result = null;
+        try {
+            // Attempt 1: atomic upsert — works for both new viewers and returning viewers
+            result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: true, new: true });
+        } catch (err) {
+            if (err?.code === 11000) {
+                // E11000 = ContentView was just created by a concurrent below-threshold upsert.
+                // The document now exists. Retry WITHOUT upsert to atomically update it.
+                try {
+                    result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: true });
+                    if (!watcherIsAuthenticated) {
+                        console.log(`🔁 [ViewCount] E11000 retry ${result ? 'SUCCESS' : 'null (session already counted)'}`);
+                    }
+                } catch (retryErr) {
+                    console.error(`❌ [ViewCount] E11000 retry failed:`, retryErr.message);
+                }
+            } else {
+                throw err;
+            }
         }
 
-        if (sessionResult) {
-            // Existing viewer, new session → increment views
-            // If viewCount === 1, this is their very first counted view (previously only below-threshold)
-            const isFirstEverView = sessionResult.viewCount === 1;
-            
+        if (result) {
+            const isFirstEverView = result.viewCount === 1;
             const contentInc = watcherIsAuthenticated
                 ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
                 : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
-                
+
             await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
             viewCounted = true;
+
             if (!watcherIsAuthenticated) {
-                console.log(`✅ [ViewCount] anonymous view COUNTED (existing viewer, new session) | contentInc=${JSON.stringify(contentInc)}`);
+                console.log(`✅ [ViewCount] anonymous view COUNTED | viewCount=${result.viewCount} | contentInc=${JSON.stringify(contentInc)}`);
             }
         } else {
-            // Either new viewer entirely, or same session already counted.
-            // Wrap in try/catch to handle E11000 from concurrent inserts for the same new viewer.
-            try {
-                const existingViewer = await ContentView.findOne(viewerQuery).lean();
-
-                if (!watcherIsAuthenticated) {
-                    console.log(`🔍 [ViewCount] existingViewer=${existingViewer ? `found(viewCount=${existingViewer.viewCount}, lastCountedWatchSessionId=${existingViewer.lastCountedWatchSessionId})` : 'null(brand new viewer)'}`);
-                }
-
-                if (!existingViewer) {
-                    // Brand new viewer
-                    const newViewerUpdate = {
-                        $set: {
-                            viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
-                            sessionId: event.sessionId || watchSessionId || eventId,
-                            watchSessionId,
-                            lastPlayheadSeconds: playheadSeconds,
-                            bestPlayheadSeconds: playheadSeconds || 0,
-                            lastWatchEventAt: now,
-                            lastCountedAt: now,
-                            lastCountedWatchSessionId: watchSessionId,
-                            ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
-                        },
-                        $inc: { viewCount: 1 },
-                        $setOnInsert: {
-                            firstViewedAt: now,
-                            weekBucket: dateBucket?.slice(0, 7) || undefined,
-                            monthBucket,
-                            ipAddress: watcherIsAuthenticated ? undefined : (req?.ip || req?.headers?.['x-forwarded-for'] || ''),
-                        },
-                    };
-                    await ContentView.updateOne(viewerQuery, newViewerUpdate, { upsert: true });
-
-                    const contentInc = watcherIsAuthenticated
-                        ? { views: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
-                        : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
-                    await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
-                    viewCounted = true;
-                    if (!watcherIsAuthenticated) {
-                        console.log(`✅ [ViewCount] anonymous view COUNTED (brand new viewer) | contentInc=${JSON.stringify(contentInc)}`);
-                    }
-                } else {
-                    if (!watcherIsAuthenticated) {
-                        console.log(`⏭️ [ViewCount] anonymous view SKIPPED (same session already counted) | lastCountedWatchSessionId=${existingViewer.lastCountedWatchSessionId} === watchSessionId=${watchSessionId}`);
-                    }
-                }
-                // else: same session already counted → no-op (deduplication working correctly)
-            } catch (err) {
-                if (err?.code === 11000) {
-                    // E11000 = ContentView was just created by a concurrent request
-                    // (typically a below-threshold upsert that does NOT count views).
-                    // We must still count the view — atomically claim it via session filter.
-                    try {
-                        const raceRecovery = await ContentView.findOneAndUpdate(
-                            { ...viewerQuery, lastCountedWatchSessionId: { $ne: watchSessionId } },
-                            {
-                                $set: {
-                                    lastCountedWatchSessionId: watchSessionId,
-                                    lastCountedAt: now,
-                                    lastWatchEventAt: now,
-                                    lastPlayheadSeconds: playheadSeconds,
-                                    viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
-                                },
-                                $inc: { viewCount: 1 },
-                                $max: { bestPlayheadSeconds: playheadSeconds || 0 },
-                            },
-                            { new: true }
-                        );
-                        if (raceRecovery) {
-                            const isFirstEverView = raceRecovery.viewCount === 1;
-                            const contentInc = watcherIsAuthenticated
-                                ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
-                                : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
-                            await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
-                            viewCounted = true;
-                            if (!watcherIsAuthenticated) {
-                                console.log(`✅ [ViewCount] anonymous view COUNTED (E11000 race recovery) | contentInc=${JSON.stringify(contentInc)}`);
-                            }
-                        } else {
-                            if (!watcherIsAuthenticated) {
-                                console.log(`⏭️ [ViewCount] E11000 race recovery — session already counted, no duplicate`);
-                            }
-                        }
-                    } catch (retryErr) {
-                        console.error(`❌ [ViewCount] E11000 race recovery failed:`, retryErr.message);
-                    }
-                } else {
-                    throw err;
-                }
+            // sessionFilter didn't match → same watchSessionId already counted → correct dedup
+            if (!watcherIsAuthenticated) {
+                console.log(`⏭️ [ViewCount] anonymous view SKIPPED (session already counted)`);
             }
         }
     } else {
         // Below threshold — just update playhead position for resume, no view count
         try {
             await ContentView.updateOne(
-                watcherIsAuthenticated
-                    ? { contentId: contentRecord._id, userId }
-                    : { contentId: contentRecord._id, anonymousViewerId },
+                viewerQuery,
                 {
                     $set: {
                         viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
@@ -435,7 +407,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                         watchSessionId,
                         lastPlayheadSeconds: playheadSeconds,
                         lastWatchEventAt: now,
-                        ...(watcherIsAuthenticated ? { userId } : { anonymousViewerId, visitorFingerprint: anonymousViewerId }),
+                        ...identityFields,
                     },
                     $max: { bestPlayheadSeconds: playheadSeconds || 0 },
                     $setOnInsert: {
@@ -449,7 +421,6 @@ export async function recordWatchSignal({ req, content, contentId, event, device
             );
         } catch (err) {
             if (err?.code !== 11000) throw err;
-            // E11000 = viewer record created by concurrent request, safe to ignore
         }
     }
 
@@ -556,12 +527,12 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     let authViews = updatedContent?.authenticatedViews || 0;
     let anonViews = updatedContent?.anonymousViews || 0;
 
-    // Auto-heal unique viewer & view breakdown metrics only when there are existing
-    // views (i.e. not a fresh content with 0 counters) AND one of the breakdown
-    // counters looks out-of-sync. This avoids two extra countDocuments() calls on
-    // every heartbeat for newly uploaded content.
+    // Auto-heal unique viewer & view breakdown metrics only when a view was
+    // actually counted in this request. This avoids two extra countDocuments()
+    // queries on every heartbeat (which was causing DB performance issues for
+    // content with only anonymous viewers where authUniques === 0 always).
     const totalViews = updatedContent?.views || 0;
-    const needsHeal = totalViews > 0 && (authUniques === 0 || anonUniques === 0 || (authViews === 0 && anonViews === 0));
+    const needsHeal = viewCounted && totalViews > 0 && (authUniques === 0 || anonUniques === 0 || (authViews === 0 && anonViews === 0));
     if (needsHeal) {
         const [actualAuthUniques, actualAnonUniques] = await Promise.all([
             ContentView.countDocuments({ contentId: contentRecord._id, viewerType: 'authenticated' }),
