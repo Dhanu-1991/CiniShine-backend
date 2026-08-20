@@ -179,8 +179,8 @@ const templates = {
                         <p style="margin-top: 0; font-size: 15px; color: #f8fafc;">Hi <strong>${creatorName}</strong>,</p>
                         <div style="line-height: 1.65; color: #e2e8f0; font-size: 14px;">${htmlFormattedBody}</div>
                         <div style="margin-top: 32px; padding-top: 20px; border-t: 1px solid #334155; font-size: 12px; color: #94a3b8;">
-                            <p style="margin: 0;">This is an official operational notice from Team ${PLATFORM_NAME}.</p>
-                            <p style="margin: 4px 0 0; color: #64748b;">If you need assistance, please contact <a href="mailto:admin@watchinit.com" style="color: #818cf8; text-decoration: underline;">admin@watchinit.com</a>.</p>
+                            <p style="margin: 0;">This is an official operational notice from Team ${PLATFORM_NAME}. Please do not reply to this email.</p>
+                            <p style="margin: 4px 0 0; color: #64748b;">If you need assistance, please write to us at <a href="mailto:admin@watchinit.com" style="color: #818cf8; text-decoration: underline;">admin@watchinit.com</a>.</p>
                         </div>
                     </div>
                 </div>`,
