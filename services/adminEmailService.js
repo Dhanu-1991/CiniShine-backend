@@ -180,11 +180,11 @@ const templates = {
                         <div style="line-height: 1.65; color: #e2e8f0; font-size: 14px;">${htmlFormattedBody}</div>
                         <div style="margin-top: 32px; padding-top: 20px; border-t: 1px solid #334155; font-size: 12px; color: #94a3b8;">
                             <p style="margin: 0;">This is an official operational notice from Team ${PLATFORM_NAME}.</p>
-                            <p style="margin: 4px 0 0; color: #64748b;">If you need assistance, please reply or contact <a href="mailto:support@watchinit.com" style="color: #818cf8; text-decoration: underline;">support@watchinit.com</a>.</p>
+                            <p style="margin: 4px 0 0; color: #64748b;">If you need assistance, please contact <a href="mailto:admin@watchinit.com" style="color: #818cf8; text-decoration: underline;">admin@watchinit.com</a>.</p>
                         </div>
                     </div>
                 </div>`,
-            text: `Hi ${creatorName},\n\n${cleanBody}\n\n---\nTeam ${PLATFORM_NAME}\nContact: support@watchinit.com`
+            text: `Hi ${creatorName},\n\n${cleanBody}\n\n---\nTeam ${PLATFORM_NAME}\nContact: admin@watchinit.com`
         };
     },
 
@@ -231,7 +231,7 @@ const templates = {
                         <p style="margin: 4px 0 0; color: #e0e0e0;">${reason}</p>
                     </div>
                     <p>Your partial payout amount will be credited to your bank account within 24 hours.</p>
-                    <p style="color: #9ca3af; font-size: 13px;">If you have any queries regarding this partial payout, please contact us at <a href="mailto:support@watchinit.com" style="color: #818cf8;">support@watchinit.com</a>.</p>
+                    <p style="color: #9ca3af; font-size: 13px;">If you have any queries regarding this partial payout, please contact us at <a href="mailto:admin@watchinit.com" style="color: #818cf8;">admin@watchinit.com</a>.</p>
                     <p style="color: #888; font-size: 12px; margin-top: 24px;">This is an automated message from Team ${PLATFORM_NAME}.</p>
                 </div>
             </div>`,
