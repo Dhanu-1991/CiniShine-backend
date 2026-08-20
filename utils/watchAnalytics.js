@@ -268,6 +268,11 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const threshold = getWatchThreshold(contentRecord.contentType, contentDuration);
     const shouldCountView = activePlayTime >= threshold || completed || eventType === 'ended';
 
+    // ── DIAGNOSTIC: trace anonymous view counting ──
+    if (!watcherIsAuthenticated) {
+        console.log(`🔍 [ViewCount] anonymous | contentId=${contentRecord._id} | contentType=${contentRecord.contentType} | activePlayTime=${activePlayTime} | threshold=${threshold} | shouldCountView=${shouldCountView} | anonymousViewerId=${anonymousViewerId} | watchSessionId=${watchSessionId} | eventType=${eventType}`);
+    }
+
     let viewCounted = false;
     if (shouldCountView) {
         const viewerQuery = watcherIsAuthenticated
@@ -306,6 +311,10 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         // Try to match existing viewer with a different session → new session for existing viewer
         const sessionResult = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: true });
 
+        if (!watcherIsAuthenticated) {
+            console.log(`🔍 [ViewCount] sessionResult=${sessionResult ? `found(viewCount=${sessionResult.viewCount})` : 'null'}`);
+        }
+
         if (sessionResult) {
             // Existing viewer, new session → increment views
             // If viewCount === 1, this is their very first counted view (previously only below-threshold)
@@ -317,11 +326,18 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 
             await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
             viewCounted = true;
+            if (!watcherIsAuthenticated) {
+                console.log(`✅ [ViewCount] anonymous view COUNTED (existing viewer, new session) | contentInc=${JSON.stringify(contentInc)}`);
+            }
         } else {
             // Either new viewer entirely, or same session already counted.
             // Wrap in try/catch to handle E11000 from concurrent inserts for the same new viewer.
             try {
                 const existingViewer = await ContentView.findOne(viewerQuery).lean();
+
+                if (!watcherIsAuthenticated) {
+                    console.log(`🔍 [ViewCount] existingViewer=${existingViewer ? `found(viewCount=${existingViewer.viewCount}, lastCountedWatchSessionId=${existingViewer.lastCountedWatchSessionId})` : 'null(brand new viewer)'}`);
+                }
 
                 if (!existingViewer) {
                     // Brand new viewer
@@ -352,12 +368,22 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                         : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
                     await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
                     viewCounted = true;
+                    if (!watcherIsAuthenticated) {
+                        console.log(`✅ [ViewCount] anonymous view COUNTED (brand new viewer) | contentInc=${JSON.stringify(contentInc)}`);
+                    }
+                } else {
+                    if (!watcherIsAuthenticated) {
+                        console.log(`⏭️ [ViewCount] anonymous view SKIPPED (same session already counted) | lastCountedWatchSessionId=${existingViewer.lastCountedWatchSessionId} === watchSessionId=${watchSessionId}`);
+                    }
                 }
                 // else: same session already counted → no-op (deduplication working correctly)
             } catch (err) {
                 if (err?.code === 11000) {
                     // Concurrent insert race for the same new viewer — the other request
                     // handled the view count. Safe to ignore.
+                    if (!watcherIsAuthenticated) {
+                        console.log(`⚠️ [ViewCount] E11000 race for anonymous viewer — safe to ignore`);
+                    }
                 } else {
                     throw err;
                 }
