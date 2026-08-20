@@ -143,7 +143,12 @@ export const editChatMessage = async (req, res) => {
         if (msg.senderId.toString() !== userId) return res.status(403).json({ error: 'Can only edit your own messages' });
         if (msg.deletedForEveryone) return res.status(400).json({ error: 'Cannot edit deleted message' });
 
-        msg.text = text.trim();
+        const trimmedText = text.trim();
+        if (msg.text === trimmedText) {
+            return res.json({ message: msg });
+        }
+
+        msg.text = trimmedText;
         msg.editedAt = new Date();
         await msg.save();
 

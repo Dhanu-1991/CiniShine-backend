@@ -330,8 +330,21 @@ export const editComment = async (req, res) => {
             return res.status(403).json({ message: "You can only edit your own comments" });
         }
 
+        const trimmedText = text.trim();
+        if (comment.text === trimmedText) {
+            return res.json({
+                message: "No changes made",
+                comment: {
+                    _id: comment._id,
+                    text: comment.text,
+                    isEdited: comment.isEdited,
+                    editedAt: comment.editedAt
+                }
+            });
+        }
+
         // Update comment
-        comment.text = text.trim();
+        comment.text = trimmedText;
         comment.isEdited = true;
         comment.editedAt = new Date();
         await comment.save();

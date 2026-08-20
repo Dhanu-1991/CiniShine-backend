@@ -609,7 +609,15 @@ export const editMessage = async (req, res) => {
             return res.status(404).json({ message: 'Message not found or not yours' });
         }
 
-        message.text = text.trim();
+        const trimmedText = text.trim();
+        if (message.text === trimmedText) {
+            return res.json({
+                message: 'No changes made',
+                data: { _id: message._id, text: message.text, editedAt: message.editedAt || null }
+            });
+        }
+
+        message.text = trimmedText;
         message.editedAt = new Date();
         await message.save();
 

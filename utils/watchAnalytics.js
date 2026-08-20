@@ -379,10 +379,42 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 // else: same session already counted → no-op (deduplication working correctly)
             } catch (err) {
                 if (err?.code === 11000) {
-                    // Concurrent insert race for the same new viewer — the other request
-                    // handled the view count. Safe to ignore.
-                    if (!watcherIsAuthenticated) {
-                        console.log(`⚠️ [ViewCount] E11000 race for anonymous viewer — safe to ignore`);
+                    // E11000 = ContentView was just created by a concurrent request
+                    // (typically a below-threshold upsert that does NOT count views).
+                    // We must still count the view — atomically claim it via session filter.
+                    try {
+                        const raceRecovery = await ContentView.findOneAndUpdate(
+                            { ...viewerQuery, lastCountedWatchSessionId: { $ne: watchSessionId } },
+                            {
+                                $set: {
+                                    lastCountedWatchSessionId: watchSessionId,
+                                    lastCountedAt: now,
+                                    lastWatchEventAt: now,
+                                    lastPlayheadSeconds: playheadSeconds,
+                                    viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
+                                },
+                                $inc: { viewCount: 1 },
+                                $max: { bestPlayheadSeconds: playheadSeconds || 0 },
+                            },
+                            { new: true }
+                        );
+                        if (raceRecovery) {
+                            const isFirstEverView = raceRecovery.viewCount === 1;
+                            const contentInc = watcherIsAuthenticated
+                                ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
+                                : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
+                            await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
+                            viewCounted = true;
+                            if (!watcherIsAuthenticated) {
+                                console.log(`✅ [ViewCount] anonymous view COUNTED (E11000 race recovery) | contentInc=${JSON.stringify(contentInc)}`);
+                            }
+                        } else {
+                            if (!watcherIsAuthenticated) {
+                                console.log(`⏭️ [ViewCount] E11000 race recovery — session already counted, no duplicate`);
+                            }
+                        }
+                    } catch (retryErr) {
+                        console.error(`❌ [ViewCount] E11000 race recovery failed:`, retryErr.message);
                     }
                 } else {
                     throw err;
