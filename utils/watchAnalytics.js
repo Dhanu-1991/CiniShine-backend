@@ -318,119 +318,131 @@ export async function recordWatchSignal({ req, content, contentId, event, device
 
     let viewCounted = false;
     if (shouldCountView) {
-        // ── Atomic view counting ──
-        // Simple filter: viewer identity + session dedup. NO $or clause — using
-        // $or with findOneAndUpdate+upsert breaks MongoDB's partial unique index
-        // matching, causing the query to always miss the existing document.
-        const sessionFilter = {
-            ...viewerQuery,
-            lastCountedWatchSessionId: { $ne: watchSessionId },
-        };
+        // ── Robust atomic view counting ──
+        // 1. Check if a ContentView record exists for this viewer on this content
+        const existingView = await ContentView.findOne(viewerQuery).lean();
 
-        const viewerUpdate = {
-            $set: {
-                viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
-                sessionId: event.sessionId || watchSessionId || eventId,
-                watchSessionId,
-                lastPlayheadSeconds: playheadSeconds,
-                lastWatchEventAt: now,
-                lastCountedAt: now,
-                lastCountedWatchSessionId: watchSessionId,
-                ...identityFields,
-            },
-            $max: { bestPlayheadSeconds: playheadSeconds || 0 },
-            $inc: { viewCount: 1 },
-            $setOnInsert: {
-                firstViewedAt: now,
-                weekBucket: dateBucket?.slice(0, 7) || undefined,
-                monthBucket,
-                ipAddress: watcherIsAuthenticated ? undefined : (req?.ip || req?.headers?.['x-forwarded-for'] || ''),
-            },
-        };
-
-        // Use new:false to get the PRE-update document state.
-        // We need the pre-update doc for two things:
-        //   1. The multi-tab cooldown guard (was a view counted very recently by another tab?)
-        //   2. isFirstEverView check (viewCount === 0 before the $inc means this is their 1st view)
-        // For fresh inserts (no pre-existing doc), new:false returns null — we track that
-        // separately with wasNewInsert to avoid conflating "new insert" with "session dedup skip".
-        let result = null;
-        let wasNewInsert = false;
-        try {
-            result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: true, new: false });
-            // If result is null after an upsert, it means the document didn't exist before —
-            // a new doc was just inserted (this is their first-ever view for this content).
-            if (result === null) {
-                wasNewInsert = true;
-            }
-        } catch (err) {
-            if (err?.code === 11000) {
-                // E11000 = ContentView already exists (race with concurrent below-threshold upsert).
-                // Retry as a pure update (no upsert) to get the pre-update doc for cooldown check.
-                try {
-                    result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: false });
-                } catch (retryErr) {
-                    console.error(`❌ [ViewCount] E11000 retry failed:`, retryErr.message);
-                }
-            } else {
-                throw err;
-            }
-        }
-
-        // ── wasNewInsert: first-ever view for this viewer on this content ──
-        // No cooldown check needed — they had no prior ContentView record at all.
-        if (wasNewInsert) {
-            const contentInc = watcherIsAuthenticated
-                ? { views: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
-                : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
-
-            await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
-            viewCounted = true;
-
-            if (!watcherIsAuthenticated) {
-                console.log(`✅ [ViewCount] anonymous view COUNTED (new viewer) | contentInc=${JSON.stringify(contentInc)}`);
-            }
-        } else if (result !== null) {
-            // Existing viewer, new watch session.
-            // result is PRE-update doc (new:false) — check multi-tab cooldown.
-            const VIEW_COOLDOWN_MS = 30_000;
-            const prevCountedAt = result.lastCountedAt;
-            const tooSoon = prevCountedAt && (now.getTime() - new Date(prevCountedAt).getTime()) < VIEW_COOLDOWN_MS;
-
-            if (tooSoon) {
-                // Another tab counted a view very recently — roll back the $inc we just applied.
-                await ContentView.updateOne(viewerQuery, {
-                    $inc: { viewCount: -1 },
-                    $set: {
-                        lastCountedWatchSessionId: result.lastCountedWatchSessionId,
-                        lastCountedAt: result.lastCountedAt,
-                    },
+        if (!existingView) {
+            // First time this viewer is viewing this content EVER -> insert record & count view
+            try {
+                await ContentView.create({
+                    ...viewerQuery,
+                    ...identityFields,
+                    viewerType: watcherIsAuthenticated ? 'authenticated' : 'anonymous',
+                    sessionId: event.sessionId || watchSessionId || eventId,
+                    watchSessionId,
+                    lastPlayheadSeconds: playheadSeconds,
+                    bestPlayheadSeconds: playheadSeconds || 0,
+                    lastWatchEventAt: now,
+                    lastCountedAt: now,
+                    lastCountedWatchSessionId: watchSessionId,
+                    viewCount: 1,
+                    firstViewedAt: now,
+                    weekBucket: dateBucket?.slice(0, 7) || undefined,
+                    monthBucket,
+                    ipAddress: watcherIsAuthenticated ? undefined : (req?.ip || req?.headers?.['x-forwarded-for'] || ''),
                 });
-                if (!watcherIsAuthenticated) {
-                    console.log(`⏭️ [ViewCount] anonymous view ROLLED BACK (multi-tab cooldown, last counted ${Math.round((now.getTime() - new Date(prevCountedAt).getTime()) / 1000)}s ago)`);
-                }
-            } else {
-                // result.viewCount is PRE-update, so === 0 means this is their 1st ever counted view.
-                const isFirstEverView = (result.viewCount || 0) === 0;
+
                 const contentInc = watcherIsAuthenticated
-                    ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
-                    : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
+                    ? { views: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
+                    : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
 
                 await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
                 viewCounted = true;
 
                 if (!watcherIsAuthenticated) {
-                    console.log(`✅ [ViewCount] anonymous view COUNTED | viewCount=${(result.viewCount || 0) + 1} | contentInc=${JSON.stringify(contentInc)}`);
+                    console.log(`✅ [ViewCount] anonymous view COUNTED (new viewer) | contentInc=${JSON.stringify(contentInc)}`);
+                }
+            } catch (err) {
+                if (err?.code === 11000) {
+                    // Concurrent insert collision — fall through to existingView update branch below
+                    console.log(`ℹ️ [ViewCount] Concurrent insert caught via E11000, recovering gracefully`);
+                } else {
+                    throw err;
                 }
             }
-        } else {
-            // sessionFilter didn't match → same watchSessionId already counted → correct dedup
-            if (!watcherIsAuthenticated) {
-                console.log(`⏭️ [ViewCount] anonymous view SKIPPED (session already counted)`);
+        }
+
+        if (!viewCounted) {
+            // Document already exists (or concurrent insert occurred)
+            const currentDoc = await ContentView.findOne(viewerQuery);
+            if (currentDoc) {
+                const isSameSession = currentDoc.lastCountedWatchSessionId === watchSessionId;
+
+                if (isSameSession) {
+                    // Same watchSessionId already counted -> update playhead only (correct dedup)
+                    await ContentView.updateOne(
+                        { _id: currentDoc._id },
+                        {
+                            $set: {
+                                sessionId: event.sessionId || watchSessionId || eventId,
+                                lastPlayheadSeconds: playheadSeconds,
+                                lastWatchEventAt: now,
+                            },
+                            $max: { bestPlayheadSeconds: playheadSeconds || 0 },
+                        }
+                    );
+                    if (!watcherIsAuthenticated) {
+                        console.log(`⏭️ [ViewCount] anonymous view SKIPPED (session ${watchSessionId} already counted)`);
+                    }
+                } else {
+                    // Different session -> check 30s multi-tab / repeat-view cooldown
+                    const VIEW_COOLDOWN_MS = 30_000;
+                    const prevCountedAt = currentDoc.lastCountedAt;
+                    const tooSoon = prevCountedAt && (now.getTime() - new Date(prevCountedAt).getTime()) < VIEW_COOLDOWN_MS;
+
+                    if (tooSoon) {
+                        // Within cooldown -> update playhead without incrementing view count
+                        await ContentView.updateOne(
+                            { _id: currentDoc._id },
+                            {
+                                $set: {
+                                    sessionId: event.sessionId || watchSessionId || eventId,
+                                    lastPlayheadSeconds: playheadSeconds,
+                                    lastWatchEventAt: now,
+                                },
+                                $max: { bestPlayheadSeconds: playheadSeconds || 0 },
+                            }
+                        );
+                        if (!watcherIsAuthenticated) {
+                            console.log(`⏭️ [ViewCount] anonymous view SKIPPED (cooldown active, last counted ${Math.round((now.getTime() - new Date(prevCountedAt).getTime()) / 1000)}s ago)`);
+                        }
+                    } else {
+                        // Cooldown passed -> atomically update ContentView and increment Content.views
+                        const isFirstEverView = (currentDoc.viewCount || 0) === 0;
+
+                        await ContentView.updateOne(
+                            { _id: currentDoc._id, lastCountedWatchSessionId: { $ne: watchSessionId } },
+                            {
+                                $set: {
+                                    sessionId: event.sessionId || watchSessionId || eventId,
+                                    watchSessionId,
+                                    lastPlayheadSeconds: playheadSeconds,
+                                    lastWatchEventAt: now,
+                                    lastCountedAt: now,
+                                    lastCountedWatchSessionId: watchSessionId,
+                                },
+                                $max: { bestPlayheadSeconds: playheadSeconds || 0 },
+                                $inc: { viewCount: 1 },
+                            }
+                        );
+
+                        const contentInc = watcherIsAuthenticated
+                            ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
+                            : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
+
+                        await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
+                        viewCounted = true;
+
+                        if (!watcherIsAuthenticated) {
+                            console.log(`✅ [ViewCount] anonymous view COUNTED | viewCount=${(currentDoc.viewCount || 0) + 1} | contentInc=${JSON.stringify(contentInc)}`);
+                        }
+                    }
+                }
             }
         }
     } else {
-        // Below threshold — just update playhead position for resume, no view count
+        // Below threshold — update playhead position for resume, no view count
         try {
             await ContentView.updateOne(
                 viewerQuery,
@@ -562,11 +574,9 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     let anonViews = updatedContent?.anonymousViews || 0;
 
     // Auto-heal unique viewer & view breakdown metrics only when a view was
-    // actually counted in this request. This avoids two extra countDocuments()
-    // queries on every heartbeat (which was causing DB performance issues for
-    // content with only anonymous viewers where authUniques === 0 always).
+    // actually counted in this request and total views exist but breakdown is unpopulated (legacy content).
     const totalViews = updatedContent?.views || 0;
-    const needsHeal = viewCounted && totalViews > 0 && (authUniques === 0 || anonUniques === 0 || (authViews === 0 && anonViews === 0));
+    const needsHeal = viewCounted && totalViews > 0 && (authViews + anonViews === 0);
     if (needsHeal) {
         const [actualAuthUniques, actualAnonUniques] = await Promise.all([
             ContentView.countDocuments({ contentId: contentRecord._id, viewerType: 'authenticated' }),
