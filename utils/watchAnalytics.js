@@ -127,10 +127,12 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const activePlayTime = Math.min(Math.max(normalizedPlayTime, 0), maxSessionPlayTime);
     const completed = !!event.completed || eventType === 'ended' || (contentDuration > 0 && playheadSeconds >= contentDuration);
 
-    const existingEvent = await ContentWatchtime.findOne({ eventId }).lean();
-    if (existingEvent) {
-        return { success: true, duplicate: true, viewCounted: false };
-    }
+    // NOTE: Deduplication is handled at the session level by the ContentWatchtime
+    // upsert using { watchSessionId, contentId } as the key (line ~169). We do NOT
+    // check eventId here because the same watch session can legitimately arrive via
+    // multiple API paths (analytics batch queue AND direct /watch-time endpoint).
+    // An eventId-based check would cause one path to early-return, skipping the view
+    // counting logic entirely — which was the root cause of anonymous views not being counted.
 
     if (!contentRecord.duration && contentDuration > 0) {
         await Content.updateOne(

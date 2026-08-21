@@ -6,7 +6,8 @@ import Comment from "../../models/comment.model.js";
 import mongoose from 'mongoose';
 import { S3Client, GetObjectCommand, PutObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { updateViews } from "./videoParameters.js";
+// Dead import removed: videoParameters.js was an obsolete direct view incrementer
+// Views are now counted atomically by watchAnalytics.js via ContentView deduplication
 import { recommendationEngine } from "../../algorithms/recommendationAlgorithm.js";
 import { getCfUrl, getCfHlsMasterUrl } from "../../config/cloudfront.js";
 import { createUploadNotifications } from '../notification-controllers/notificationController.js';
@@ -1211,44 +1212,9 @@ export const uploadComplete = async (req, res) => {
     }
 };
 
-export const recordView = async (req, res) => {
-    try {
-        const { id: videoId } = req.params;
-        const userId = req.user?.id;
-        const ipAddress = req.ip || req.connection.remoteAddress;
-        const userAgent = req.get('User-Agent');
+// Dead code removed: recordView was an obsolete direct view incrementer
+// that was never wired to any route. Views are counted by watchAnalytics.js.
 
-        if (!videoId) {
-            return res.status(400).json({ error: "Video ID required" });
-        }
-
-        console.log(`📊 Recording view for video: ${videoId} by user: ${userId}`);
-
-        // Fetch updated video to return new view count
-        const updatedVideo = await updateViews(videoId, userId, ipAddress, userAgent);
-
-        if (!updatedVideo) {
-            return res.status(404).json({ error: "Video not found" });
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: "View recorded successfully",
-            views: updatedVideo.viewCount || 0,
-            video: {
-                _id: updatedVideo._id,
-                title: updatedVideo.title,
-                views: updatedVideo.views || 0
-            }
-        });
-    } catch (error) {
-        console.error("❌ Error recording view:", error);
-        return res.status(500).json({
-            error: "Failed to record view",
-            message: error.message
-        });
-    }
-};
 export const getGeneralContent = async (req, res) => {
     try {
         console.log("🔍 Fetching latest 100 videos");

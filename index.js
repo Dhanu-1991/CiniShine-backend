@@ -30,7 +30,7 @@ import adminRouter from "./routes/adminRoutes/adminRouter.js";
 import analyticsRouter from "./routes/analyticsRoutes/analyticsRouter.js";
 import walletRouter from "./routes/walletRoutes/walletRouter.js";
 import referralRouter from "./routes/referralRoutes.js";
-import { startViewCountFlusher, stopViewCountFlusher } from "./utils/viewCountQueue.js";
+
 
 // ── Global crash handlers — prevent silent 521 ─────────────────────────
 process.on("uncaughtException", (err) => {
@@ -174,7 +174,6 @@ const connectWithRetry = async () => {
       serverSelectionTimeoutMS: 15000,
     });
     console.log("✅ MongoDB connected successfully");
-    startViewCountFlusher();
 
   } catch (err) {
     console.error("❌ DB connection attempt failed, retrying in 3s...", err.message);
@@ -182,10 +181,4 @@ const connectWithRetry = async () => {
   }
 };
 connectWithRetry();
-
-// Graceful shutdown: flush pending view counts
-process.on('SIGTERM', async () => {
-  console.log('🔄 SIGTERM received, flushing view counts...');
-  await stopViewCountFlusher();
-  process.exit(0);
-});
+

@@ -1,31 +1,24 @@
 /**
  * Shared Content Controller
  * Handles: get content, upload thumbnail, feed content, single content
- * Shared functions used by all content types
+ * Shared functions used by all content types (shorts, audio, posts)
  *
  * ═══════════════════════════════════════════════════════════
- * HOW VIEWS ARE COUNTED (for SHORTS, AUDIO, POSTS):
+ * HOW VIEWS & WATCHTIME ARE COUNTED (for ALL content types):
  * ═══════════════════════════════════════════════════════════
- * 1. Frontend sends watch time to POST /api/v2/content/:id/watch-time.
- * 2. Backend applies the same bracket policy used by videos:
- *    - dynamic min watch, max watch (outlier protection), and update gap.
- * 3. totalWatchTime always accumulates for valid updates.
- * 4. A view is counted only when threshold is met AND per-user cooldown passes.
- * 5. Cooldown is per user+content: ~5x duration (with safe fallback for unknown duration).
- * 6. user.viewHistory.lastViewedAt is used as the repeat-view gate.
- * 7. ContentView upsert is analytics-only (unique viewers), not a hard block.
- * 8. Posts support click/open view counting by allowing 1s first-threshold events.
- *
- * ═══════════════════════════════════════════════════════════
- * HOW WATCH HISTORY IS TRACKED:
- * ═══════════════════════════════════════════════════════════
- * - Every watchTime update upserts a WatchHistory record for that user+content.
- * - WatchHistory stores: watchTime, watchPercentage, completedWatch (>=80%),
- *   contentMetadata snapshot (title, tags, category, creatorId, duration),
- *   and up to 20 session records.
- * - The watchHistoryRecommendation.js engine uses this data to build
- *   personalized feeds (preferred tags, categories, creators).
- * ═══════════════════════════════════════════════════════════
+ * 1. Frontend sends cumulative active play time via heartbeats
+ *    to POST /api/v2/content/:id/watch-time (or /api/v2/analytics/batch).
+ * 2. Backend delegates to recordWatchSignal() in watchAnalytics.js which:
+ *    a. Upserts ContentWatchtime by {watchSessionId, contentId} using $max
+ *       for activePlayTime (cumulative — not additive per heartbeat).
+ *    b. Computes delta = (new - previous) activePlayTime and atomically
+ *       increments Content.totalWatchTime by only the delta.
+ *    c. Evaluates view threshold: getWatchThreshold(contentType, duration).
+ *    d. If threshold met → upserts ContentView with session dedup and
+ *       30s multi-tab cooldown → increments Content.views atomically.
+ * 3. Works identically for authenticated (userId) and anonymous
+ *    (anonymousViewerId from client localStorage UUID) users.
+ * 4. WatchHistory is only updated for authenticated users.
  */
 
 import mongoose from 'mongoose';
