@@ -173,7 +173,7 @@ const templates = {
                 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #0f172a; color: #f8fafc; border-radius: 12px; overflow: hidden; border: 1px solid #1e293b;">
                     <span style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; mso-hide:all;">Official WatchInit account operational notice regarding wallets, payouts, and platform policies.</span>
                     <div style="background: #1e1b4b; border-bottom: 1px solid #312e81; padding: 24px 32px;">
-                        <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 700; tracking-tight: -0.02em;">${PLATFORM_NAME} OFFICIAL NOTICE</h1>
+                        <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 700; tracking-tight: -0.02em;">WATCHIN IT Official Notice</h1>
                     </div>
                     <div style="padding: 32px;">
                         <p style="margin-top: 0; font-size: 15px; color: #f8fafc;">Hi <strong>${creatorName}</strong>,</p>

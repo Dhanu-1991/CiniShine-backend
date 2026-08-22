@@ -597,7 +597,8 @@ export const listUsers = async (req, res) => {
             sortOrder = 'desc',
             search,
             channelStatus,
-            inactiveDays
+            inactiveDays,
+            contentTypeFilter
         } = req.query;
 
         const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
@@ -647,9 +648,70 @@ export const listUsers = async (req, res) => {
                 const activeContentUsers = await Content.distinct('userId', { createdAt: { $gte: cutoffDate } });
                 
                 if (filter._id && filter._id.$in) {
-                    filter._id.$nin = activeContentUsers;
+                    const activeSet = new Set(activeContentUsers.map(id => id.toString()));
+                    filter._id.$in = filter._id.$in.filter(id => !activeSet.has(id.toString()));
+                } else if (filter._id && filter._id.$nin) {
+                    filter._id.$nin = [...new Set([...filter._id.$nin, ...activeContentUsers])];
                 } else {
                     filter._id = { $nin: activeContentUsers };
+                }
+            }
+        }
+
+        if (contentTypeFilter && contentTypeFilter !== 'all') {
+            if (contentTypeFilter === 'with_content') {
+                const usersWithContent = await Content.distinct('userId');
+                if (filter._id && filter._id.$in) {
+                    const contentSet = new Set(usersWithContent.map(id => id.toString()));
+                    filter._id.$in = filter._id.$in.filter(id => contentSet.has(id.toString()));
+                } else {
+                    filter._id = { $in: usersWithContent };
+                }
+            } else if (contentTypeFilter === 'without_content') {
+                const usersWithContent = await Content.distinct('userId');
+                if (filter._id && filter._id.$nin) {
+                    filter._id.$nin = [...new Set([...filter._id.$nin, ...usersWithContent])];
+                } else {
+                    filter._id = { $nin: usersWithContent };
+                }
+            } else if (contentTypeFilter === 'no_kyc' || contentTypeFilter === 'with_no_kyc') {
+                const usersWithKyc = await KycDetails.find({
+                    kycStatus: { $in: ['verified', 'approved', 'pending', 'submitted', 'rejected'] }
+                }).distinct('userId');
+                if (filter._id && filter._id.$nin) {
+                    filter._id.$nin = [...new Set([...filter._id.$nin, ...usersWithKyc])];
+                } else {
+                    filter._id = { $nin: usersWithKyc };
+                }
+            } else if (contentTypeFilter === 'kyc_verified') {
+                const verifiedKycs = await KycDetails.find({
+                    kycStatus: { $in: ['verified', 'approved'] }
+                }).distinct('userId');
+                if (filter._id && filter._id.$in) {
+                    const verifiedSet = new Set(verifiedKycs.map(id => id.toString()));
+                    filter._id.$in = filter._id.$in.filter(id => verifiedSet.has(id.toString()));
+                } else {
+                    filter._id = { $in: verifiedKycs };
+                }
+            } else if (contentTypeFilter === 'kyc_rejected') {
+                const rejectedKycs = await KycDetails.find({
+                    kycStatus: 'rejected'
+                }).distinct('userId');
+                if (filter._id && filter._id.$in) {
+                    const rejSet = new Set(rejectedKycs.map(id => id.toString()));
+                    filter._id.$in = filter._id.$in.filter(id => rejSet.has(id.toString()));
+                } else {
+                    filter._id = { $in: rejectedKycs };
+                }
+            } else if (contentTypeFilter === 'kyc_pending') {
+                const pendingKycs = await KycDetails.find({
+                    kycStatus: { $in: ['pending', 'submitted'] }
+                }).distinct('userId');
+                if (filter._id && filter._id.$in) {
+                    const pendSet = new Set(pendingKycs.map(id => id.toString()));
+                    filter._id.$in = filter._id.$in.filter(id => pendSet.has(id.toString()));
+                } else {
+                    filter._id = { $in: pendingKycs };
                 }
             }
         }
@@ -702,7 +764,7 @@ export const listUsers = async (req, res) => {
                     }
                 }
             ]),
-            KycDetails.find({ userId: { $in: userIds } }).select('userId isGstHolder gstNumber').lean(),
+            KycDetails.find({ userId: { $in: userIds } }).select('userId isGstHolder gstNumber kycStatus status').lean(),
             PrimaryWallet.find({ userId: { $in: userIds } }).select('userId balance').lean(),
             SecondaryWallet.find({ userId: { $in: userIds } }).select('userId balance').lean()
         ]);
@@ -773,6 +835,13 @@ export const listUsers = async (req, res) => {
                 wallet2Balance: sWalletMap.get(key) || 0,
                 isGstHolder: kycMap.get(key)?.isGstHolder || false,
                 gstNumber: kycMap.get(key)?.gstNumber || null,
+                kycStatus: kycMap.get(key)?.kycStatus || kycMap.get(key)?.status || 'not_started',
+                isKycVerified: Boolean(
+                    kycMap.get(key)?.kycStatus === 'verified' ||
+                    kycMap.get(key)?.kycStatus === 'approved' ||
+                    kycMap.get(key)?.status === 'verified' ||
+                    kycMap.get(key)?.status === 'approved'
+                ),
             };
         });
 
@@ -1058,6 +1127,26 @@ export const adminSendEmailHandler = async (req, res) => {
                 } else {
                     mongoFilter._id = { $nin: usersWithContent };
                 }
+            } else if (contentTypeFilter === 'no_kyc' || contentTypeFilter === 'with_no_kyc') {
+                const usersWithKyc = await KycDetails.find({
+                    kycStatus: { $in: ['verified', 'approved', 'pending', 'submitted', 'rejected'] }
+                }).distinct('userId');
+                mongoFilter._id = { $nin: usersWithKyc };
+            } else if (contentTypeFilter === 'kyc_verified') {
+                const verifiedKycs = await KycDetails.find({
+                    kycStatus: { $in: ['verified', 'approved'] }
+                }).distinct('userId');
+                mongoFilter._id = { $in: verifiedKycs };
+            } else if (contentTypeFilter === 'kyc_rejected') {
+                const rejectedKycs = await KycDetails.find({
+                    kycStatus: 'rejected'
+                }).distinct('userId');
+                mongoFilter._id = { $in: rejectedKycs };
+            } else if (contentTypeFilter === 'kyc_pending') {
+                const pendingKycs = await KycDetails.find({
+                    kycStatus: { $in: ['pending', 'submitted'] }
+                }).distinct('userId');
+                mongoFilter._id = { $in: pendingKycs };
             }
 
             targetUsers = await User.find(mongoFilter).select('userName contact channelName fullName').lean();
