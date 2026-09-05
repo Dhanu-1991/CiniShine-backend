@@ -128,10 +128,6 @@ const userSchema = new mongoose.Schema({
         trim: true,
         maxlength: 500,
     },
-    achievements: [{
-        type: String,
-        trim: true,
-    }],
     historyPaused: {
         type: Boolean,
         default: false,

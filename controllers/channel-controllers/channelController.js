@@ -158,7 +158,6 @@ export const getChannelPage = async (req, res) => {
                 userName: user.userName,
                 channelDescription: user.channelDescription || '',
                 bio: user.bio || '',
-                achievements: user.achievements || [],
                 roles: user.roles || [],
                 primaryRole: user.primaryRole || (user.roles?.[0] || ''),
                 activeSince: user.activeSince || '',

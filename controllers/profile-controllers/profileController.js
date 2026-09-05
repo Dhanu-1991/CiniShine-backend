@@ -412,7 +412,6 @@ export const updateProfileSettings = async (req, res) => {
             channelName,
             userName,
             bio,
-            achievements,
             channelDescription,
             primaryRole,
             activeSince,
@@ -435,9 +434,6 @@ export const updateProfileSettings = async (req, res) => {
         if (userName !== undefined) update.userName = userName;
         if (bio !== undefined) update.bio = bio;
         if (channelDescription !== undefined) update.channelDescription = channelDescription;
-        if (achievements !== undefined) {
-            update.achievements = Array.isArray(achievements) ? achievements : [achievements];
-        }
         if (primaryRole !== undefined) update.primaryRole = String(primaryRole).trim();
         if (activeSince !== undefined) update.activeSince = String(activeSince).trim();
         if (worksCount !== undefined) update.worksCount = String(worksCount).trim();
@@ -467,7 +463,7 @@ export const updateProfileSettings = async (req, res) => {
         }
 
         const user = await User.findByIdAndUpdate(userId, update, { new: true }).select(
-            'userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture primaryRole activeSince worksCount bestKnownFor workExperience'
+            'userName channelName channelHandle channelDescription bio roles profilePicture channelPicture primaryRole activeSince worksCount bestKnownFor workExperience'
         );
 
         // Consume single-use OTP verification token
@@ -493,7 +489,7 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor workExperience'
+            'contact userName channelName channelHandle channelDescription bio roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor workExperience'
         ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -540,7 +536,6 @@ export const getProfileSettings = async (req, res) => {
                 channelHandle: user.channelHandle || null,
                 channelDescription: user.channelDescription || '',
                 bio: user.bio || '',
-                achievements: user.achievements || [],
                 roles: user.roles || [],
                 primaryRole: user.primaryRole || (user.roles?.[0] || ''),
                 activeSince: user.activeSince || '',
