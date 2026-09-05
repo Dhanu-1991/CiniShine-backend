@@ -170,7 +170,7 @@ export const getChannelPage = async (req, res) => {
                 subscriberCount,
                 isSubscribed,
                 contentCounts: counts,
-                createdAt: user._id.getTimestamp ? user._id.getTimestamp() : null,
+                createdAt: user.createdAt || (user._id?.getTimestamp ? user._id.getTimestamp() : null),
             },
             newestReleases: newestSanitized,
             popularContent: popularSanitized,

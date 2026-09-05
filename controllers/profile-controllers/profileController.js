@@ -499,7 +499,7 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'contact userName channelName channelHandle channelDescription bio roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor workExperience'
+            'contact userName channelName channelHandle channelDescription bio roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor workExperience createdAt'
         ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -560,6 +560,7 @@ export const getProfileSettings = async (req, res) => {
                 contentCounts: counts,
                 subscriberCount,
                 subscriptions,
+                createdAt: user.createdAt || (user._id?.getTimestamp ? user._id.getTimestamp() : null),
             }
         });
     } catch (error) {
