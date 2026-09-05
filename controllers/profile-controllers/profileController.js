@@ -423,15 +423,25 @@ export const updateProfileSettings = async (req, res) => {
 
         const update = {};
         if (channelName !== undefined) {
+            const trimmedChannelName = String(channelName || '').trim();
+            if (!trimmedChannelName) {
+                return res.status(400).json({ error: 'Account Display Name is compulsory' });
+            }
             // Check uniqueness of channelName
             const existing = await User.findOne({
-                channelName: { $regex: new RegExp(`^${channelName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+                channelName: { $regex: new RegExp(`^${trimmedChannelName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
                 _id: { $ne: userId }
             });
             if (existing) return res.status(409).json({ error: 'Channel name already taken' });
-            update.channelName = channelName;
+            update.channelName = trimmedChannelName;
         }
-        if (userName !== undefined) update.userName = userName;
+        if (userName !== undefined) {
+            const trimmedUserName = String(userName || '').trim();
+            if (!trimmedUserName) {
+                return res.status(400).json({ error: 'Profile Name is compulsory' });
+            }
+            update.userName = trimmedUserName;
+        }
         if (bio !== undefined) update.bio = bio;
         if (channelDescription !== undefined) update.channelDescription = channelDescription;
         if (primaryRole !== undefined) update.primaryRole = String(primaryRole).trim();
@@ -537,7 +547,7 @@ export const getProfileSettings = async (req, res) => {
                 channelDescription: user.channelDescription || '',
                 bio: user.bio || '',
                 roles: user.roles || [],
-                primaryRole: user.primaryRole || (user.roles?.[0] || ''),
+                primaryRole: user.primaryRole || '',
                 activeSince: user.activeSince || '',
                 worksCount: user.worksCount || '',
                 bestKnownFor: user.bestKnownFor || '',
