@@ -408,7 +408,20 @@ export const updateProfileSettings = async (req, res) => {
             return res.status(400).json({ error: 'Email OTP verification is required before updating profile settings' });
         }
 
-        const { channelName, userName, bio, achievements, channelDescription } = req.body;
+        const {
+            channelName,
+            userName,
+            bio,
+            achievements,
+            channelDescription,
+            primaryRole,
+            activeSince,
+            worksCount,
+            bestKnownFor,
+            tier,
+            roles,
+            workExperience
+        } = req.body;
 
         const update = {};
         if (channelName !== undefined) {
@@ -426,9 +439,37 @@ export const updateProfileSettings = async (req, res) => {
         if (achievements !== undefined) {
             update.achievements = Array.isArray(achievements) ? achievements : [achievements];
         }
+        if (primaryRole !== undefined) update.primaryRole = String(primaryRole).trim();
+        if (activeSince !== undefined) update.activeSince = String(activeSince).trim();
+        if (worksCount !== undefined) update.worksCount = String(worksCount).trim();
+        if (bestKnownFor !== undefined) update.bestKnownFor = String(bestKnownFor).trim();
+        if (tier !== undefined) update.tier = String(tier).trim() || 'Elite';
+
+        if (roles !== undefined) {
+            update.roles = Array.isArray(roles)
+                ? roles.map(r => String(r).trim()).filter(Boolean)
+                : typeof roles === 'string'
+                    ? roles.split(',').map(r => r.trim()).filter(Boolean)
+                    : [];
+        }
+
+        if (workExperience !== undefined) {
+            if (!Array.isArray(workExperience)) {
+                return res.status(400).json({ error: 'workExperience must be an array' });
+            }
+            if (workExperience.length > 10) {
+                return res.status(400).json({ error: 'You can add up to 10 works only' });
+            }
+            update.workExperience = workExperience
+                .map(item => ({
+                    role: String(item.role || '').trim(),
+                    works: String(item.works || '').trim(),
+                }))
+                .filter(item => item.role || item.works);
+        }
 
         const user = await User.findByIdAndUpdate(userId, update, { new: true }).select(
-            'userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture'
+            'userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture primaryRole activeSince worksCount bestKnownFor tier workExperience'
         );
 
         // Consume single-use OTP verification token
@@ -454,7 +495,7 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount'
+            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor tier workExperience'
         ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -473,6 +514,13 @@ export const getProfileSettings = async (req, res) => {
         ]);
         const counts = { video: 0, short: 0, audio: 0, post: 0 };
         contentCounts.forEach(c => { counts[c._id] = c.count; });
+
+        // Total views aggregation across creator's content
+        const viewsAgg = await Content.aggregate([
+            { $match: { userId: user._id } },
+            { $group: { _id: null, totalViews: { $sum: '$views' } } }
+        ]);
+        const totalViews = viewsAgg[0]?.totalViews || 0;
 
         // Subscriber count from cached field (consistent with channel / account page)
         const subscriberCount = user.subscriberCount || 0;
@@ -496,6 +544,13 @@ export const getProfileSettings = async (req, res) => {
                 bio: user.bio || '',
                 achievements: user.achievements || [],
                 roles: user.roles || [],
+                primaryRole: user.primaryRole || (user.roles?.[0] || ''),
+                activeSince: user.activeSince || '',
+                worksCount: user.worksCount || '',
+                bestKnownFor: user.bestKnownFor || '',
+                tier: user.tier || 'Elite',
+                workExperience: user.workExperience || [],
+                totalViews,
                 channelPicture: channelPictureUrl || user.channelPicture,
                 profilePicture: profilePictureUrl || user.profilePicture,
                 historyPaused: user.historyPaused || false,

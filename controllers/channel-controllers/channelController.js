@@ -135,6 +135,13 @@ export const getChannelPage = async (req, res) => {
             return { ...item, hlsMasterUrl: null, videoUrl: null, audioUrl: null, ppvRequired: true };
         });
 
+        // Total views aggregation across creator's content
+        const viewsAgg = await Content.aggregate([
+            { $match: { userId: user._id } },
+            { $group: { _id: null, totalViews: { $sum: '$views' } } }
+        ]);
+        const totalViews = viewsAgg[0]?.totalViews || 0;
+
         // Channel picture URL
         const channelPictureUrl = user.channelPicture
             ? getCfUrl(user.channelPicture)
@@ -153,6 +160,13 @@ export const getChannelPage = async (req, res) => {
                 bio: user.bio || '',
                 achievements: user.achievements || [],
                 roles: user.roles || [],
+                primaryRole: user.primaryRole || (user.roles?.[0] || ''),
+                activeSince: user.activeSince || '',
+                worksCount: user.worksCount || '',
+                bestKnownFor: user.bestKnownFor || '',
+                tier: user.tier || 'Elite',
+                workExperience: user.workExperience || [],
+                totalViews,
                 channelPicture: channelPictureUrl || user.channelPicture,
                 profilePicture: profilePictureUrl || user.profilePicture,
                 subscriberCount,

@@ -70,9 +70,45 @@ const userSchema = new mongoose.Schema({
 
     roles: {
         type: [String],
-        enum: ["Actor", "Writer", "Director", "Singer", "Producer", "Cinematographer", "Editor"],
         required: false,
-
+    },
+    primaryRole: {
+        type: String,
+        trim: true,
+        default: '',
+    },
+    activeSince: {
+        type: String,
+        trim: true,
+        default: '',
+    },
+    worksCount: {
+        type: String,
+        trim: true,
+        default: '',
+    },
+    bestKnownFor: {
+        type: String,
+        trim: true,
+        default: '',
+    },
+    tier: {
+        type: String,
+        trim: true,
+        default: 'Elite',
+    },
+    workExperience: {
+        type: [{
+            role: { type: String, trim: true },
+            works: { type: String, trim: true },
+        }],
+        validate: [
+            function (val) {
+                return !val || val.length <= 10;
+            },
+            'Work experience cannot exceed 10 entries',
+        ],
+        default: [],
     },
     channelName: {
         type: String,
