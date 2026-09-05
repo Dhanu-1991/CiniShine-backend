@@ -164,7 +164,6 @@ export const getChannelPage = async (req, res) => {
                 activeSince: user.activeSince || '',
                 worksCount: user.worksCount || '',
                 bestKnownFor: user.bestKnownFor || '',
-                tier: user.tier || 'Elite',
                 workExperience: user.workExperience || [],
                 totalViews,
                 channelPicture: channelPictureUrl || user.channelPicture,

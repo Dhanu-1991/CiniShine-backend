@@ -418,7 +418,6 @@ export const updateProfileSettings = async (req, res) => {
             activeSince,
             worksCount,
             bestKnownFor,
-            tier,
             roles,
             workExperience
         } = req.body;
@@ -443,7 +442,6 @@ export const updateProfileSettings = async (req, res) => {
         if (activeSince !== undefined) update.activeSince = String(activeSince).trim();
         if (worksCount !== undefined) update.worksCount = String(worksCount).trim();
         if (bestKnownFor !== undefined) update.bestKnownFor = String(bestKnownFor).trim();
-        if (tier !== undefined) update.tier = String(tier).trim() || 'Elite';
 
         if (roles !== undefined) {
             update.roles = Array.isArray(roles)
@@ -469,7 +467,7 @@ export const updateProfileSettings = async (req, res) => {
         }
 
         const user = await User.findByIdAndUpdate(userId, update, { new: true }).select(
-            'userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture primaryRole activeSince worksCount bestKnownFor tier workExperience'
+            'userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture primaryRole activeSince worksCount bestKnownFor workExperience'
         );
 
         // Consume single-use OTP verification token
@@ -495,7 +493,7 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor tier workExperience'
+            'contact userName channelName channelHandle channelDescription bio achievements roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor workExperience'
         ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -548,7 +546,6 @@ export const getProfileSettings = async (req, res) => {
                 activeSince: user.activeSince || '',
                 worksCount: user.worksCount || '',
                 bestKnownFor: user.bestKnownFor || '',
-                tier: user.tier || 'Elite',
                 workExperience: user.workExperience || [],
                 totalViews,
                 channelPicture: channelPictureUrl || user.channelPicture,

@@ -92,11 +92,6 @@ const userSchema = new mongoose.Schema({
         trim: true,
         default: '',
     },
-    tier: {
-        type: String,
-        trim: true,
-        default: 'Elite',
-    },
     workExperience: {
         type: [{
             role: { type: String, trim: true },
