@@ -34,6 +34,7 @@ import { multipartInit, multipartComplete, multipartAbort } from '../../controll
 import { shareContent } from '../../controllers/content-controllers/interactions.js';
 import { universalTokenVerifier, optionalTokenVerifier } from '../../controllers/auth-controllers/universalTokenVerifier.js';
 import payPerViewAccess from '../../middlewares/payPerViewAccess.js';
+import { getPlatformSettings } from '../../controllers/admin-controllers/platformSettingsController.js';
 
 const router = express.Router();
 
@@ -51,6 +52,11 @@ const upload = multer({
         }
     }
 });
+
+// ============================================
+// PLATFORM SETTINGS (read-only for creators / clients)
+// ============================================
+router.get('/platform-settings', getPlatformSettings);
 
 // ============================================
 // MULTIPART UPLOAD ROUTES (fast parallel chunked uploads)

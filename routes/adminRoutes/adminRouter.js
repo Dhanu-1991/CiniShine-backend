@@ -50,6 +50,9 @@ import {
     sendReferralSettingsOtp, verifyReferralSettingsOtp
 } from '../../controllers/admin-controllers/referralController.js';
 import {
+    getPlatformSettings, updatePlatformSettings
+} from '../../controllers/admin-controllers/platformSettingsController.js';
+import {
     adminTokenVerifier, requireSuperAdmin, auditLog, adminRateLimiter
 } from '../../middlewares/admin.middleware.js';
 import { listTemplates, getTemplate, createTemplate, updateTemplate, deleteTemplate, seedDefaultTemplates } from '../../controllers/admin-controllers/adminEmailTemplateController.js';
@@ -195,6 +198,10 @@ adminRouter.get('/referrals/:id', getReferralDetail);
 adminRouter.post('/referrals/:id/approve', auditLog('referral_approved', 'referral'), handleApproveReferral);
 adminRouter.post('/referrals/:id/partial-approve', auditLog('referral_partial_approved', 'referral'), handlePartialApproveReferral);
 adminRouter.post('/referrals/:id/reject', auditLog('referral_rejected', 'referral'), handleRejectReferral);
+
+// ─── Platform settings ───────────────────────────────────────────────────────
+adminRouter.get('/platform/settings', getPlatformSettings);
+adminRouter.patch('/platform/settings', auditLog('platform_settings_updated', 'platform'), updatePlatformSettings);
 
 // ─── SuperAdmin-only routes ──────────────────────────────────────────────────
 adminRouter.post('/approve-signup', requireSuperAdmin, auditLog('signup_approved', 'admin'), approveSignup);
