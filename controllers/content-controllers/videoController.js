@@ -1192,7 +1192,7 @@ export const uploadComplete = async (req, res) => {
         if (content) {
             createUploadNotifications(
                 content.userId, content._id, 'video',
-                content.title, content.thumbnailKey
+                content.title, content.thumbnailKey, content.visibility
             ).catch(err => console.error('Notification error:', err));
 
             // Auto-bookmark creator's own public content

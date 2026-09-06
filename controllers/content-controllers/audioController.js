@@ -119,7 +119,8 @@ export const audioUploadComplete = async (req, res) => {
         // Notify subscribers about the new audio
         createUploadNotifications(
             content.userId, fileId, 'audio',
-            updateData.title || content.title, content.thumbnailKey || content.imageKey
+            updateData.title || content.title, content.thumbnailKey || content.imageKey,
+            updateData.visibility || content.visibility
         ).catch(err => console.error('Notification error:', err));
 
         // Auto-bookmark creator's own public audio

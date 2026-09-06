@@ -320,7 +320,8 @@ export const multipartComplete = async (req, res) => {
                 content._id,
                 contentType || "video",
                 content.title,
-                content.thumbnailKey
+                content.thumbnailKey,
+                content.visibility
             ).catch((err) => console.error("Notification error:", err));
         }
         // Link content to communities if requested

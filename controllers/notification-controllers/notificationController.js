@@ -15,6 +15,7 @@
 import mongoose from 'mongoose';
 import Notification from '../../models/notification.model.js';
 import User from '../../models/user.model.js';
+import Content from '../../models/content.model.js';
 import { getCfUrl } from '../../config/cloudfront.js';
 
 const MAX_NOTIFICATIONS_PER_USER = 10;
@@ -28,9 +29,20 @@ const MAX_NOTIFICATIONS_PER_USER = 10;
  * @param {string} contentType - video/short/audio/post
  * @param {string} title - Content title
  * @param {string} thumbnailKey - S3 key for thumbnail (optional)
+ * @param {string} visibility - Content visibility (optional)
  */
-export const createUploadNotifications = async (creatorId, contentId, contentType, title, thumbnailKey) => {
+export const createUploadNotifications = async (creatorId, contentId, contentType, title, thumbnailKey, visibility) => {
     try {
+        // Do not notify subscribers for private or unlisted content
+        let contentVis = visibility;
+        if (!contentVis && contentId) {
+            const contentDoc = await Content.findById(contentId).select('visibility').lean();
+            contentVis = contentDoc?.visibility;
+        }
+        if (contentVis === 'private' || contentVis === 'unlisted') {
+            return;
+        }
+
         // Find creator info
         const creator = await User.findById(creatorId).select('channelName channelPicture').lean();
         if (!creator) return;
@@ -80,7 +92,7 @@ export const createUploadNotifications = async (creatorId, contentId, contentTyp
 
 /**
  * Get user notifications (max 10, newest first)
- * Only returns notifications for content that has completed processing.
+ * Only returns notifications for completed content that is NOT private or unlisted.
  * GET /api/v2/notifications
  */
 export const getNotifications = async (req, res) => {
@@ -90,7 +102,7 @@ export const getNotifications = async (req, res) => {
         const notifications = await Notification.aggregate([
             { $match: { userId: new mongoose.Types.ObjectId(userId) } },
             { $sort: { createdAt: -1 } },
-            { $limit: MAX_NOTIFICATIONS_PER_USER * 2 }, // fetch more to account for filtered-out processing items
+            { $limit: MAX_NOTIFICATIONS_PER_USER * 3 }, // fetch more to account for filtered-out items
             {
                 $lookup: {
                     from: 'contents',
@@ -101,10 +113,8 @@ export const getNotifications = async (req, res) => {
             },
             {
                 $match: {
-                    $or: [
-                        { 'content.status': 'completed' },
-                        { 'content': { $size: 0 } } // keep if content was deleted (graceful)
-                    ]
+                    'content.status': 'completed',
+                    'content.visibility': { $nin: ['private', 'unlisted'] }
                 }
             },
             { $limit: MAX_NOTIFICATIONS_PER_USER },
@@ -161,10 +171,8 @@ export const getUnreadNotificationCount = async (req, res) => {
             },
             {
                 $match: {
-                    $or: [
-                        { 'content.status': 'completed' },
-                        { 'content': { $size: 0 } }
-                    ]
+                    'content.status': 'completed',
+                    'content.visibility': { $nin: ['private', 'unlisted'] }
                 }
             },
             { $count: 'total' }

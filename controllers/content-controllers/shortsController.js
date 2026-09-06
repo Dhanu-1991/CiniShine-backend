@@ -98,7 +98,8 @@ export const shortUploadComplete = async (req, res) => {
         // Notify subscribers about the new short
         createUploadNotifications(
             content.userId, fileId, 'short',
-            updateData.title || content.title, content.thumbnailKey
+            updateData.title || content.title, content.thumbnailKey,
+            updateData.visibility || content.visibility
         ).catch(err => console.error('Notification error:', err));
 
         console.log(`✅ Short upload completed: ${fileId}`);

@@ -109,7 +109,7 @@ export const createPost = async (req, res) => {
         // Notify subscribers about the new post
         createUploadNotifications(
             userId, post._id, 'post',
-            post.title, post.imageKey
+            post.title, post.imageKey, post.visibility
         ).catch(err => console.error('Notification error:', err));
 
         console.log(`✅ Post created: ${fileId} by user ${userId}`);
