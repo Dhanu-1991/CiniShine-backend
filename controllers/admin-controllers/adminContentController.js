@@ -586,7 +586,7 @@ export const searchCreators = async (req, res) => {
 
         const [users, total] = await Promise.all([
             User.find(filter)
-                .select('userName contact channelName channelHandle profilePicture fullName createdAt')
+                .select('userName contact channelName channelHandle profilePicture channelPicture fullName createdAt')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit)),
@@ -597,7 +597,8 @@ export const searchCreators = async (req, res) => {
             success: true,
             creators: users.map(u => {
                 const obj = u.toObject ? u.toObject() : u;
-                obj.profilePicture = getCfUrl(obj.profilePicture || obj.channelPicture);
+                obj.profilePicture = obj.profilePicture ? getCfUrl(obj.profilePicture) : null;
+                obj.channelPicture = obj.channelPicture ? getCfUrl(obj.channelPicture) : null;
                 return obj;
             }),
             pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) }
@@ -636,10 +637,10 @@ export const getCreatorProfile = async (req, res) => {
             KycDetails.findOne({ userId: id }).lean(),
         ]);
 
-        // Transform profile picture through CloudFront
+        // Transform profile picture and channel picture through CloudFront
         const creatorObj = creator.toObject ? creator.toObject() : { ...creator._doc || creator };
-        creatorObj.profilePicture = getCfUrl(creatorObj.profilePicture || creatorObj.channelPicture);
-        creatorObj.channelPicture = getCfUrl(creatorObj.channelPicture || creatorObj.profilePicture);
+        creatorObj.profilePicture = creatorObj.profilePicture ? getCfUrl(creatorObj.profilePicture) : null;
+        creatorObj.channelPicture = creatorObj.channelPicture ? getCfUrl(creatorObj.channelPicture) : null;
 
         const isKycVerified = Boolean(
             creator.isKycVerified ||
