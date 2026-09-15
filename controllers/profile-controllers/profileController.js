@@ -915,7 +915,7 @@ export const getContentAnalytics = async (req, res) => {
                 avgWatchPercentage: parseFloat(avgWatchPercent.toFixed(1)),
                 totalWatchSessions,
                 engagementRate,
-                uniqueViewers: splitUniqueViewers || uniqueViewers,
+                uniqueViewers: splitUniqueViewers || content.uniqueViewers || 0,
                 signedInUniqueViewers,
                 anonymousUniqueViewers,
             },
