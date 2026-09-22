@@ -52,19 +52,30 @@ export const getMyContent = async (req, res) => {
             }
         }
 
-        const { type, sort = 'latest', page = 1, limit = 12, search } = req.query;
+        const { type, visibility, vis, sort = 'latest', page = 1, limit = 12, search } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const query = { userId: targetUserId };
-        if (type === 'ppv') {
+
+        // Content type filter (strictly content types: video, short, audio, post)
+        if (type && ['video', 'short', 'audio', 'post'].includes(type)) {
+            query.contentType = type;
+        }
+
+        // Visibility / Rentals filter
+        const activeVis = visibility || vis || (type === 'ppv' || type === 'rental' || type === 'rentals' ? 'rental' : null);
+        if (activeVis === 'rental' || activeVis === 'rentals' || activeVis === 'pay_per_view' || activeVis === 'ppv') {
             query.$or = [
                 { isPayPerView: true },
                 { visibility: 'pay_per_view' },
                 { ppvPrice: { $gt: 0 } },
                 { rentalPrice: { $gt: 0 } }
             ];
-        } else if (type && ['video', 'short', 'audio', 'post'].includes(type)) {
-            query.contentType = type;
+        } else if (activeVis === 'removed') {
+            query.status = 'removed';
+        } else if (activeVis && ['public', 'unlisted', 'private'].includes(activeVis)) {
+            query.visibility = activeVis;
+            query.status = { $ne: 'removed' };
         }
 
         if (search) {
@@ -76,7 +87,7 @@ export const getMyContent = async (req, res) => {
             sortBy = { displayViews: -1, views: -1, likeCount: -1 };
         } else if (sort === 'oldest') {
             sortBy = { createdAt: 1 };
-        } else if (sort === 'ppv') {
+        } else if (sort === 'ppv' || sort === 'rental' || sort === 'rentals') {
             query.$or = [
                 { isPayPerView: true },
                 { visibility: 'pay_per_view' },
