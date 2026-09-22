@@ -3,19 +3,19 @@
  * Handles: get content, upload thumbnail, feed content, single content
  * Shared functions used by all content types (shorts, audio, posts)
  *
- * ═══════════════════════════════════════════════════════════
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * HOW VIEWS & WATCHTIME ARE COUNTED (for ALL content types):
- * ═══════════════════════════════════════════════════════════
+ * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
  * 1. Frontend sends cumulative active play time via heartbeats
  *    to POST /api/v2/content/:id/watch-time (or /api/v2/analytics/batch).
  * 2. Backend delegates to recordWatchSignal() in watchAnalytics.js which:
  *    a. Upserts ContentWatchtime by {watchSessionId, contentId} using $max
- *       for activePlayTime (cumulative — not additive per heartbeat).
+ *       for activePlayTime (cumulative â€” not additive per heartbeat).
  *    b. Computes delta = (new - previous) activePlayTime and atomically
  *       increments Content.totalWatchTime by only the delta.
  *    c. Evaluates view threshold: getWatchThreshold(contentType, duration).
- *    d. If threshold met → upserts ContentView with session dedup and
- *       30s multi-tab cooldown → increments Content.views atomically.
+ *    d. If threshold met â†’ upserts ContentView with session dedup and
+ *       30s multi-tab cooldown â†’ increments Content.views atomically.
  * 3. Works identically for authenticated (userId) and anonymous
  *    (anonymousViewerId from client localStorage UUID) users.
  * 4. WatchHistory is only updated for authenticated users.
@@ -82,11 +82,9 @@ export const uploadThumbnail = async (req, res) => {
 
         await s3Client.send(new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: thumbnailKey, Body: file.buffer, ContentType: file.mimetype }));
         await Content.findByIdAndUpdate(contentId, { thumbnailKey, thumbnailSource: 'custom' });
-
-        console.log(`✅ Custom thumbnail uploaded for content: ${contentId}`);
         res.json({ success: true, message: 'Thumbnail uploaded successfully', thumbnailKey });
     } catch (error) {
-        console.error('❌ Error uploading thumbnail:', error);
+        console.error('âŒ Error uploading thumbnail:', error);
         res.status(500).json({ error: 'Failed to upload thumbnail' });
     }
 };
@@ -102,7 +100,7 @@ export const getContent = async (req, res) => {
         const content = await Content.findById(contentId).populate('userId', 'userName channelName channelHandle channelPicture profilePicture');
         if (!content) return res.status(404).json({ error: 'Content not found' });
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         if (content.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = content.userId ? (content.userId._id ? content.userId._id.toString() : content.userId.toString()) : null;
@@ -120,7 +118,7 @@ export const getContent = async (req, res) => {
             audioUrl = getCfUrl(content.originalKey);
         }
 
-        // ── PPV controller-level check (second layer after route middleware) ──
+        // â”€â”€ PPV controller-level check (second layer after route middleware) â”€â”€
         const ppvGranted = await hasPpvAccess(content, req.user?.id);
 
         res.json({
@@ -128,8 +126,11 @@ export const getContent = async (req, res) => {
             description: content.description, postContent: content.postContent,
             duration: content.duration, thumbnailUrl, imageUrl,
             audioUrl: ppvGranted ? audioUrl : null,
-            status: content.status, views: content.views, likeCount: content.likeCount,
-            dislikeCount: content.dislikeCount, createdAt: content.createdAt,
+            status: content.status, 
+            views: content.displayViews ?? content.views ?? 0, 
+            likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+            dislikeCount: content.dislikeCount ?? 0, 
+            createdAt: content.createdAt,
             user: content.userId, channelName: content.channelName,
             tags: content.tags, category: content.category,
             audioCategory: content.audioCategory, artist: content.artist, album: content.album,
@@ -138,7 +139,7 @@ export const getContent = async (req, res) => {
             price: content.visibility === 'pay_per_view' ? content.price : undefined,
         });
     } catch (error) {
-        console.error('❌ Error fetching content:', error);
+        console.error('âŒ Error fetching content:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -166,7 +167,9 @@ export const getUserContent = async (req, res) => {
             _id: content._id, contentType: content.contentType, title: content.title,
             description: content.description, status: content.status, createdAt: content.createdAt,
             thumbnailUrl: getCfUrl(content.thumbnailKey),
-            views: content.views, likeCount: content.likeCount, shareCount: content.shareCount || 0
+            views: content.displayViews ?? content.views ?? 0, 
+            likeCount: content.displayLikeCount ?? content.likeCount ?? 0, 
+            shareCount: content.shareCount || 0
         })));
 
         res.json({
@@ -174,7 +177,7 @@ export const getUserContent = async (req, res) => {
             pagination: { currentPage: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)), totalItems: total, hasNextPage: skip + parseInt(limit) < total }
         });
     } catch (error) {
-        console.error('❌ Error fetching user content:', error);
+        console.error('âŒ Error fetching user content:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -207,7 +210,9 @@ export const getFeedContent = async (req, res) => {
                 duration: content.duration,
                 thumbnailUrl: getCfUrl(content.thumbnailKey),
                 imageUrl: getCfUrl(content.imageKey),
-                views: content.views, likeCount: content.likeCount, commentCount,
+                views: content.displayViews ?? content.views ?? 0, 
+                likeCount: content.displayLikeCount ?? content.likeCount ?? 0, 
+                commentCount,
                 createdAt: content.createdAt, user: content.userId, channelName: content.channelName
             };
         }));
@@ -217,7 +222,7 @@ export const getFeedContent = async (req, res) => {
             pagination: { currentPage: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)), totalItems: total, hasNextPage: skip + parseInt(limit) < total }
         });
     } catch (error) {
-        console.error('❌ Error fetching feed:', error);
+        console.error('âŒ Error fetching feed:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -234,7 +239,7 @@ export const getSingleContent = async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         if (content.status === 'removed') return res.status(410).json({ error: 'This content has been removed and is no longer available' });
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         // Allow active rental holders through even when creator sets content to private
         if (content.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
@@ -267,7 +272,7 @@ export const getSingleContent = async (req, res) => {
             mediaUrl = getCfUrl(audioKey);
         }
 
-        // ── PPV controller-level check (second layer after route middleware) ──
+        // â”€â”€ PPV controller-level check (second layer after route middleware) â”€â”€
         const ppvGranted = await hasPpvAccess(content, req.user?.id);
 
         res.json({
@@ -277,7 +282,9 @@ export const getSingleContent = async (req, res) => {
             imageUrl: imageUrl || thumbnailUrl, imageUrls,
             videoUrl: ppvGranted ? (content.contentType === 'short' ? mediaUrl : null) : null,
             audioUrl: ppvGranted ? (content.contentType === 'audio' ? mediaUrl : null) : null,
-            views: content.views, likeCount: content.likeCount || 0, commentCount,
+            views: content.displayViews ?? content.views ?? 0, 
+            likeCount: content.displayLikeCount ?? content.likeCount ?? 0, 
+            commentCount,
             createdAt: content.createdAt,
             channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
             channelPicture: content.userId?.channelPicture,
@@ -289,7 +296,7 @@ export const getSingleContent = async (req, res) => {
             price: content.visibility === 'pay_per_view' ? content.price : undefined,
         });
     } catch (error) {
-        console.error('❌ Error fetching content:', error);
+        console.error('âŒ Error fetching content:', error);
         res.status(500).json({ error: 'Failed to fetch content' });
     }
 };
@@ -316,10 +323,11 @@ export const updateContentEngagement = async (req, res) => {
 
         if (existingReaction) {
             if (existingReaction.type === action) {
-                // Same action again → remove reaction (toggle off)
+                // Same action again â†’ remove reaction (toggle off)
                 await VideoReaction.deleteOne({ _id: existingReaction._id });
                 if (action === 'like') {
                     content.likeCount = Math.max(0, (content.likeCount || 1) - 1);
+                    content.displayLikeCount = Math.max(0, (content.displayLikeCount ?? 1) - 1);
                 } else {
                     content.dislikeCount = Math.max(0, (content.dislikeCount || 1) - 1);
                 }
@@ -331,15 +339,17 @@ export const updateContentEngagement = async (req, res) => {
                     userReaction: null
                 });
             } else {
-                // Different action → switch reaction
+                // Different action â†’ switch reaction
                 existingReaction.type = action;
                 await existingReaction.save();
                 if (action === 'like') {
                     content.likeCount = (content.likeCount || 0) + 1;
+                    content.displayLikeCount = (content.displayLikeCount ?? 0) + 1;
                     content.dislikeCount = Math.max(0, (content.dislikeCount || 1) - 1);
                 } else {
                     content.dislikeCount = (content.dislikeCount || 0) + 1;
                     content.likeCount = Math.max(0, (content.likeCount || 1) - 1);
+                    content.displayLikeCount = Math.max(0, (content.displayLikeCount ?? 1) - 1);
                 }
                 await content.save();
                 return res.json({
@@ -350,10 +360,11 @@ export const updateContentEngagement = async (req, res) => {
                 });
             }
         } else {
-            // No existing reaction → create new
+            // No existing reaction â†’ create new
             await VideoReaction.create({ videoId: id, userId, type: action });
             if (action === 'like') {
                 content.likeCount = (content.likeCount || 0) + 1;
+                content.displayLikeCount = (content.displayLikeCount ?? 0) + 1;
             } else {
                 content.dislikeCount = (content.dislikeCount || 0) + 1;
             }
@@ -366,7 +377,7 @@ export const updateContentEngagement = async (req, res) => {
             });
         }
     } catch (error) {
-        console.error('❌ Error updating engagement:', error);
+        console.error('âŒ Error updating engagement:', error);
         res.status(500).json({ error: 'Failed to update engagement' });
     } finally {
         // Sync engagement to WatchHistory (fire-and-forget for speed)
@@ -388,7 +399,7 @@ export const updateContentEngagement = async (req, res) => {
     }
 };
 
-// Dead code (computeFingerprint, getViewThreshold, etc.) removed — all handled by watchAnalytics.js
+// Dead code (computeFingerprint, getViewThreshold, etc.) removed â€” all handled by watchAnalytics.js
 
 /**
  * Track watch time for shorts/audio/posts
@@ -475,21 +486,21 @@ export const getContentEngagementStatus = async (req, res) => {
         }
 
         res.json({
-            likeCount: content.likeCount || 0,
-            dislikeCount: content.dislikeCount || 0,
-            views: content.views || 0,
+            likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+            dislikeCount: content.dislikeCount ?? 0,
+            views: content.displayViews ?? content.views ?? 0,
             userReaction,
             isSubscribed
         });
     } catch (error) {
-        console.error('❌ Error fetching engagement status:', error);
+        console.error('âŒ Error fetching engagement status:', error);
         res.status(500).json({ error: 'Failed to fetch engagement status' });
     }
 };
 
 /**
  * POST /api/v2/content/:id/report
- * Report content (video, short, post, audio) — uses same ContentReport model as community feed.
+ * Report content (video, short, post, audio) â€” uses same ContentReport model as community feed.
  */
 export const reportContent = async (req, res) => {
     try {

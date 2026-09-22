@@ -33,12 +33,13 @@ export const likeVideo = async (req, res) => {
             if (existingReaction.type === 'like') {
                 await VideoReaction.deleteOne({ _id: existingReaction._id });
                 video.likeCount = Math.max(0, (video.likeCount || 1) - 1);
+                video.displayLikeCount = Math.max(0, (video.displayLikeCount ?? 1) - 1);
                 await video.save();
                 return res.json({
                     message: "Like removed",
                     liked: false,
-                    likes: video.likeCount,
-                    dislikes: video.dislikeCount,
+                    likes: video.displayLikeCount ?? video.likeCount ?? 0,
+                    dislikes: video.dislikeCount ?? 0,
                     userReaction: null
                 });
             }
@@ -47,25 +48,27 @@ export const likeVideo = async (req, res) => {
             await existingReaction.save();
             video.dislikeCount = Math.max(0, (video.dislikeCount || 1) - 1);
             video.likeCount = (video.likeCount || 0) + 1;
+            video.displayLikeCount = (video.displayLikeCount ?? 0) + 1;
             await video.save();
             return res.json({
                 message: "Changed to like",
                 liked: true,
-                likes: video.likeCount,
-                dislikes: video.dislikeCount,
+                likes: video.displayLikeCount ?? video.likeCount ?? 0,
+                dislikes: video.dislikeCount ?? 0,
                 userReaction: 'like'
             });
         }
 
         await VideoReaction.create({ videoId, userId, type: 'like' });
         video.likeCount = (video.likeCount || 0) + 1;
+        video.displayLikeCount = (video.displayLikeCount ?? 0) + 1;
         await video.save();
 
         return res.json({
             message: "Liked",
             liked: true,
-            likes: video.likeCount,
-            dislikes: video.dislikeCount,
+            likes: video.displayLikeCount ?? video.likeCount ?? 0,
+            dislikes: video.dislikeCount ?? 0,
             userReaction: 'like'
         });
     } catch (error) {
@@ -98,8 +101,8 @@ export const dislikeVideo = async (req, res) => {
                 return res.json({
                     message: "Dislike removed",
                     disliked: false,
-                    likes: video.likeCount,
-                    dislikes: video.dislikeCount,
+                    likes: video.displayLikeCount ?? video.likeCount ?? 0,
+                    dislikes: video.dislikeCount ?? 0,
                     userReaction: null
                 });
             }
@@ -107,13 +110,14 @@ export const dislikeVideo = async (req, res) => {
             existingReaction.type = 'dislike';
             await existingReaction.save();
             video.likeCount = Math.max(0, (video.likeCount || 1) - 1);
+            video.displayLikeCount = Math.max(0, (video.displayLikeCount ?? 1) - 1);
             video.dislikeCount = (video.dislikeCount || 0) + 1;
             await video.save();
             return res.json({
                 message: "Changed to dislike",
                 disliked: true,
-                likes: video.likeCount,
-                dislikes: video.dislikeCount,
+                likes: video.displayLikeCount ?? video.likeCount ?? 0,
+                dislikes: video.dislikeCount ?? 0,
                 userReaction: 'dislike'
             });
         }
@@ -125,8 +129,8 @@ export const dislikeVideo = async (req, res) => {
         return res.json({
             message: "Disliked",
             disliked: true,
-            likes: video.likeCount,
-            dislikes: video.dislikeCount,
+            likes: video.displayLikeCount ?? video.likeCount ?? 0,
+            dislikes: video.dislikeCount ?? 0,
             userReaction: 'dislike'
         });
     } catch (error) {
@@ -217,11 +221,11 @@ export const subscribeToUser = async (req, res) => {
             await user.save();
 
             // Decrement creator's cached subscriber count
-            await User.findByIdAndUpdate(targetUserId, { $inc: { subscriberCount: -1 } });
+            await User.findByIdAndUpdate(targetUserId, { $inc: { subscriberCount: -1, displaySubscriberCount: -1 } });
 
             if (contentId && mongoose.Types.ObjectId.isValid(contentId)) {
                 await Content.findByIdAndUpdate(contentId, {
-                    $inc: { subscribersGained: -1, fansGained: -1 }
+                    $inc: { subscribersGained: -1, fansGained: -1, displayFansGained: -1 }
                 }).catch(err => console.error("Error updating content subscribersGained:", err));
             }
 
@@ -238,11 +242,11 @@ export const subscribeToUser = async (req, res) => {
             });
 
             // Increment creator's cached subscriber count
-            await User.findByIdAndUpdate(targetUserId, { $inc: { subscriberCount: 1 } });
+            await User.findByIdAndUpdate(targetUserId, { $inc: { subscriberCount: 1, displaySubscriberCount: 1 } });
 
             if (contentId && mongoose.Types.ObjectId.isValid(contentId)) {
                 await Content.findByIdAndUpdate(contentId, {
-                    $inc: { subscribersGained: 1, fansGained: 1 }
+                    $inc: { subscribersGained: 1, fansGained: 1, displayFansGained: 1 }
                 }).catch(err => console.error("Error updating content subscribersGained:", err));
             }
 

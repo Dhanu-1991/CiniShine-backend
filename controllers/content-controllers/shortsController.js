@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Shorts Controller
  * Handles: short upload init/complete, shorts player feed
  * Extracted from the old monolithic contentController.js
@@ -59,11 +59,9 @@ export const shortUploadInit = async (req, res) => {
             ContentType: fileType,
         });
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-
-        console.log(`📤 Short upload initialized: ${fileId} for user ${userId}`);
         res.json({ uploadUrl, fileId: fileId.toString(), key });
     } catch (error) {
-        console.error('❌ Error initializing short upload:', error);
+        console.error('âŒ Error initializing short upload:', error);
         res.status(500).json({ error: 'Failed to initialize upload' });
     }
 };
@@ -101,11 +99,9 @@ export const shortUploadComplete = async (req, res) => {
             updateData.title || content.title, content.thumbnailKey,
             updateData.visibility || content.visibility
         ).catch(err => console.error('Notification error:', err));
-
-        console.log(`✅ Short upload completed: ${fileId}`);
         res.json({ success: true, message: 'Short uploaded successfully, processing started', contentId: fileId });
     } catch (error) {
-        console.error('❌ Error completing short upload:', error);
+        console.error('âŒ Error completing short upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
     }
 };
@@ -146,8 +142,8 @@ export const getShortsPlayerFeed = async (req, res) => {
 
                 startingShort = {
                     _id: content._id, contentType: 'short', title: content.title, description: content.description,
-                    duration: content.duration, thumbnailUrl, videoUrl, views: content.views,
-                    likeCount: content.likeCount || 0, commentCount, createdAt: content.createdAt,
+                    duration: content.duration, thumbnailUrl, videoUrl, views: content.displayViews ?? content.views ?? 0,
+                    likeCount: content.displayLikeCount ?? content.likeCount ?? 0, commentCount, createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
@@ -185,7 +181,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                         duration: content.duration,
                         thumbnailUrl: getCfUrl(content.thumbnailKey),
                         videoUrl: getCfUrl(videoKey),
-                        views: content.views, likeCount: content.likeCount || 0, commentCount,
+                        views: content.displayViews ?? content.views ?? 0, likeCount: content.displayLikeCount ?? content.likeCount ?? 0, commentCount,
                         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                         channelHandle: content.userId?.channelHandle || null,
                         channelPicture: content.userId?.channelPicture,
@@ -212,7 +208,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                     duration: content.duration,
                     thumbnailUrl: getCfUrl(content.thumbnailKey),
                     videoUrl: getCfUrl(videoKey),
-                    views: content.views, likeCount: content.likeCount || 0, commentCount,
+                    views: content.displayViews ?? content.views ?? 0, likeCount: content.displayLikeCount ?? content.likeCount ?? 0, commentCount,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: content.userId?.channelPicture,
@@ -242,7 +238,7 @@ export const getShortsPlayerFeed = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error fetching shorts feed:', error);
+        console.error('âŒ Error fetching shorts feed:', error);
         res.status(500).json({ error: 'Failed to fetch shorts' });
     }
 };

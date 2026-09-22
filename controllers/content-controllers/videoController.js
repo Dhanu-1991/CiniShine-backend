@@ -43,11 +43,10 @@ async function findHLSFiles(videoId, userId) {
 export const getVideo = async (req, res) => {
     try {
         const videoId = req.params.id ?? req.params.videoId;
-        console.log('📹 Fetching video metadata for ID:', videoId);
 
         const video = await Content.findById(videoId).populate('userId', 'userName channelName channelHandle channelPicture');
         if (!video) {
-            console.error('❌ Video not found for ID:', videoId);
+            console.error('âŒ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
         }
 
@@ -55,7 +54,7 @@ export const getVideo = async (req, res) => {
             return res.status(410).json({ error: 'This content has been removed and is no longer available' });
         }
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         // Allow active rental holders through even when creator sets content to private
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
@@ -79,20 +78,6 @@ export const getVideo = async (req, res) => {
             bitrate: rendition.bitrate,
             codecs: rendition.codecs
         }));
-
-        console.log("_id : ", video._id,
-            "title : ", video.title,
-            "description : ", video.description,
-            "duration : ", video.duration,
-            "hlsMasterUrl : ", `/api/v2/video/${videoId}/master.m3u8`,
-            "thumbnailUrl : ", thumbnailUrl,
-            "renditions : ", renditions,
-            "status : ", video.status,
-            "createdAt : ", video.createdAt,
-            "user : ", video.userId,
-            "views : ", video.views,
-            "channelName : ", video.userId?.channelName
-        );
 
         // Get subscriber/follower count from cached field (synced on subscribe/unsubscribe)
         const creator = await User.findById(video.userId._id).select('subscriberCount');
@@ -120,7 +105,7 @@ export const getVideo = async (req, res) => {
             parentCommentId: null
         });
 
-        // ── PPV controller-level check (second layer after route middleware) ──
+        // â”€â”€ PPV controller-level check (second layer after route middleware) â”€â”€
         const ppvGranted = await hasPpvAccess(video, req.user?.id);
         const isCreator = Boolean(req.user?.id && (video.userId?._id?.toString() === req.user.id.toString() || video.userId?.toString() === req.user.id.toString()));
 
@@ -150,13 +135,13 @@ export const getVideo = async (req, res) => {
             status: video.status,
             createdAt: video.createdAt,
             user: video.userId,
-            views: video.views,
-            likes: video.likeCount || 0,
-            dislikes: video.dislikeCount || 0,
+            views: video.displayViews ?? video.views ?? 0,
+            likes: video.displayLikeCount ?? video.likeCount ?? 0,
+            dislikes: video.dislikeCount ?? 0,
             userReaction: userReaction?.type || null,
             channelName: video.userId?.channelName || 'Unknown', // Fetch from populated user
             channelHandle: video.userId?.channelHandle || null,
-            subscriberCount,
+            subscriberCount: creator?.displaySubscriberCount ?? (creator?.subscriberCount || 0),
             isSubscribed,
             channelPicture: video.userId?.channelPicture,
             commentCount,
@@ -174,7 +159,7 @@ export const getVideo = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('💥 Error fetching video data:', error);
+        console.error('ðŸ’¥ Error fetching video data:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 }
@@ -183,7 +168,6 @@ export const getVideo = async (req, res) => {
 export const getHLSMasterPlaylist = async (req, res) => {
     try {
         const videoId = req.params.id;
-        console.log('🎬 Serving master playlist for video:', videoId);
 
         if (!mongoose.Types.ObjectId.isValid(videoId)) {
             return res.status(400).json({ error: 'Invalid video ID' });
@@ -191,11 +175,11 @@ export const getHLSMasterPlaylist = async (req, res) => {
 
         const video = await Content.findById(videoId);
         if (!video) {
-            console.error('❌ Video not found for ID:', videoId);
+            console.error('âŒ Video not found for ID:', videoId);
             return res.status(404).json({ error: 'Video not found' });
         }
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         // Allow active rental holders through even when creator sets content to private
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
@@ -208,7 +192,7 @@ export const getHLSMasterPlaylist = async (req, res) => {
             }
         }
 
-        // ── PPV controller-level check (second layer after route middleware) ──
+        // â”€â”€ PPV controller-level check (second layer after route middleware) â”€â”€
         if (video.visibility === 'pay_per_view') {
             const granted = await hasPpvAccess(video, req.user?.id);
             if (!granted) {
@@ -224,7 +208,7 @@ export const getHLSMasterPlaylist = async (req, res) => {
         }
 
         if (!video.hlsMasterKey) {
-            console.error('❌ No HLS master key found, searching...');
+            console.error('âŒ No HLS master key found, searching...');
             const hlsFiles = await findHLSFiles(videoId, video.userId);
             const masterFile = hlsFiles.find(file => file.Key && file.Key.includes('master.m3u8'));
             if (!masterFile) {
@@ -243,15 +227,12 @@ export const getHLSMasterPlaylist = async (req, res) => {
             }),
             { expiresIn: 3600 }
         );
-        console.log('🔑 Generated signed URL for master playlist:', signedUrl);
         const response = await fetch(signedUrl);
         if (!response.ok) {
-            console.log("response not ok");
             throw new Error(`S3 responded with status: ${response.status}`);
         }
 
         let masterContent = await response.text();
-        console.log('📄 Master playlist fetched, size:', masterContent.length, 'bytes');
 
         // Build absolute backend base (so HLS.js won't resolve against blob:)
         // Prefer X-Forwarded-Proto (set by proxies/load-balancers) or req.secure.
@@ -304,7 +285,6 @@ export const getHLSMasterPlaylist = async (req, res) => {
 
                             const variantFile = variantPath.split('/').pop();
                             const absoluteVariant = `${backendBase}/api/v2/video/${videoId}/variants/${encodeURIComponent(variantFile)}?quality=${encodeURIComponent(quality)}`;
-                            console.log(`🔄 Master variant rewrite: ${variantPath} -> ${absoluteVariant}`);
                             rebuilt.push(absoluteVariant);
                         }
 
@@ -320,7 +300,6 @@ export const getHLSMasterPlaylist = async (req, res) => {
             } else {
                 const variantFile = line.split('/').pop();
                 const absoluteVariant = `${backendBase}/api/v2/video/${videoId}/variants/${encodeURIComponent(variantFile)}`;
-                console.log(`🔄 Master other rewrite: ${line} -> ${absoluteVariant}`);
                 rebuilt.push(absoluteVariant);
             }
         }
@@ -337,12 +316,10 @@ export const getHLSMasterPlaylist = async (req, res) => {
             'Access-Control-Allow-Origin': req.headers.origin || '*',
             'Access-Control-Allow-Credentials': 'true'
         });
-
-        console.log('✅ Master playlist served successfully');
         res.send(output);
 
     } catch (error) {
-        console.error('💥 Error serving master playlist:', error);
+        console.error('ðŸ’¥ Error serving master playlist:', error);
         res.status(500).json({
             error: 'Failed to load video stream',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -358,8 +335,6 @@ export const getHLSVariantPlaylist = async (req, res) => {
         if (variantFile.includes('?')) variantFile = variantFile.split('?')[0];
         const quality = req.query.quality ? String(req.query.quality).trim() : null;
 
-        console.log('🎬 Serving variant:', variantFile, 'quality:', quality, 'video:', videoId);
-
         if (!mongoose.Types.ObjectId.isValid(videoId)) {
             return res.status(400).json({ error: 'Invalid video ID' });
         }
@@ -368,7 +343,7 @@ export const getHLSVariantPlaylist = async (req, res) => {
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
@@ -379,7 +354,7 @@ export const getHLSVariantPlaylist = async (req, res) => {
             }
         }
 
-        // ── PPV controller-level check (second layer after route middleware) ──
+        // â”€â”€ PPV controller-level check (second layer after route middleware) â”€â”€
         if (video.visibility === 'pay_per_view') {
             const granted = await hasPpvAccess(video, req.user?.id);
             if (!granted) {
@@ -405,8 +380,6 @@ export const getHLSVariantPlaylist = async (req, res) => {
         candidates.push(`${basePath}variants/${variantFile}`);
         candidates.push(`${basePath}${variantFile}`);
 
-        console.log('🔍 Trying variant S3 keys:', candidates);
-
         let chosenKey = null;
         let variantContent = null;
 
@@ -423,19 +396,18 @@ export const getHLSVariantPlaylist = async (req, res) => {
                 if (response && response.ok) {
                     chosenKey = key;
                     variantContent = await response.text();
-                    console.log('📄 Found variant at key:', key, 'size:', variantContent.length);
                     break;
                 } else {
-                    console.warn('⛔ Candidate not available:', key, response?.status);
+                    console.warn('â›” Candidate not available:', key, response?.status);
                 }
             } catch (err) {
-                console.warn('⛔ Error trying candidate key:', key, err.message || err);
+                console.warn('â›” Error trying candidate key:', key, err.message || err);
                 // continue trying next candidate
             }
         }
 
         if (!variantContent) {
-            console.error('❌ No variant playlist found in candidates');
+            console.error('âŒ No variant playlist found in candidates');
             return res.status(404).json({ error: 'Variant playlist not found' });
         }
 
@@ -459,7 +431,6 @@ export const getHLSVariantPlaylist = async (req, res) => {
                 if (/\.(ts|m4s|mp4|aac)$/i.test(trimmed)) {
                     const filename = trimmed.split('/').pop();
                     const backendUrl = `${backendBase}/api/v2/video/${videoId}/segments/${encodeURIComponent(filename)}${qualityParam}`;
-                    console.log(`🔄 Segment rewrite: ${trimmed} -> ${backendUrl}`);
                     return `${prefix}${backendUrl}`;
                 }
 
@@ -467,7 +438,6 @@ export const getHLSVariantPlaylist = async (req, res) => {
                 if (trimmed.endsWith('.m3u8')) {
                     const filename = trimmed.split('/').pop();
                     const backendUrl = `${backendBase}/api/v2/video/${videoId}/variants/${encodeURIComponent(filename)}${qualityParam}`;
-                    console.log(`🔁 Sub-playlist rewrite: ${trimmed} -> ${backendUrl}`);
                     return `${prefix}${backendUrl}`;
                 }
 
@@ -485,12 +455,10 @@ export const getHLSVariantPlaylist = async (req, res) => {
             'Access-Control-Allow-Origin': req.headers.origin || '*',
             'Access-Control-Allow-Credentials': 'true'
         });
-
-        console.log('✅ Variant served successfully (key):', chosenKey);
         res.send(variantContent);
 
     } catch (error) {
-        console.error('💥 Error serving variant:', error);
+        console.error('ðŸ’¥ Error serving variant:', error);
         res.status(500).json({
             error: 'Failed to load video variant',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -506,8 +474,6 @@ export const getHLSSegment = async (req, res) => {
         if (segmentFile.includes('?')) segmentFile = segmentFile.split('?')[0];
         const quality = req.query.quality ? String(req.query.quality).trim() : null;
 
-        console.log('🎬 Serving segment:', segmentFile, 'quality:', quality, 'video:', videoId);
-
         if (!mongoose.Types.ObjectId.isValid(videoId)) {
             return res.status(400).json({ error: 'Invalid video ID' });
         }
@@ -519,7 +485,7 @@ export const getHLSSegment = async (req, res) => {
         if (!video) return res.status(404).json({ error: 'Video not found' });
         if (video.status !== 'completed') return res.status(423).json({ error: 'Video is still processing' });
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
@@ -530,7 +496,7 @@ export const getHLSSegment = async (req, res) => {
             }
         }
 
-        // ── PPV controller-level check (second layer after route middleware) ──
+        // â”€â”€ PPV controller-level check (second layer after route middleware) â”€â”€
         if (video.visibility === 'pay_per_view') {
             const granted = await hasPpvAccess(video, req.user?.id);
             if (!granted) {
@@ -553,7 +519,6 @@ export const getHLSSegment = async (req, res) => {
         }
         candidates.push(`${basePath}segments/${segmentFile}`);
         candidates.push(`${basePath}${segmentFile}`);
-        console.log('🔍 Trying segment keys:', candidates);
 
         // Support Range header for partial requests (important for fMP4 / big files)
         const rangeHeader = req.headers.range;
@@ -583,7 +548,7 @@ export const getHLSSegment = async (req, res) => {
         }
 
         if (!objResponse) {
-            console.error('❌ No segment found in candidates');
+            console.error('âŒ No segment found in candidates');
             return res.status(404).json({ error: 'Segment not found in storage' });
         }
 
@@ -604,12 +569,10 @@ export const getHLSSegment = async (req, res) => {
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
         res.setHeader('Access-Control-Allow-Credentials', 'true');
-
-        console.log('🔗 Proxying segment from S3 key:', usedKey, isPartial ? '(partial)' : '(full)');
         await pipeline(objResponse.Body, res);
 
     } catch (error) {
-        console.error('💥 Error serving segment:', error);
+        console.error('ðŸ’¥ Error serving segment:', error);
         res.status(500).json({
             error: 'Failed to load video segment',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -620,7 +583,6 @@ export const getHLSSegment = async (req, res) => {
 export const getMyContent = async (req, res) => {
     try {
         const userId = req.user;
-        console.log("🔍 Fetching videos for user:", userId);
 
         let userObjectId;
         if (mongoose.Types.ObjectId.isValid(userId)) {
@@ -632,8 +594,6 @@ export const getMyContent = async (req, res) => {
         const videos = await Content.find({ userId: userObjectId, contentType: 'video' })
             .sort({ createdAt: -1 })
             .select('title description duration status thumbnailKey renditions createdAt tags shareCount views likeCount dislikeCount');
-
-        console.log("✅ Videos found:", videos.length);
 
         const videosWithUrls = videos.map((video) => {
             const thumbnailUrl = getCfUrl(video.thumbnailKey);
@@ -648,9 +608,9 @@ export const getMyContent = async (req, res) => {
                 tags: video.tags,
                 createdAt: video.createdAt,
                 shareCount: video.shareCount || 0,
-                views: video.views || 0,
-                likeCount: video.likeCount || 0,
-                dislikeCount: video.dislikeCount || 0,
+                views: video.displayViews ?? video.views ?? 0,
+                likeCount: video.displayLikeCount ?? video.likeCount ?? 0,
+                dislikeCount: video.dislikeCount ?? 0,
                 renditions: video.renditions || [],
                 adaptiveStreaming: video.status === 'completed',
                 prefferedRendition: video.prefferedRendition || 'Auto'
@@ -659,14 +619,13 @@ export const getMyContent = async (req, res) => {
 
         res.json(videosWithUrls);
     } catch (error) {
-        console.error('💥 Error fetching user videos:', error);
+        console.error('ðŸ’¥ Error fetching user videos:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 }
 
 export const getContent = async (req, res) => {
     try {
-        console.log('🔍 Fetching recommended content for user');
         const userId = req.user?.id;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
@@ -674,7 +633,6 @@ export const getContent = async (req, res) => {
 
         // Get current user
         const user = await User.findById(userId);
-        console.log("user found : ", user);
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
@@ -686,7 +644,6 @@ export const getContent = async (req, res) => {
         const allVideos = await Content.find({ status: 'completed', contentType: 'video' })
             .populate('userId', 'roles userName channelName channelHandle channelPicture')
             .sort({ createdAt: -1 }); // Get recent videos first
-        console.log("allVideos found : ", allVideos.length);
         // Get personalized recommendations
         const recommendedVideos = await recommendationEngine.getRecommendations(
             user,
@@ -694,7 +651,6 @@ export const getContent = async (req, res) => {
             userVideos,
             { limit: 100, excludeOwn: false } // Get more for better pagination, include own videos
         );
-        console.log("recommendedVideos found : ", recommendedVideos.length);
         // Apply pagination to recommendations
         const paginatedVideos = recommendedVideos.slice(skip, skip + limit);
 
@@ -709,7 +665,7 @@ export const getContent = async (req, res) => {
                 duration: video.duration,
                 thumbnailUrl,
                 status: video.status,
-                views: video.views,
+                views: video.displayViews ?? video.views ?? 0,
                 createdAt: video.createdAt,
                 user: {
                     _id: video.userId._id,
@@ -721,13 +677,10 @@ export const getContent = async (req, res) => {
                 channelPicture: video.userId?.channelPicture || null
             };
         });
-        console.log("videosWithThumbnails prepared : ", videosWithThumbnails);
 
         // Get total count for pagination info
         const totalVideos = recommendedVideos.length;
         const hasNextPage = skip + limit < totalVideos;
-
-        console.log(`✅ Recommended content served: page ${page}, ${videosWithThumbnails.length} videos`);
 
         res.json({
             videos: videosWithThumbnails,
@@ -741,7 +694,7 @@ export const getContent = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('💥 Error fetching recommended content:', error);
+        console.error('ðŸ’¥ Error fetching recommended content:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 }
@@ -758,7 +711,7 @@ export const getSpecificContent = async (req, res) => {
         }
 
         // Fetch creator (user) and their roles/profile info
-        const creator = await User.findById(creatorId).select('roles userName channelName channelPicture subscriptions').lean();
+        const creator = await User.findById(creatorId).select('roles userName channelName channelPicture subscriptions subscriberCount displaySubscriberCount').lean();
         if (!creator) {
             return res.status(404).json({ error: 'Creator not found' });
         }
@@ -807,9 +760,9 @@ export const getSpecificContent = async (req, res) => {
                     tags: v.tags || [],
                     createdAt: v.createdAt,
                     renditions: v.renditions || [],
-                    views: v.views || 0,
-                    likes: (typeof v.likeCount === 'number') ? v.likeCount : 0,
-                    dislikes: (typeof v.dislikeCount === 'number') ? v.dislikeCount : 0,
+                    views: v.displayViews ?? v.views ?? 0,
+                    likes: v.displayLikeCount ?? (typeof v.likeCount === 'number' ? v.likeCount : 0),
+                    dislikes: typeof v.dislikeCount === 'number' ? v.dislikeCount : 0,
                     commentCount,
                     adaptiveStreaming: v.status === 'completed'
                 };
@@ -828,7 +781,7 @@ export const getSpecificContent = async (req, res) => {
                 channelName: creator.channelName,
                 channelPicture: creator.channelPicture || null
             },
-            subscriberCount: Array.isArray(creator.subscriptions) ? creator.subscriptions.length : 0
+            subscriberCount: creator.displaySubscriberCount ?? creator.subscriberCount ?? (Array.isArray(creator.subscriptions) ? creator.subscriptions.length : 0)
         };
 
         return res.json({
@@ -844,7 +797,7 @@ export const getSpecificContent = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('💥 Error in getSpecificContent (creator):', error);
+        console.error('ðŸ’¥ Error in getSpecificContent (creator):', error);
         return res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -852,7 +805,6 @@ export const getSpecificContent = async (req, res) => {
 export const getRecommendations = async (req, res) => {
     try {
         const videoId = req.params.videoId;
-        console.log('🎯 Fetching recommendations for video:', videoId);
 
         if (!mongoose.Types.ObjectId.isValid(videoId)) {
             return res.status(400).json({ error: 'Invalid video ID' });
@@ -863,7 +815,7 @@ export const getRecommendations = async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         if (currentVideo.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = currentVideo.userId ? (currentVideo.userId._id ? currentVideo.userId._id.toString() : currentVideo.userId.toString()) : null;
@@ -880,12 +832,10 @@ export const getRecommendations = async (req, res) => {
         const { findSimilarVideos } = await import('../../algorithms/videoSimilarity.js');
         const result = await findSimilarVideos(currentVideo, page, limit);
 
-        console.log(`✅ Recommendations served: page ${page}, ${result.videos.length} videos`);
-
         res.json(result);
 
     } catch (error) {
-        console.error('💥 Error fetching recommendations:', error);
+        console.error('ðŸ’¥ Error fetching recommendations:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -897,7 +847,7 @@ export const getVideoStatus = async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
-        // ── Check private visibility ──
+        // â”€â”€ Check private visibility â”€â”€
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;
             const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
@@ -968,7 +918,7 @@ export const uploadInit = async (req, res) => {
         if (visibility === 'pay_per_view') {
             const numPrice = Number(price);
             if (!numPrice || numPrice < 1) {
-                return res.status(400).json({ error: "Price is required and must be at least ₹1 for Pay Per View content" });
+                return res.status(400).json({ error: "Price is required and must be at least â‚¹1 for Pay Per View content" });
             }
             if (rentalDuration !== undefined && !VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
                 return res.status(400).json({ error: "Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days." });
@@ -984,7 +934,7 @@ export const uploadInit = async (req, res) => {
             category: category || '',
             visibility: visibility || 'public',
             price: visibility === 'pay_per_view' ? Number(price) : null,
-            rentalDuration: visibility === 'pay_per_view' && [2,3,5,7,14,28].includes(Number(rentalDuration)) ? Number(rentalDuration) : 2,
+            rentalDuration: visibility === 'pay_per_view' && [2, 3, 5, 7, 14, 28].includes(Number(rentalDuration)) ? Number(rentalDuration) : 2,
             isAgeRestricted: isAgeRestricted || false,
             commentsEnabled: commentsEnabled !== false,
             selectedRoles: selectedRoles || [],
@@ -992,8 +942,6 @@ export const uploadInit = async (req, res) => {
             mimeType: fileType,
             userId,
         });
-
-        console.log(`📤 Video upload initialized: ${fileId}, title: "${title || fileName}"`);
 
         const command = new PutObjectCommand({
             Bucket: process.env.S3_BUCKET,
@@ -1217,14 +1165,11 @@ export const uploadComplete = async (req, res) => {
 
 export const getGeneralContent = async (req, res) => {
     try {
-        console.log("🔍 Fetching latest 100 videos");
 
         const videos = await Content.find({ contentType: 'video' })
             .sort({ createdAt: -1 }) // newest first
             .limit(100) // max 100 videos
             .select('title description duration status thumbnailKey renditions createdAt tags');
-
-        console.log("✅ Videos found:", videos.length);
 
         const videosWithUrls = videos.map((video) => {
             const thumbnailUrl = getCfUrl(video.thumbnailKey);
@@ -1245,7 +1190,7 @@ export const getGeneralContent = async (req, res) => {
 
         res.json(videosWithUrls);
     } catch (error) {
-        console.error('💥 Error fetching videos:', error);
+        console.error('ðŸ’¥ Error fetching videos:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -1300,15 +1245,13 @@ export const uploadVideoThumbnail = async (req, res) => {
             thumbnailSource: 'custom'
         });
 
-        console.log(`✅ Custom thumbnail uploaded for video: ${videoId}`);
-
         res.json({
             success: true,
             message: 'Thumbnail uploaded successfully',
             thumbnailKey
         });
     } catch (error) {
-        console.error('❌ Error uploading video thumbnail:', error);
+        console.error('âŒ Error uploading video thumbnail:', error);
         res.status(500).json({ error: 'Failed to upload thumbnail' });
     }
 };

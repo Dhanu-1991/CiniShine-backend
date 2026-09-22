@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Audio Controller
  * Handles: audio upload init/complete, audio player feed
  */
@@ -65,11 +65,9 @@ export const audioUploadInit = async (req, res) => {
 
         const command = new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, ContentType: fileType });
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-
-        console.log(`📤 Audio upload initialized: ${fileId} for user ${userId}`);
         res.json({ uploadUrl, fileId: fileId.toString(), key });
     } catch (error) {
-        console.error('❌ Error initializing audio upload:', error);
+        console.error('âŒ Error initializing audio upload:', error);
         res.status(500).json({ error: 'Failed to initialize upload' });
     }
 };
@@ -132,11 +130,9 @@ export const audioUploadComplete = async (req, res) => {
                 { upsert: true, new: true, setDefaultsOnInsert: true }
             ).catch(err => console.error('Auto-bookmark error:', err));
         }
-
-        console.log(`✅ Audio upload completed: ${fileId}`);
         res.json({ success: true, message: 'Audio uploaded successfully', contentId: fileId });
     } catch (error) {
-        console.error('❌ Error completing audio upload:', error);
+        console.error('âŒ Error completing audio upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
     }
 };
@@ -153,8 +149,8 @@ async function formatAudioContent(content) {
 
     return {
         _id: content._id, contentType: 'audio', title: content.title, description: content.description,
-        duration: content.duration, thumbnailUrl, audioUrl, views: content.views || 0,
-        likeCount: content.likeCount || 0, commentCount, createdAt: content.createdAt,
+        duration: content.duration, thumbnailUrl, audioUrl, views: content.displayViews ?? content.views ?? 0,
+        likeCount: content.displayLikeCount ?? content.likeCount ?? 0, commentCount, createdAt: content.createdAt,
         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
         channelHandle: content.userId?.channelHandle || null,
         channelPicture: content.userId?.channelPicture,
@@ -236,7 +232,7 @@ export const getAudioPlayerFeed = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error fetching audio feed:', error);
+        console.error('âŒ Error fetching audio feed:', error);
         res.status(500).json({ error: 'Failed to fetch audio' });
     }
 };

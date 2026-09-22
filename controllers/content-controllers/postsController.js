@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Posts Controller
  * Handles: post image init, create post, subscription posts
  */
@@ -46,11 +46,9 @@ export const postImageInit = async (req, res) => {
 
         const command = new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, ContentType: fileType });
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-
-        console.log(`📤 Post image upload initialized: ${fileId} for user ${userId}`);
         res.json({ uploadUrl, fileId: key, key });
     } catch (error) {
-        console.error('❌ Error initializing post image upload:', error);
+        console.error('âŒ Error initializing post image upload:', error);
         res.status(500).json({ error: 'Failed to initialize image upload' });
     }
 };
@@ -80,7 +78,7 @@ export const createPost = async (req, res) => {
         if (visibility === 'pay_per_view') {
             const numPrice = Number(price);
             if (!numPrice || numPrice < 1) {
-                return res.status(400).json({ error: "Price is required and must be at least ₹1 for Pay Per View content" });
+                return res.status(400).json({ error: "Price is required and must be at least â‚¹1 for Pay Per View content" });
             }
         }
 
@@ -111,14 +109,12 @@ export const createPost = async (req, res) => {
             userId, post._id, 'post',
             post.title, post.imageKey, post.visibility
         ).catch(err => console.error('Notification error:', err));
-
-        console.log(`✅ Post created: ${fileId} by user ${userId}`);
         res.json({
             success: true, message: 'Post created successfully', contentId: fileId,
             post: { _id: post._id, title: post.title, description: post.description, imageKey: post.imageKey, createdAt: post.createdAt }
         });
     } catch (error) {
-        console.error('❌ Error creating post:', error);
+        console.error('âŒ Error creating post:', error);
         res.status(500).json({ error: 'Failed to create post' });
     }
 };
@@ -156,7 +152,7 @@ export const getSubscriptionPosts = async (req, res) => {
             } catch (_) { /* ignore invalid ID */ }
         }
 
-        // Build query — exclude already-loaded IDs
+        // Build query â€” exclude already-loaded IDs
         let query;
         const baseFilter = {
             contentType: 'post', status: 'completed', visibility: { $in: ['public', 'pay_per_view'] },
@@ -206,7 +202,7 @@ export const getSubscriptionPosts = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Error fetching subscription posts:', error);
+        console.error('âŒ Error fetching subscription posts:', error);
         res.status(500).json({ error: 'Failed to fetch posts' });
     }
 };
@@ -231,7 +227,7 @@ async function formatPostWithUrls(post) {
         _id: post._id, contentType: post.contentType, title: post.title,
         description: post.description, postContent: post.postContent,
         thumbnailUrl, imageUrl: imageUrl || thumbnailUrl, imageUrls,
-        views: post.views, likeCount: post.likeCount || 0, commentCount,
+        views: post.displayViews ?? post.views ?? 0, likeCount: post.displayLikeCount ?? post.likeCount ?? 0, commentCount,
         createdAt: post.createdAt,
         channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
         channelHandle: post.userId?.channelHandle || null,

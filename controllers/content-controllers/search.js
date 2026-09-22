@@ -295,9 +295,9 @@ export const searchVideos = async (req, res) => {
                 description: video.description,
                 duration: video.duration,
                 thumbnailUrl,
-                views: video.views,
-                likes: video.likes || 0,
-                dislikes: video.dislikes || 0,
+                views: video.displayViews ?? video.views ?? 0,
+                likes: video.displayLikeCount ?? video.likeCount ?? video.likes ?? 0,
+                dislikes: video.dislikeCount ?? video.dislikes ?? 0,
                 createdAt: video.createdAt,
                 user: {
                     _id: video.userId?._id,
@@ -398,7 +398,7 @@ export const unifiedSearch = async (req, res) => {
             // Recency and popularity boosts
             const daysSince = (Date.now() - new Date(item.createdAt)) / 86400000;
             score += Math.max(0, 15 - daysSince * 0.5);
-            score += Math.min((item.views || 0) / 1000, 12);
+            score += Math.min((item.displayViews ?? item.views ?? 0) / 1000, 12);
             // Creator follower count boost — uses populated subscriptions as a rough proxy for scoring only.
             // Actual fan count is computed separately for display (not from this field).
             const creatorFollowers = item.userId?.subscriptions?.length || 0;
@@ -464,7 +464,7 @@ export const unifiedSearch = async (req, res) => {
             // Fetch all needed content types in one query, then split
             queries.push(
                 Content.find({ ...contentFilter, contentType: { $in: contentTypes } })
-                    .populate('userId', 'userName channelName channelHandle channelPicture subscriptions subscriberCount')
+                    .populate('userId', 'userName channelName channelHandle channelPicture subscriptions subscriberCount displaySubscriberCount')
                     .sort({ createdAt: -1 })
                     .limit(300)
                     .lean()
@@ -490,7 +490,7 @@ export const unifiedSearch = async (req, res) => {
                         ]),
                     ],
                 })
-                    .select('userName channelName channelHandle channelPicture channelDescription bio subscriptions subscriberCount createdAt')
+                    .select('userName channelName channelHandle channelPicture channelDescription bio subscriptions subscriberCount displaySubscriberCount createdAt')
                     .limit(50)
                     .lean()
             );
@@ -536,9 +536,9 @@ export const unifiedSearch = async (req, res) => {
                 hlsMasterUrl,
                 videoUrl,
                 audioUrl,
-                views: item.views,
-                likes: Array.isArray(item.likes) ? item.likes.length : (item.likes || 0),
-                dislikes: item.dislikes || 0,
+                views: item.displayViews ?? item.views ?? 0,
+                likes: item.displayLikeCount ?? item.likeCount ?? (Array.isArray(item.likes) ? item.likes.length : (item.likes ?? 0)),
+                dislikes: item.dislikeCount ?? item.dislikes ?? 0,
                 tags: item.tags || [],
                 visibility: item.visibility,
                 price: item.price,
@@ -579,7 +579,7 @@ export const unifiedSearch = async (req, res) => {
                     channelHandle: user.channelHandle,
                     channelPicture: user.channelPicture,
                     channelDescription: user.channelDescription || user.bio,
-                    subscriberCount: user.subscriberCount || 0,
+                    subscriberCount: user.displaySubscriberCount ?? user.subscriberCount ?? 0,
                     createdAt: user.createdAt,
                     searchScore: score,
                 } : null;

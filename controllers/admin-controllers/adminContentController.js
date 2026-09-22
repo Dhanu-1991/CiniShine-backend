@@ -501,7 +501,7 @@ export const getCreatorAnalytics = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
         }
 
-        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriberCount');
+        const creator = await User.findById(id).select('userName channelName channelHandle contact profilePicture channelPicture subscriberCount displaySubscriberCount');
         if (!creator) {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
@@ -514,10 +514,13 @@ export const getCreatorAnalytics = async (req, res) => {
                     _id: null,
                     totalContent: { $sum: 1 },
                     totalViews: { $sum: '$views' },
+                    displayTotalViews: { $sum: '$displayViews' },
                     totalLikes: { $sum: '$likeCount' },
+                    displayTotalLikes: { $sum: '$displayLikeCount' },
                     totalDislikes: { $sum: '$dislikeCount' },
                     totalShares: { $sum: '$shareCount' },
                     totalWatchTime: { $sum: '$totalWatchTime' },
+                    displayTotalWatchTime: { $sum: '$displayTotalWatchTime' },
                     avgWatchTime: { $avg: '$averageWatchTime' }
                 }
             }
@@ -526,7 +529,7 @@ export const getCreatorAnalytics = async (req, res) => {
         // Content breakdown by type
         const contentByType = await Content.aggregate([
             { $match: { userId: new mongoose.Types.ObjectId(id) } },
-            { $group: { _id: '$contentType', count: { $sum: 1 }, views: { $sum: '$views' } } }
+            { $group: { _id: '$contentType', count: { $sum: 1 }, views: { $sum: '$views' }, displayViews: { $sum: '$displayViews' } } }
         ]);
 
         // Subscriber count — read from cached field (kept in sync via subscribe/unsubscribe)
@@ -545,6 +548,11 @@ export const getCreatorAnalytics = async (req, res) => {
             },
             analytics: {
                 ...(stats || { totalContent: 0, totalViews: 0, totalLikes: 0, totalDislikes: 0, totalShares: 0, totalWatchTime: 0, avgWatchTime: 0 }),
+                // Add display variants
+                displayTotalViews: stats?.displayTotalViews || 0,
+                displayTotalLikes: stats?.displayTotalLikes || 0,
+                displayTotalWatchTime: stats?.displayTotalWatchTime ?? 0,
+                displaySubscriberCount: creator.displaySubscriberCount ?? 0,
                 subscriberCount,
                 contentByType
             }
@@ -1034,12 +1042,15 @@ export const requestBanChannel = async (req, res) => {
 
 /**
  * PATCH /admin/content/:id/stats
- * SuperAdmin: Update content viewcount and totalWatchTime.
+ * SuperAdmin: Update content display (artificial) stats.
+ * Only modifies displayViews, displayLikeCount, displayFansGained.
+ * displayTotalWatchTime is auto-calculated from displayViews × averageWatchTime.
+ * Actual engagement fields are never touched.
  */
 export const updateContentStats = async (req, res) => {
     try {
         const { id } = req.params;
-        const { views, totalWatchTime, likeCount, dislikeCount, duration, fansGained, subscribersGained } = req.body;
+        const { displayViews, displayLikeCount, displayFansGained } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid content ID' });
@@ -1051,55 +1062,35 @@ export const updateContentStats = async (req, res) => {
         }
 
         const updates = {};
-        if (views !== undefined) {
-            const parsed = parseInt(views, 10);
+        if (displayViews !== undefined) {
+            const parsed = parseInt(displayViews, 10);
             if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Views must be a non-negative integer' });
+                return res.status(400).json({ success: false, message: 'Display views must be a non-negative integer' });
             }
-            updates.views = parsed;
-            content.views = parsed;
+            updates.displayViews = parsed;
+            content.displayViews = parsed;
+            
+            // Auto-calculate displayTotalWatchTime based on displayViews and averageWatchTime
+            const avgWatchTime = content.averageWatchTime || 0;
+            const newTotalWatchTime = parsed * avgWatchTime;
+            updates.displayTotalWatchTime = newTotalWatchTime;
+            content.displayTotalWatchTime = newTotalWatchTime;
         }
-        if (totalWatchTime !== undefined) {
-            const parsed = parseFloat(totalWatchTime);
+        if (displayLikeCount !== undefined) {
+            const parsed = parseInt(displayLikeCount, 10);
             if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Total watch time must be a non-negative number' });
+                return res.status(400).json({ success: false, message: 'Display like count must be a non-negative integer' });
             }
-            updates.totalWatchTime = parsed;
-            content.totalWatchTime = parsed;
+            updates.displayLikeCount = parsed;
+            content.displayLikeCount = parsed;
         }
-        if (likeCount !== undefined) {
-            const parsed = parseInt(likeCount, 10);
+        if (displayFansGained !== undefined) {
+            const parsed = parseInt(displayFansGained, 10);
             if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Like count must be a non-negative integer' });
+                return res.status(400).json({ success: false, message: 'Display fans gained must be a non-negative integer' });
             }
-            updates.likeCount = parsed;
-            content.likeCount = parsed;
-        }
-        if (dislikeCount !== undefined) {
-            const parsed = parseInt(dislikeCount, 10);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Dislike count must be a non-negative integer' });
-            }
-            updates.dislikeCount = parsed;
-            content.dislikeCount = parsed;
-        }
-        if (duration !== undefined) {
-            const parsed = parseFloat(duration);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Duration must be a non-negative number' });
-            }
-            updates.duration = parsed;
-            content.duration = parsed;
-        }
-        if (fansGained !== undefined || subscribersGained !== undefined) {
-            const parsed = parseInt(fansGained !== undefined ? fansGained : subscribersGained, 10);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Fans gained must be a non-negative integer' });
-            }
-            updates.fansGained = parsed;
-            updates.subscribersGained = parsed;
-            content.fansGained = parsed;
-            content.subscribersGained = parsed;
+            updates.displayFansGained = parsed;
+            content.displayFansGained = parsed;
         }
 
         if (Object.keys(updates).length === 0) {
@@ -1115,13 +1106,24 @@ export const updateContentStats = async (req, res) => {
             target_id: content._id,
             ip: getClientIp(req),
             user_agent: req.headers['user-agent'] || '',
-            note: `Updated content stats: ${JSON.stringify(updates)}`
+            note: `Updated content display stats: ${JSON.stringify(updates)}`
         });
 
         return res.status(200).json({
             success: true,
             message: 'Content stats updated',
-            updates
+            actual: {
+                views: content.views,
+                likeCount: content.likeCount,
+                fansGained: content.fansGained,
+                totalWatchTime: content.totalWatchTime
+            },
+            display: {
+                displayViews: content.displayViews,
+                displayLikeCount: content.displayLikeCount,
+                displayFansGained: content.displayFansGained,
+                displayTotalWatchTime: content.displayTotalWatchTime
+            }
         });
     } catch (error) {
         console.error('Update content stats error:', error);
@@ -1131,12 +1133,13 @@ export const updateContentStats = async (req, res) => {
 
 /**
  * PATCH /admin/creator/:id/stats
- * SuperAdmin: Update creator subscriberCount and totalWatchTime.
+ * SuperAdmin: Update creator's display (artificial) subscriber count.
+ * Only modifies displaySubscriberCount. Actual subscriberCount is never touched.
  */
 export const updateCreatorStats = async (req, res) => {
     try {
         const { id } = req.params;
-        const { subscriberCount, totalWatchTime, totalViews, totalLikes } = req.body;
+        const { displaySubscriberCount } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: 'Invalid creator ID' });
@@ -1149,96 +1152,14 @@ export const updateCreatorStats = async (req, res) => {
 
         const updates = {};
 
-        if (subscriberCount !== undefined) {
-            const parsed = parseInt(subscriberCount, 10);
+        if (displaySubscriberCount !== undefined) {
+            const parsed = parseInt(displaySubscriberCount, 10);
             if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Subscriber count must be a non-negative integer' });
+                return res.status(400).json({ success: false, message: 'Display subscriber count must be a non-negative integer' });
             }
-            user.subscriberCount = parsed;
-            updates.subscriberCount = parsed;
+            user.displaySubscriberCount = parsed;
+            updates.displaySubscriberCount = parsed;
         }
-
-        const contentList = await Content.find({ userId: id, status: { $ne: 'removed' } });
-
-        if (totalViews !== undefined) {
-            const parsed = parseInt(totalViews, 10);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Total views must be a non-negative integer' });
-            }
-            updates.totalViews = parsed;
-            // Distribute views proportionally across content
-            const currentTotal = contentList.reduce((sum, c) => sum + (c.views || 0), 0);
-            if (contentList.length > 0 && currentTotal > 0) {
-                const ratio = parsed / currentTotal;
-                for (const c of contentList) {
-                    c.views = Math.round((c.views || 0) * ratio);
-                    await c.save();
-                }
-            } else if (contentList.length > 0) {
-                const perContent = Math.round(parsed / contentList.length);
-                for (const c of contentList) {
-                    c.views = perContent;
-                    await c.save();
-                }
-            }
-        }
-
-        if (totalLikes !== undefined) {
-            const parsed = parseInt(totalLikes, 10);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Total likes must be a non-negative integer' });
-            }
-            updates.totalLikes = parsed;
-            // Distribute likes proportionally across content
-            const currentTotal = contentList.reduce((sum, c) => sum + (c.likeCount || 0), 0);
-            if (contentList.length > 0 && currentTotal > 0) {
-                const ratio = parsed / currentTotal;
-                for (const c of contentList) {
-                    c.likeCount = Math.round((c.likeCount || 0) * ratio);
-                    await c.save();
-                }
-            } else if (contentList.length > 0) {
-                const perContent = Math.round(parsed / contentList.length);
-                for (const c of contentList) {
-                    c.likeCount = perContent;
-                    await c.save();
-                }
-            }
-        }
-
-        if (totalWatchTime !== undefined) {
-            const parsed = parseFloat(totalWatchTime);
-            if (isNaN(parsed) || parsed < 0) {
-                return res.status(400).json({ success: false, message: 'Total watch time must be a non-negative number' });
-            }
-            updates.totalWatchTime = parsed;
-            // Update the aggregate totalWatchTime on all content by the creator
-            const currentTotal = contentList.reduce((sum, c) => sum + (c.totalWatchTime || 0), 0);
-            if (contentList.length > 0 && currentTotal > 0) {
-                // Scale proportionally
-                const ratio = parsed / currentTotal;
-                for (const c of contentList) {
-                    c.totalWatchTime = Math.round((c.totalWatchTime || 0) * ratio);
-                    // Auto-update averageWatchTime: totalWatchTime / views (or 0 if no views)
-                    c.averageWatchTime = c.views > 0 ? Math.round(c.totalWatchTime / c.views) : 0;
-                    await c.save();
-                }
-            } else if (contentList.length > 0) {
-                // Distribute evenly
-                const perContent = Math.round(parsed / contentList.length);
-                for (const c of contentList) {
-                    c.totalWatchTime = perContent;
-                    c.averageWatchTime = c.views > 0 ? Math.round(perContent / c.views) : 0;
-                    await c.save();
-                }
-            }
-            // Calculate new average watch time across all content
-            const totalViewsNow = contentList.reduce((sum, c) => sum + (c.views || 0), 0);
-            updates.avgWatchTime = totalViewsNow > 0 ? Math.round(parsed / totalViewsNow) : 0;
-        }
-
-        // uniqueViewers field removed — it was a misleading metric
-        // (summed per-content unique viewers instead of truly distinct people)
 
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({ success: false, message: 'No valid fields to update' });
@@ -1253,7 +1174,7 @@ export const updateCreatorStats = async (req, res) => {
             target_id: user._id,
             ip: getClientIp(req),
             user_agent: req.headers['user-agent'] || '',
-            note: `Updated creator stats: ${JSON.stringify(updates)}`
+            note: `Updated creator display stats: ${JSON.stringify(updates)}`
         });
 
         return res.status(200).json({
@@ -1269,9 +1190,9 @@ export const updateCreatorStats = async (req, res) => {
 
 /**
  * POST /admin/creator/:id/stats/reset
- * SuperAdmin: Reset all stat overrides to original computed values.
- * Clears subscriberCountOverride so the real subscriber count is used.
- * Recalculates totalViews, totalLikes, totalWatchTime from actual Content documents.
+ * SuperAdmin: Reset all display (artificial) stats back to actual values.
+ * Resets displaySubscriberCount → subscriberCount on User.
+ * Resets displayViews → views, displayLikeCount → likeCount, etc. on all creator's Content.
  */
 export const resetCreatorStats = async (req, res) => {
     try {
@@ -1286,31 +1207,25 @@ export const resetCreatorStats = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Creator not found' });
         }
 
-        // Recompute real subscriber count and save to cached field
-        const computedSubscriberCount = await User.countDocuments({ subscriptions: id });
-        user.subscriberCount = computedSubscriberCount;
+        // Reset user.displaySubscriberCount = user.subscriberCount
+        user.displaySubscriberCount = user.subscriberCount;
         await user.save();
 
-        // Recompute real content stats from database
-        const [stats] = await Content.aggregate([
-            { $match: { userId: new mongoose.Types.ObjectId(id), status: { $ne: 'removed' } } },
-            {
-                $group: {
-                    _id: null,
-                    totalViews: { $sum: '$views' },
-                    totalLikes: { $sum: '$likeCount' },
-                    totalWatchTime: { $sum: '$totalWatchTime' },
-                    avgWatchTime: { $avg: '$averageWatchTime' }
+        // Reset all content by this creator: display fields = actual fields
+        await Content.updateMany(
+            { userId: id },
+            [{
+                $set: {
+                    displayViews: { $ifNull: ['$views', 0] },
+                    displayLikeCount: { $ifNull: ['$likeCount', 0] },
+                    displayFansGained: { $ifNull: ['$fansGained', 0] },
+                    displayTotalWatchTime: { $ifNull: ['$totalWatchTime', 0] }
                 }
-            }
-        ]);
+            }]
+        );
 
         const resetValues = {
-            subscriberCount: computedSubscriberCount,
-            totalViews: stats?.totalViews || 0,
-            totalLikes: stats?.totalLikes || 0,
-            totalWatchTime: stats?.totalWatchTime || 0,
-            avgWatchTime: stats?.avgWatchTime || 0,
+            displaySubscriberCount: user.subscriberCount
         };
 
         await AdminAuditLog.create({
@@ -1320,16 +1235,72 @@ export const resetCreatorStats = async (req, res) => {
             target_id: user._id,
             ip: getClientIp(req),
             user_agent: req.headers['user-agent'] || '',
-            note: `Reset creator stats to computed values: ${JSON.stringify(resetValues)}`
+            note: `Reset creator and content display stats to actual values: ${JSON.stringify(resetValues)}`
         });
 
         return res.status(200).json({
             success: true,
-            message: 'Creator stats reset to original values',
+            message: 'Creator and content display stats reset to actual values',
             analytics: resetValues
         });
     } catch (error) {
         console.error('Reset creator stats error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
+ * POST /admin/content/:id/stats/reset
+ * Reset single content's display fields back to actual values
+ */
+export const resetContentStats = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid content ID' });
+        }
+
+        const content = await Content.findById(id);
+        if (!content) {
+            return res.status(404).json({ success: false, message: 'Content not found' });
+        }
+
+        content.displayViews = content.views ?? 0;
+        content.displayLikeCount = content.likeCount ?? 0;
+        content.displayFansGained = content.fansGained ?? 0;
+        content.displayTotalWatchTime = content.totalWatchTime ?? 0;
+
+        await content.save();
+
+        await AdminAuditLog.create({
+            admin_id: req.admin._id,
+            action: 'stats_reset',
+            target_type: 'content',
+            target_id: content._id,
+            ip: getClientIp(req),
+            user_agent: req.headers['user-agent'] || '',
+            note: 'Reset content display stats to actual values'
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Content display stats reset to actual values',
+            actual: {
+                views: content.views,
+                likeCount: content.likeCount,
+                fansGained: content.fansGained,
+                totalWatchTime: content.totalWatchTime
+            },
+            display: {
+                displayViews: content.displayViews,
+                displayLikeCount: content.displayLikeCount,
+                displayFansGained: content.displayFansGained,
+                displayTotalWatchTime: content.displayTotalWatchTime
+            }
+        });
+    } catch (error) {
+        console.error('Reset content stats error:', error);
         return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
@@ -1774,7 +1745,9 @@ export const listAllContent = async (req, res) => {
                     _id: null,
                     totalCount: { $sum: 1 },
                     totalViews: { $sum: '$views' },
+                    displayTotalViews: { $sum: '$displayViews' },
                     totalWatchTime: { $sum: '$totalWatchTime' },
+                    displayTotalWatchTime: { $sum: '$displayTotalWatchTime' },
                     uploading: { $sum: { $cond: [{ $eq: ['$status', 'uploading'] }, 1, 0] } },
                     processing: { $sum: { $cond: [{ $eq: ['$status', 'processing'] }, 1, 0] } },
                     completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
@@ -1805,7 +1778,7 @@ export const listAllContent = async (req, res) => {
             }
         ]);
 
-        const stats = statsAgg[0] || { totalCount: 0, totalViews: 0, totalWatchTime: 0, uploading: 0, processing: 0, completed: 0, failed: 0, removed: 0, ppvCount: 0 };
+        const stats = statsAgg[0] || { totalCount: 0, totalViews: 0, displayTotalViews: 0, totalWatchTime: 0, displayTotalWatchTime: 0, uploading: 0, processing: 0, completed: 0, failed: 0, removed: 0, ppvCount: 0 };
         const totalPpvRevenue = overallPpvRevAgg[0] ? overallPpvRevAgg[0].totalPpvRevenue : 0;
 
         return res.status(200).json({
@@ -1814,7 +1787,9 @@ export const listAllContent = async (req, res) => {
             summary: {
                 totalCount: stats.totalCount,
                 totalViews: stats.totalViews,
+                displayTotalViews: stats.displayTotalViews || 0,
                 totalWatchTime: stats.totalWatchTime,
+                displayTotalWatchTime: stats.displayTotalWatchTime ?? 0,
                 statusBreakdown: {
                     uploading: stats.uploading,
                     processing: stats.processing,

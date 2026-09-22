@@ -194,6 +194,12 @@ const ContentSchema = new mongoose.Schema({
         default: 0
     },
 
+    // ── Display/Artificial Fields (admin-editable, shown to public) ──
+    displayViews:               { type: Number, default: 0 },
+    displayLikeCount:           { type: Number, default: 0 },
+    displayFansGained:          { type: Number, default: 0 },
+    displayTotalWatchTime:      { type: Number, default: 0 },
+
     // ============================================
     // VIDEO/SHORTS ANALYTICS
     // ============================================
@@ -323,9 +329,18 @@ ContentSchema.index({ visibility: 1, status: 1 });
 ContentSchema.index({ contentType: 1, status: 1, views: -1 });
 ContentSchema.index({ contentType: 1, visibility: 1, createdAt: -1 });
 
-// Update timestamp on save
+// Update timestamp on save + initialize display fields for new documents
 ContentSchema.pre('save', function (next) {
     this.updatedAt = new Date();
+
+    // For new documents, initialize display fields from actuals if not already set
+    if (this.isNew) {
+        if (this.displayViews === 0 && this.views > 0) this.displayViews = this.views;
+        if (this.displayLikeCount === 0 && this.likeCount > 0) this.displayLikeCount = this.likeCount;
+        if (this.displayFansGained === 0 && this.fansGained > 0) this.displayFansGained = this.fansGained;
+        if (this.displayTotalWatchTime === 0 && this.totalWatchTime > 0) this.displayTotalWatchTime = this.totalWatchTime;
+    }
+
     next();
 });
 

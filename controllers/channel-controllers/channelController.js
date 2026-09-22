@@ -10,7 +10,6 @@
 import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
-import Comment from '../../models/comment.model.js';
 import { getCfUrl, getCfHlsMasterUrl } from '../../config/cloudfront.js';
 import { batchCheckPpvAccess } from '../../utils/ppvGuard.js';
 
@@ -41,7 +40,7 @@ export const getChannelPage = async (req, res) => {
         if (!user) return res.status(404).json({ error: 'Channel not found' });
 
         // Subscriber/follower count — read from cached field (synced on subscribe/unsubscribe)
-        const subscriberCount = user.subscriberCount || 0;
+        const subscriberCount = user.displaySubscriberCount ?? user.subscriberCount ?? 0;
 
         // Check if current user is subscribed
         let isSubscribed = false;
@@ -77,8 +76,8 @@ export const getChannelPage = async (req, res) => {
                 title: item.title,
                 description: item.description,
                 duration: item.duration,
-                views: item.views || 0,
-                likeCount: item.likeCount || 0,
+                views: item.displayViews ?? item.views ?? 0,
+                likeCount: item.displayLikeCount ?? item.likeCount ?? 0,
                 createdAt: item.createdAt,
                 thumbnailUrl: getCfUrl(item.thumbnailKey),
                 imageUrl: getCfUrl(item.imageKey),
@@ -115,8 +114,8 @@ export const getChannelPage = async (req, res) => {
                 title: item.title,
                 description: item.description,
                 duration: item.duration,
-                views: item.views || 0,
-                likeCount: item.likeCount || 0,
+                views: item.displayViews ?? item.views ?? 0,
+                likeCount: item.displayLikeCount ?? item.likeCount ?? 0,
                 createdAt: item.createdAt,
                 thumbnailUrl: getCfUrl(item.thumbnailKey),
                 imageUrl: getCfUrl(item.imageKey),
@@ -138,7 +137,7 @@ export const getChannelPage = async (req, res) => {
         // Total views aggregation across creator's content
         const viewsAgg = await Content.aggregate([
             { $match: { userId: user._id } },
-            { $group: { _id: null, totalViews: { $sum: '$views' } } }
+            { $group: { _id: null, totalViews: { $sum: { $ifNull: ['$displayViews', '$views'] } } } }
         ]);
         const totalViews = viewsAgg[0]?.totalViews || 0;
 
@@ -230,8 +229,8 @@ export const getChannelContent = async (req, res) => {
                 description: item.description,
                 postContent: item.postContent,
                 duration: item.duration,
-                views: item.views || 0,
-                likeCount: item.likeCount || 0,
+                views: item.displayViews ?? item.views ?? 0,
+                likeCount: item.displayLikeCount ?? item.likeCount ?? 0,
                 createdAt: item.createdAt,
                 thumbnailUrl: getCfUrl(item.thumbnailKey),
                 imageUrl: getCfUrl(item.imageKey),
@@ -338,7 +337,7 @@ export const getChannelFollowers = async (req, res) => {
             channelName: f.channelName,
             channelHandle: f.channelHandle,
             channelPicture: f.channelPicture ? getCfUrl(f.channelPicture) : null,
-            followerCount: f.subscriberCount || 0
+            followerCount: f.displaySubscriberCount ?? f.subscriberCount ?? 0
         }));
 
         // Sort by follower count and take top 20

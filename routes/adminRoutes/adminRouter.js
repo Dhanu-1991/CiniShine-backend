@@ -11,7 +11,7 @@ import {
     hideContent, removeContent, restoreContent, deleteContent,
     listArchive, getContentDetails, getCreatorAnalytics, searchCreators,
     getCreatorProfile, getCreatorStudio, banChannel, unbanChannel, requestBanChannel,
-    updateContentStats, updateCreatorStats, resetCreatorStats, listPpvContent,
+    updateContentStats, updateCreatorStats, resetCreatorStats, resetContentStats, listPpvContent,
     listAllContent, getContentDetailedAnalytics
 } from '../../controllers/admin-controllers/adminContentController.js';
 import {
@@ -213,6 +213,7 @@ adminRouter.post('/creator/:id/ban', requireSuperAdmin, banChannel);
 adminRouter.post('/creator/:id/unban', requireSuperAdmin, unbanChannel);
 adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);
 adminRouter.patch('/creator/:id/stats', requireSuperAdmin, updateCreatorStats);
+adminRouter.post('/content/:id/stats/reset', requireSuperAdmin, resetContentStats);
 adminRouter.post('/creator/:id/stats/reset', requireSuperAdmin, resetCreatorStats);
 adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
 adminRouter.post('/analytics/aggregate', requireSuperAdmin, runAggregation);

@@ -19,7 +19,6 @@
 import mongoose from 'mongoose';
 import Content from '../../models/content.model.js';
 import User from '../../models/user.model.js';
-import WatchHistory from '../../models/watchHistory.model.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { watchHistoryEngine } from '../../algorithms/watchHistoryRecommendation.js';
@@ -102,15 +101,13 @@ export const shortUploadInit = async (req, res) => {
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
-        console.log(`ðŸ“¤ Short upload initialized: ${fileId} for user ${userId}`);
-
         res.json({
             uploadUrl,
             fileId: fileId.toString(),
             key
         });
     } catch (error) {
-        console.error('âŒ Error initializing short upload:', error);
+        console.error('Ã¢ÂÅ’ Error initializing short upload:', error);
         res.status(500).json({ error: 'Failed to initialize upload' });
     }
 };
@@ -160,15 +157,13 @@ export const shortUploadComplete = async (req, res) => {
 
         await Content.findByIdAndUpdate(fileId, updateData);
 
-        console.log(`âœ… Short upload completed: ${fileId}`);
-
         res.json({
             success: true,
             message: 'Short uploaded successfully, processing started',
             contentId: fileId
         });
     } catch (error) {
-        console.error('âŒ Error completing short upload:', error);
+        console.error('Ã¢ÂÅ’ Error completing short upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
     }
 };
@@ -230,15 +225,13 @@ export const audioUploadInit = async (req, res) => {
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
-        console.log(`ðŸ“¤ Audio upload initialized: ${fileId} for user ${userId}`);
-
         res.json({
             uploadUrl,
             fileId: fileId.toString(),
             key
         });
     } catch (error) {
-        console.error('âŒ Error initializing audio upload:', error);
+        console.error('Ã¢ÂÅ’ Error initializing audio upload:', error);
         res.status(500).json({ error: 'Failed to initialize upload' });
     }
 };
@@ -290,15 +283,13 @@ export const audioUploadComplete = async (req, res) => {
 
         await Content.findByIdAndUpdate(fileId, updateData);
 
-        console.log(`âœ… Audio upload completed: ${fileId}`);
-
         res.json({
             success: true,
             message: 'Audio uploaded successfully',
             contentId: fileId
         });
     } catch (error) {
-        console.error('âŒ Error completing audio upload:', error);
+        console.error('Ã¢ÂÅ’ Error completing audio upload:', error);
         res.status(500).json({ error: 'Failed to complete upload' });
     }
 };
@@ -344,15 +335,13 @@ export const postImageInit = async (req, res) => {
 
         const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
 
-        console.log(`ðŸ“¤ Post image upload initialized: ${fileId} for user ${userId}`);
-
         res.json({
             uploadUrl,
             fileId: key, // Return the S3 key as fileId for posts
             key
         });
     } catch (error) {
-        console.error('âŒ Error initializing post image upload:', error);
+        console.error('Ã¢ÂÅ’ Error initializing post image upload:', error);
         res.status(500).json({ error: 'Failed to initialize image upload' });
     }
 };
@@ -415,8 +404,6 @@ export const createPost = async (req, res) => {
             publishedAt: new Date()
         });
 
-        console.log(`âœ… Post created: ${fileId} by user ${userId}`);
-
         // Link content to communities if requested
         const postToCommunities = req.body.postToCommunities;
         if (postToCommunities && Array.isArray(postToCommunities) && postToCommunities.length > 0) {
@@ -450,7 +437,7 @@ export const createPost = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('âŒ Error creating post:', error);
+        console.error('Ã¢ÂÅ’ Error creating post:', error);
         res.status(500).json({ error: 'Failed to create post' });
     }
 };
@@ -511,15 +498,13 @@ export const uploadThumbnail = async (req, res) => {
             thumbnailSource: 'custom'
         });
 
-        console.log(`âœ… Custom thumbnail uploaded for content: ${contentId}`);
-
         res.json({
             success: true,
             message: 'Thumbnail uploaded successfully',
             thumbnailKey
         });
     } catch (error) {
-        console.error('âŒ Error uploading thumbnail:', error);
+        console.error('Ã¢ÂÅ’ Error uploading thumbnail:', error);
         res.status(500).json({ error: 'Failed to upload thumbnail' });
     }
 };
@@ -581,9 +566,9 @@ export const getContent = async (req, res) => {
             imageUrl,
             audioUrl: ppvAllowed ? audioUrl : null,
             status: content.status,
-            views: content.views,
-            likeCount: content.likeCount,
-            dislikeCount: content.dislikeCount,
+            views: content.displayViews ?? content.views ?? 0,
+            likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+            dislikeCount: content.dislikeCount ?? 0,
             createdAt: content.createdAt,
             user: content.userId,
             channelName: content.channelName,
@@ -598,7 +583,7 @@ export const getContent = async (req, res) => {
             ...(!ppvAllowed ? { ppvRequired: true } : {})
         });
     } catch (error) {
-        console.error('âŒ Error fetching content:', error);
+        console.error('Ã¢ÂÅ’ Error fetching content:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -641,7 +626,7 @@ export const getFeedContent = async (req, res) => {
                 const thumbnailUrl = getCfUrl(content.thumbnailKey);
                 const imageUrl = getCfUrl(content.imageKey);
 
-                // âœ… ADD: Get comment count
+                // Ã¢Å“â€¦ ADD: Get comment count
                 const commentCount = await Comment.countDocuments({
                     videoId: content._id,
                     onModel: 'Content',
@@ -657,9 +642,9 @@ export const getFeedContent = async (req, res) => {
                     duration: content.duration,
                     thumbnailUrl,
                     imageUrl,
-                    views: content.views,
-                    likeCount: content.likeCount,
-                    commentCount, // âœ… ADD
+                    views: content.displayViews ?? content.views ?? 0,
+                    likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+                    commentCount, // Ã¢Å“â€¦ ADD
                     createdAt: content.createdAt,
                     user: content.userId,
                     channelName: content.channelName
@@ -677,7 +662,7 @@ export const getFeedContent = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('âŒ Error fetching feed:', error);
+        console.error('Ã¢ÂÅ’ Error fetching feed:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 };
@@ -721,12 +706,9 @@ export const getShortsPlayerFeed = async (req, res) => {
             ? excludeIds.split(',').filter(id => mongoose.Types.ObjectId.isValid(id))
             : [];
 
-        console.log(`ðŸ“¥ [ShortsPlayerFeed] Request - userId: ${userId}, page: ${page}, currentShortId: ${currentShortId}, excludeCount: ${excludeIdArray.length}`);
-
         // If starting from a specific short, fetch that first
         let startingShort = null;
         if (currentShortId && mongoose.Types.ObjectId.isValid(currentShortId)) {
-            console.log(`ðŸ“¥ [ShortsPlayerFeed] Fetching starting short: ${currentShortId}`);
 
             const content = await Content.findById(currentShortId)
                 .populate('userId', 'userName channelName channelHandle channelPicture');
@@ -738,7 +720,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                 const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
                 const videoUrl = getCfUrl(videoKey);
 
-                // âœ… ADD: Get comment count for starting short
+                // Ã¢Å“â€¦ ADD: Get comment count for starting short
                 const Comment = (await import('../../models/comment.model.js')).default;
                 const commentCount = await Comment.countDocuments({
                     videoId: content._id,
@@ -758,9 +740,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                     thumbnailUrl,
                     hlsMasterUrl: ppvAllowed ? hlsMasterUrl : null,
                     videoUrl: ppvAllowed ? videoUrl : null,
-                    views: content.views,
-                    likeCount: content.likeCount || 0,
-                    commentCount, // âœ… ADD
+                    views: content.displayViews ?? content.views ?? 0,
+                    likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+                    commentCount, // Ã¢Å“â€¦ ADD
                     createdAt: content.createdAt,
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
@@ -771,8 +753,6 @@ export const getShortsPlayerFeed = async (req, res) => {
                     price: content.price,
                     ...(!ppvAllowed ? { ppvRequired: true } : {})
                 };
-
-                console.log(`âœ… [ShortsPlayerFeed] Starting short found - views: ${content.views}, likes: ${content.likeCount}`);
             }
         }
 
@@ -785,7 +765,6 @@ export const getShortsPlayerFeed = async (req, res) => {
         ];
 
         if (userId) {
-            console.log(`ðŸ“¥ [ShortsPlayerFeed] Getting personalized recommendations for user: ${userId}`);
             // Personalized recommendations
             const recommendations = await watchHistoryEngine.getRecommendations(
                 userId,
@@ -793,9 +772,7 @@ export const getShortsPlayerFeed = async (req, res) => {
                 { page: parseInt(page), limit: parseInt(limit), excludeIds: allExcludeIds }
             );
             shorts = recommendations.content;
-            console.log(`âœ… [ShortsPlayerFeed] Got ${shorts.length} personalized shorts`);
         } else {
-            console.log(`ðŸ“¥ [ShortsPlayerFeed] Fetching default shorts (no user)`);
             // Fallback to popular/recent shorts
             const skip = (parseInt(page) - 1) * parseInt(limit);
             const contents = await Content.find({
@@ -809,14 +786,14 @@ export const getShortsPlayerFeed = async (req, res) => {
                 .skip(skip)
                 .limit(parseInt(limit));
 
-            // âœ… ADD: Import Comment model once at the top
+            // Ã¢Å“â€¦ ADD: Import Comment model once at the top
             const Comment = (await import('../../models/comment.model.js')).default;
 
             shorts = await Promise.all(contents.map(async (content) => {
                 const hlsMasterUrl = content.hlsMasterKey ? getCfHlsMasterUrl(content.hlsMasterKey) : null;
                 const videoKey = content.hlsMasterKey || content.processedKey || content.originalKey;
 
-                // âœ… GET comment count for each short
+                // Ã¢Å“â€¦ GET comment count for each short
                 const commentCount = await Comment.countDocuments({
                     videoId: content._id,
                     onModel: 'Content',
@@ -832,9 +809,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                     thumbnailUrl: getCfUrl(content.thumbnailKey),
                     hlsMasterUrl,
                     videoUrl: getCfUrl(videoKey),
-                    views: content.views,
-                    likeCount: content.likeCount || 0,
-                    commentCount, // âœ… ADD
+                    views: content.displayViews ?? content.views ?? 0,
+                    likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+                    commentCount, // Ã¢Å“â€¦ ADD
                     channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
                     channelHandle: content.userId?.channelHandle || null,
                     channelPicture: getCfUrl(content.userId?.channelPicture),
@@ -844,11 +821,9 @@ export const getShortsPlayerFeed = async (req, res) => {
                     price: content.price
                 };
             }));
-
-            console.log(`âœ… [ShortsPlayerFeed] Fetched ${shorts.length} default shorts`);
         }
 
-        // âœ… ADD: Attach comment counts for personalized shorts too (if using recommendations)
+        // Ã¢Å“â€¦ ADD: Attach comment counts for personalized shorts too (if using recommendations)
         if (userId && shorts.length > 0) {
             shorts = await attachCommentCounts(shorts);
         }
@@ -884,7 +859,7 @@ export const getShortsPlayerFeed = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('âŒ Error fetching shorts feed:', error);
+        console.error('Ã¢ÂÅ’ Error fetching shorts feed:', error);
         res.status(500).json({ error: 'Failed to fetch shorts' });
     }
 };
@@ -977,7 +952,7 @@ export const getAudioPlayerFeed = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('âŒ Error fetching audio feed:', error);
+        console.error('Ã¢ÂÅ’ Error fetching audio feed:', error);
         res.status(500).json({ error: 'Failed to fetch audio' });
     }
 };
@@ -986,7 +961,7 @@ export const getAudioPlayerFeed = async (req, res) => {
  * Helper function to format audio content with signed URLs
  */
 async function formatAudioContent(content) {
-    // âœ… ADD: Import Comment model
+    // Ã¢Å“â€¦ ADD: Import Comment model
     const Comment = (await import('../../models/comment.model.js')).default;
 
     const thumbnailKey = content.thumbnailKey || content.imageKey;
@@ -994,7 +969,7 @@ async function formatAudioContent(content) {
     const audioKey = content.processedKey || content.originalKey;
     const audioUrl = getCfUrl(audioKey);
 
-    // âœ… ADD: Get comment count
+    // Ã¢Å“â€¦ ADD: Get comment count
     const commentCount = await Comment.countDocuments({
         videoId: content._id,
         onModel: 'Content',
@@ -1009,9 +984,9 @@ async function formatAudioContent(content) {
         duration: content.duration,
         thumbnailUrl,
         audioUrl,
-        views: content.views || 0,
-        likeCount: content.likeCount || 0,
-        commentCount, // âœ… ADD
+        views: content.displayViews ?? content.views ?? 0,
+        likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+        commentCount, // Ã¢Å“â€¦ ADD
         createdAt: content.createdAt,
         channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
         channelHandle: content.userId?.channelHandle || null,
@@ -1057,7 +1032,7 @@ export const getSingleContent = async (req, res) => {
             }
         }
 
-        // âœ… ADD: Get comment count
+        // Ã¢Å“â€¦ ADD: Get comment count
         const Comment = (await import('../../models/comment.model.js')).default;
         const commentCount = await Comment.countDocuments({
             videoId: content._id,
@@ -1108,9 +1083,9 @@ export const getSingleContent = async (req, res) => {
             hlsMasterUrl: ppvAllowed ? hlsMasterUrl : null,
             videoUrl: ppvAllowed ? (content.contentType === 'short' ? mediaUrl : null) : null,
             audioUrl: ppvAllowed ? (content.contentType === 'audio' ? mediaUrl : null) : null,
-            views: content.views,
-            likeCount: content.likeCount || 0,
-            commentCount, // âœ… ADD
+            views: content.displayViews ?? content.views ?? 0,
+            likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
+            commentCount, // Ã¢Å“â€¦ ADD
             createdAt: content.createdAt,
             channelName: content.channelName || content.userId?.channelName || content.userId?.userName,
             channelHandle: content.userId?.channelHandle || null,
@@ -1127,7 +1102,7 @@ export const getSingleContent = async (req, res) => {
             ...(!ppvAllowed ? { ppvRequired: true } : {})
         });
     } catch (error) {
-        console.error('âŒ Error fetching content:', error);
+        console.error('Ã¢ÂÅ’ Error fetching content:', error);
         res.status(500).json({ error: 'Failed to fetch content' });
     }
 };
@@ -1144,7 +1119,7 @@ export const getSingleContent = async (req, res) => {
  * Helper to format post with signed URLs
  */
 async function formatPostWithUrls(post) {
-    // âœ… ADD: Import Comment model
+    // Ã¢Å“â€¦ ADD: Import Comment model
     const Comment = (await import('../../models/comment.model.js')).default;
 
     const thumbnailUrl = getCfUrl(post.thumbnailKey);
@@ -1160,7 +1135,7 @@ async function formatPostWithUrls(post) {
         imageUrls = [imageUrl];
     }
 
-    // âœ… ADD: Get comment count
+    // Ã¢Å“â€¦ ADD: Get comment count
     const commentCount = await Comment.countDocuments({
         videoId: post._id,
         onModel: 'Content',
@@ -1176,9 +1151,9 @@ async function formatPostWithUrls(post) {
         thumbnailUrl,
         imageUrl: imageUrl || thumbnailUrl,
         imageUrls,
-        views: post.views,
-        likeCount: post.likeCount || 0,
-        commentCount, // âœ… ADD
+        views: post.displayViews ?? post.views ?? 0,
+        likeCount: post.displayLikeCount ?? post.likeCount ?? 0,
+        commentCount, // Ã¢Å“â€¦ ADD
         createdAt: post.createdAt,
         channelName: post.channelName || post.userId?.channelName || post.userId?.userName,
         channelHandle: post.userId?.channelHandle || null,

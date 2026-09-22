@@ -158,6 +158,8 @@ const userSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    // Display/Artificial subscriber count (admin-editable, shown to public)
+    displaySubscriberCount: { type: Number, default: 0 },
     // Admin channel ban
     channelBanned: {
         type: Boolean,

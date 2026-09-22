@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+﻿import crypto from 'crypto';
 import mongoose from 'mongoose';
 import Content from '../models/content.model.js';
 import ContentView from '../models/contentView.model.js';
@@ -132,7 +132,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     // check eventId here because the same watch session can legitimately arrive via
     // multiple API paths (analytics batch queue AND direct /watch-time endpoint).
     // An eventId-based check would cause one path to early-return, skipping the view
-    // counting logic entirely — which was the root cause of anonymous views not being counted.
+    // counting logic entirely â€” which was the root cause of anonymous views not being counted.
 
     if (!contentRecord.duration && contentDuration > 0) {
         await Content.updateOne(
@@ -142,7 +142,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     }
 
     const consumptionPercent = resolveCompletionRate(contentDuration, playheadSeconds);
-    // ── Content-type specific fields ──
+    // â”€â”€ Content-type specific fields â”€â”€
     const typeSpecific = {};
     const contentTypeInc = {};
     const contentType = contentRecord.contentType;
@@ -164,7 +164,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         if (typeSpecific.clickedThrough) contentTypeInc.clickThroughCount = 1;
     }
 
-    // ── Upsert ContentWatchtime by watchSessionId + contentId ──
+    // â”€â”€ Upsert ContentWatchtime by watchSessionId + contentId â”€â”€
     // The frontend sends CUMULATIVE activePlayTime on every heartbeat,
     // so we use $max to store only the highest value per watch session
     // instead of creating a new record per heartbeat event.
@@ -172,7 +172,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         ? { watchSessionId, contentId: contentRecord._id }
         : { eventId }; // fallback to eventId if no watchSessionId
 
-    // ── RACE-SAFE delta computation ──
+    // â”€â”€ RACE-SAFE delta computation â”€â”€
     // Use findOneAndUpdate with new:false to atomically read the PREVIOUS state
     // and write the update in a single MongoDB operation. This prevents the race
     // where two concurrent heartbeats both read the same old value and both
@@ -204,7 +204,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                     device,
                     ...typeSpecific,
                 },
-                // Use $max for cumulative fields — frontend sends running totals
+                // Use $max for cumulative fields â€” frontend sends running totals
                 $max: {
                     activePlayTime,
                 },
@@ -219,7 +219,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         );
     } catch (error) {
         if (error?.code === 11000) {
-            // Concurrent insert for same {watchSessionId, contentId} — retry as update
+            // Concurrent insert for same {watchSessionId, contentId} â€” retry as update
             try {
                 previousDoc = await ContentWatchtime.findOneAndUpdate(
                     sessionUpsertKey,
@@ -250,7 +250,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                     { upsert: false, new: false }
                 );
             } catch (retryErr) {
-                // If retry also fails, log but don't crash — data will self-correct on next heartbeat
+                // If retry also fails, log but don't crash â€” data will self-correct on next heartbeat
                 console.error('[ContentWatchtime] E11000 retry failed:', retryErr.message);
                 return { success: true, duplicate: true, viewCounted: false };
             }
@@ -280,6 +280,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
     const contentIncs = {};
     if (activePlayTimeDelta > 0) {
         contentIncs.totalWatchTime = activePlayTimeDelta;
+        contentIncs.displayTotalWatchTime = activePlayTimeDelta;
     }
 
     // Running average completion: only increment sum/count when a session ends
@@ -318,8 +319,8 @@ export async function recordWatchSignal({ req, content, contentId, event, device
 
     let viewCounted = false;
     if (shouldCountView) {
-        // ── Atomic view counting ──
-        // Simple filter: viewer identity + session dedup. NO $or clause — using
+        // â”€â”€ Atomic view counting â”€â”€
+        // Simple filter: viewer identity + session dedup. NO $or clause â€” using
         // $or with findOneAndUpdate+upsert breaks MongoDB's partial unique index
         // matching, causing the query to always miss the existing document.
         const sessionFilter = {
@@ -352,13 +353,13 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         // We need the pre-update doc for two things:
         //   1. The multi-tab cooldown guard (was a view counted very recently by another tab?)
         //   2. isFirstEverView check (viewCount === 0 before the $inc means this is their 1st view)
-        // For fresh inserts (no pre-existing doc), new:false returns null — we track that
+        // For fresh inserts (no pre-existing doc), new:false returns null â€” we track that
         // separately with wasNewInsert to avoid conflating "new insert" with "session dedup skip".
         let result = null;
         let wasNewInsert = false;
         try {
             result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: true, new: false });
-            // If result is null after an upsert, it means the document didn't exist before —
+            // If result is null after an upsert, it means the document didn't exist before â€”
             // a new doc was just inserted (this is their first-ever view for this content).
             if (result === null) {
                 wasNewInsert = true;
@@ -370,35 +371,31 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                 try {
                     result = await ContentView.findOneAndUpdate(sessionFilter, viewerUpdate, { upsert: false, new: false });
                 } catch (retryErr) {
-                    console.error(`❌ [ViewCount] E11000 retry failed:`, retryErr.message);
+                    console.error(`âŒ [ViewCount] E11000 retry failed:`, retryErr.message);
                 }
             } else {
                 throw err;
             }
         }
 
-        // ── wasNewInsert: first-ever view for this viewer on this content ──
-        // No cooldown check needed — they had no prior ContentView record at all.
+        // â”€â”€ wasNewInsert: first-ever view for this viewer on this content â”€â”€
+        // No cooldown check needed â€” they had no prior ContentView record at all.
         if (wasNewInsert) {
             const contentInc = watcherIsAuthenticated
-                ? { views: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
-                : { views: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
+                ? { views: 1, displayViews: 1, authenticatedViews: 1, authenticatedUniqueViewers: 1 }
+                : { views: 1, displayViews: 1, anonymousViews: 1, anonymousUniqueViewers: 1 };
 
             await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
             viewCounted = true;
-
-            if (!watcherIsAuthenticated) {
-                console.log(`✅ [ViewCount] anonymous view COUNTED (new viewer) | contentInc=${JSON.stringify(contentInc)}`);
-            }
         } else if (result !== null) {
             // Existing viewer, new watch session.
-            // result is PRE-update doc (new:false) — check multi-tab cooldown.
+            // result is PRE-update doc (new:false) â€” check multi-tab cooldown.
             const VIEW_COOLDOWN_MS = 30_000;
             const prevCountedAt = result.lastCountedAt;
             const tooSoon = prevCountedAt && (now.getTime() - new Date(prevCountedAt).getTime()) < VIEW_COOLDOWN_MS;
 
             if (tooSoon) {
-                // Another tab counted a view very recently — roll back the $inc we just applied.
+                // Another tab counted a view very recently â€” roll back the $inc we just applied.
                 await ContentView.updateOne(viewerQuery, {
                     $inc: { viewCount: -1 },
                     $set: {
@@ -406,31 +403,19 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                         lastCountedAt: result.lastCountedAt,
                     },
                 });
-                if (!watcherIsAuthenticated) {
-                    console.log(`⏭️ [ViewCount] anonymous view ROLLED BACK (multi-tab cooldown, last counted ${Math.round((now.getTime() - new Date(prevCountedAt).getTime()) / 1000)}s ago)`);
-                }
             } else {
                 // result.viewCount is PRE-update, so === 0 means this is their 1st ever counted view.
                 const isFirstEverView = (result.viewCount || 0) === 0;
                 const contentInc = watcherIsAuthenticated
-                    ? { views: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
-                    : { views: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
+                    ? { views: 1, displayViews: 1, authenticatedViews: 1, ...(isFirstEverView && { authenticatedUniqueViewers: 1 }) }
+                    : { views: 1, displayViews: 1, anonymousViews: 1, ...(isFirstEverView && { anonymousUniqueViewers: 1 }) };
 
                 await Content.updateOne({ _id: contentRecord._id }, { $inc: contentInc, $set: { lastViewedAt: now } });
                 viewCounted = true;
-
-                if (!watcherIsAuthenticated) {
-                    console.log(`✅ [ViewCount] anonymous view COUNTED | viewCount=${(result.viewCount || 0) + 1} | contentInc=${JSON.stringify(contentInc)}`);
-                }
-            }
-        } else {
-            // sessionFilter didn't match → same watchSessionId already counted → correct dedup
-            if (!watcherIsAuthenticated) {
-                console.log(`⏭️ [ViewCount] anonymous view SKIPPED (session already counted)`);
             }
         }
     } else {
-        // Below threshold — just update playhead position for resume, no view count
+        // Below threshold â€” just update playhead position for resume, no view count
         try {
             await ContentView.updateOne(
                 viewerQuery,
@@ -458,7 +443,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
         }
     }
 
-    // ── Upsert WatchHistory for authenticated users ──
+    // â”€â”€ Upsert WatchHistory for authenticated users â”€â”€
     if (watcherIsAuthenticated) {
         try {
             const user = await (await import('../models/user.model.js')).default.findById(userId, 'historyPaused');
@@ -499,7 +484,7 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                         device: device,
                         completedWatch: isCompleted
                     };
-                    // $slice:-100 enforces the 100-item cap atomically in MongoDB —
+                    // $slice:-100 enforces the 100-item cap atomically in MongoDB â€”
                     // no separate count + find + deleteMany round-trips needed.
                     historyUpdate.$push = {
                         sessions: {
@@ -515,9 +500,9 @@ export async function recordWatchSignal({ req, content, contentId, event, device
                     { upsert: true }
                 );
 
-                // ── Cap total WatchHistory per user at 100 items ──
+                // â”€â”€ Cap total WatchHistory per user at 100 items â”€â”€
                 // Use $slice on the history collection atomically rather than
-                // count + find + deleteMany (3 round-trips → 0 extra round-trips).
+                // count + find + deleteMany (3 round-trips â†’ 0 extra round-trips).
                 // We rely on a TTL/capped collection or a background job instead.
                 // For now: only run cleanup on session-end events to minimise overhead.
                 if (isSessionEnd) {
