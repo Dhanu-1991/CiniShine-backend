@@ -73,7 +73,7 @@ export const getMyContent = async (req, res) => {
 
         let sortBy = { createdAt: -1 };
         if (sort === 'popular') {
-            sortBy = { views: -1, likeCount: -1 };
+            sortBy = { displayViews: -1, views: -1, likeCount: -1 };
         } else if (sort === 'oldest') {
             sortBy = { createdAt: 1 };
         } else if (sort === 'ppv') {
@@ -105,15 +105,19 @@ export const getMyContent = async (req, res) => {
                 description: item.description,
                 postContent: item.postContent,
                 duration: item.duration,
-                views: item.views || 0,
-                likeCount: item.likeCount || 0,
+                views: item.displayViews ?? item.views ?? 0,
+                displayViews: item.displayViews ?? item.views ?? 0,
+                likeCount: item.displayLikeCount ?? item.likeCount ?? 0,
+                displayLikeCount: item.displayLikeCount ?? item.likeCount ?? 0,
                 dislikeCount: item.dislikeCount || 0,
                 shareCount: item.shareCount || 0,
-                fansGained: item.fansGained || item.subscribersGained || 0,
-                subscribersGained: item.subscribersGained || item.fansGained || 0,
+                fansGained: item.displayFansGained ?? item.fansGained ?? item.subscribersGained ?? 0,
+                displayFansGained: item.displayFansGained ?? item.fansGained ?? item.subscribersGained ?? 0,
+                subscribersGained: item.displayFansGained ?? item.subscribersGained ?? item.fansGained ?? 0,
                 commentCount,
                 averageWatchTime: item.averageWatchTime || 0,
-                totalWatchTime: item.totalWatchTime || 0,
+                totalWatchTime: item.displayTotalWatchTime ?? item.totalWatchTime ?? 0,
+                displayTotalWatchTime: item.displayTotalWatchTime ?? item.totalWatchTime ?? 0,
                 status: item.status,
                 visibility: item.visibility,
                 isPayPerView: Boolean(item.isPayPerView || item.visibility === 'pay_per_view' || (item.ppvPrice > 0)),
@@ -499,7 +503,7 @@ export const getProfileSettings = async (req, res) => {
         if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
         const user = await User.findById(userId).select(
-            'contact userName channelName channelHandle channelDescription bio roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount primaryRole activeSince worksCount bestKnownFor workExperience createdAt'
+            'contact userName channelName channelHandle channelDescription bio roles profilePicture channelPicture historyPaused subscriptions channelBanned subscriberCount displaySubscriberCount primaryRole activeSince worksCount bestKnownFor workExperience createdAt'
         ).populate('subscriptions', 'channelName channelHandle profilePicture channelPicture');
 
         if (!user) return res.status(404).json({ error: 'User not found' });
@@ -519,15 +523,24 @@ export const getProfileSettings = async (req, res) => {
         const counts = { video: 0, short: 0, audio: 0, post: 0 };
         contentCounts.forEach(c => { counts[c._id] = c.count; });
 
-        // Total views aggregation across creator's content
-        const viewsAgg = await Content.aggregate([
+        // Total stats aggregation across creator's content (using display fields with fallback)
+        const statsAgg = await Content.aggregate([
             { $match: { userId: user._id } },
-            { $group: { _id: null, totalViews: { $sum: '$views' } } }
+            {
+                $group: {
+                    _id: null,
+                    totalViews: { $sum: { $ifNull: ['$displayViews', '$views'] } },
+                    totalLikes: { $sum: { $ifNull: ['$displayLikeCount', '$likeCount'] } },
+                    totalWatchTime: { $sum: { $ifNull: ['$displayTotalWatchTime', '$totalWatchTime'] } }
+                }
+            }
         ]);
-        const totalViews = viewsAgg[0]?.totalViews || 0;
+        const totalViews = statsAgg[0]?.totalViews || 0;
+        const totalLikes = statsAgg[0]?.totalLikes || 0;
+        const totalWatchTime = statsAgg[0]?.totalWatchTime || 0;
 
         // Subscriber count from cached field (consistent with channel / account page)
-        const subscriberCount = user.subscriberCount || 0;
+        const subscriberCount = user.displaySubscriberCount ?? user.subscriberCount ?? 0;
 
         // For subscriptions avoid expensive S3 head/URL checks — return stored picture key/url as-is.
         const subscriptions = (user.subscriptions || []).slice(0, 20).map((sub) => ({
@@ -553,12 +566,15 @@ export const getProfileSettings = async (req, res) => {
                 bestKnownFor: user.bestKnownFor || '',
                 workExperience: user.workExperience || [],
                 totalViews,
+                totalLikes,
+                totalWatchTime,
                 channelPicture: channelPictureUrl || user.channelPicture,
                 profilePicture: profilePictureUrl || user.profilePicture,
                 historyPaused: user.historyPaused || false,
                 channelBanned: user.channelBanned || false,
                 contentCounts: counts,
                 subscriberCount,
+                displaySubscriberCount: subscriberCount,
                 subscriptions,
                 createdAt: user.createdAt || (user._id?.getTimestamp ? user._id.getTimestamp() : null),
             }
@@ -844,8 +860,8 @@ export const getContentAnalytics = async (req, res) => {
             ? watchEntries.reduce((acc, e) => acc + (e.watchPercentage || 0), 0) / watchEntries.length
             : 0;
 
-        const totalViews = content.views || 0;
-        const totalLikes = Math.max(content.likeCount || 0, likes || 0);
+        const totalViews = content.displayViews ?? content.views ?? 0;
+        const totalLikes = content.displayLikeCount ?? Math.max(content.likeCount || 0, likes || 0);
         const totalDislikes = Math.max(content.dislikeCount || 0, dislikes || 0);
         const totalShares = Math.max(content.shareCount || 0, sharesCount || 0);
         const totalComments = commentCount;
@@ -906,11 +922,11 @@ export const getContentAnalytics = async (req, res) => {
                 dislikes: totalDislikes,
                 shares: totalShares,
                 shareCount: totalShares,
-                fansGained: content.fansGained || content.subscribersGained || 0,
-                subscribersGained: content.subscribersGained || content.fansGained || 0,
+                fansGained: content.displayFansGained ?? content.fansGained ?? content.subscribersGained ?? 0,
+                subscribersGained: content.displayFansGained ?? content.subscribersGained ?? content.fansGained ?? 0,
                 commentCount: totalComments,
                 averageWatchTime: content.averageWatchTime || 0,
-                totalWatchTime: content.totalWatchTime || 0,
+                totalWatchTime: content.displayTotalWatchTime ?? content.totalWatchTime ?? 0,
                 completionRate: completionRate === null ? null : parseFloat(Number(completionRate).toFixed(1)),
                 avgWatchPercentage: parseFloat(avgWatchPercent.toFixed(1)),
                 totalWatchSessions,

@@ -229,11 +229,11 @@ export const subscribeToUser = async (req, res) => {
                 }).catch(err => console.error("Error updating content subscribersGained:", err));
             }
 
-            const updatedTarget = await User.findById(targetUserId).select('subscriberCount');
+            const updatedTarget = await User.findById(targetUserId).select('subscriberCount displaySubscriberCount');
             res.json({
                 message: "Unsubscribed successfully",
                 subscribed: false,
-                subscriberCount: updatedTarget?.subscriberCount || 0
+                subscriberCount: updatedTarget?.displaySubscriberCount ?? updatedTarget?.subscriberCount ?? 0
             });
         } else {
             // Subscribe — use $addToSet to prevent duplicate entries
@@ -250,11 +250,11 @@ export const subscribeToUser = async (req, res) => {
                 }).catch(err => console.error("Error updating content subscribersGained:", err));
             }
 
-            const updatedTarget = await User.findById(targetUserId).select('subscriberCount');
+            const updatedTarget = await User.findById(targetUserId).select('subscriberCount displaySubscriberCount');
             res.json({
                 message: "Subscribed successfully",
                 subscribed: true,
-                subscriberCount: updatedTarget?.subscriberCount || 0
+                subscriberCount: updatedTarget?.displaySubscriberCount ?? updatedTarget?.subscriberCount ?? 0
             });
         }
 

@@ -80,8 +80,8 @@ export const getVideo = async (req, res) => {
         }));
 
         // Get subscriber/follower count from cached field (synced on subscribe/unsubscribe)
-        const creator = await User.findById(video.userId._id).select('subscriberCount');
-        const subscriberCount = creator?.subscriberCount || 0;
+        const creator = await User.findById(video.userId._id).select('subscriberCount displaySubscriberCount');
+        const subscriberCount = creator?.displaySubscriberCount ?? creator?.subscriberCount ?? 0;
 
         // Check if current user is subscribed (if authenticated)
         let isSubscribed = false;

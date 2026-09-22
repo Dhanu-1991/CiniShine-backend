@@ -101,8 +101,8 @@ export const getWatchHistory = async (req, res) => {
                     ? getCfUrl(content.processedKey || content.originalKey)
                     : null),
                 duration: content.duration,
-                views: content.views || 0,
-                likeCount: content.likeCount || 0,
+                views: content.displayViews ?? content.views ?? 0,
+                likeCount: content.displayLikeCount ?? content.likeCount ?? 0,
                 status: 'completed',
                 watchTime: item.watchTime,
                 watchPercentage: item.watchPercentage,

@@ -101,11 +101,20 @@ export const getBookmarksByType = async (req, res) => {
         // Populate content details
         const contentIds = bookmarks.map(b => b.contentId);
         const contents = await Content.find({ _id: { $in: contentIds } })
-            .populate('userId', 'channelName channelHandle channelPicture profilePicture')
+            .populate('userId', 'channelName channelHandle channelPicture profilePicture subscriberCount displaySubscriberCount')
             .lean();
 
         const contentMap = {};
         contents.forEach(c => {
+            // Apply display stats fallback (public facing)
+            c.views = c.displayViews ?? c.views ?? 0;
+            c.likeCount = c.displayLikeCount ?? c.likeCount ?? 0;
+            c.fansGained = c.displayFansGained ?? c.fansGained ?? 0;
+            c.totalWatchTime = c.displayTotalWatchTime ?? c.totalWatchTime ?? 0;
+            if (c.userId) {
+                c.userId.subscriberCount = c.userId.displaySubscriberCount ?? c.userId.subscriberCount ?? 0;
+            }
+
             // Add CloudFront URLs
             if (c.thumbnailKey) c.thumbnailUrl = getCfUrl(c.thumbnailKey);
             if (c.imageKey) c.imageUrl = getCfUrl(c.imageKey);
