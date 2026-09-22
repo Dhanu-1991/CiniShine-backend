@@ -1725,6 +1725,7 @@ export const listAllContent = async (req, res) => {
                 imageUrls,
                 hlsMasterUrl: c.hlsMasterKey ? getCfHlsMasterUrl(c.hlsMasterKey) : null,
                 creator: {
+                    _id: uInfo._id,
                     userName: uInfo.userName,
                     channelName: uInfo.channelName,
                     channelHandle: uInfo.channelHandle,

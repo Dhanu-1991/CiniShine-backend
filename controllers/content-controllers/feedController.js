@@ -912,7 +912,7 @@ export const getCategoryTrending = async (req, res) => {
         }
 
         const trendingProjection =
-            'contentType title description duration thumbnailKey imageKey hlsMasterKey processedKey originalKey views likeCount likes createdAt channelName status tags category artist album audioCategory postContent userId';
+            'contentType title description duration thumbnailKey imageKey hlsMasterKey processedKey originalKey views displayViews likeCount displayLikeCount likes fansGained displayFansGained totalWatchTime displayTotalWatchTime createdAt channelName status tags category artist album audioCategory postContent userId';
 
         // Fetch both recent and popular candidates so trending algorithm can evaluate velocity and upload recency
         const [recentCandidates, popularCandidates] = await Promise.all([
