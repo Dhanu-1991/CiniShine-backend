@@ -327,6 +327,8 @@ ContentSchema.index({ userId: 1, contentType: 1 });
 ContentSchema.index({ tags: 1 });
 ContentSchema.index({ visibility: 1, status: 1 });
 ContentSchema.index({ contentType: 1, status: 1, views: -1 });
+ContentSchema.index({ contentType: 1, status: 1, displayViews: -1 });
+ContentSchema.index({ userId: 1, displayViews: -1 });
 ContentSchema.index({ contentType: 1, visibility: 1, createdAt: -1 });
 
 // Update timestamp on save + initialize display fields for new documents

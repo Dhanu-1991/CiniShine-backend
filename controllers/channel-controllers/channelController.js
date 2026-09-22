@@ -134,12 +134,21 @@ export const getChannelPage = async (req, res) => {
             return { ...item, hlsMasterUrl: null, videoUrl: null, audioUrl: null, ppvRequired: true };
         });
 
-        // Total views aggregation across creator's content
-        const viewsAgg = await Content.aggregate([
+        // Total stats aggregation across creator's content (using display fields with fallback)
+        const statsAgg = await Content.aggregate([
             { $match: { userId: user._id } },
-            { $group: { _id: null, totalViews: { $sum: { $ifNull: ['$displayViews', '$views'] } } } }
+            {
+                $group: {
+                    _id: null,
+                    totalViews: { $sum: { $ifNull: ['$displayViews', '$views'] } },
+                    totalLikes: { $sum: { $ifNull: ['$displayLikeCount', '$likeCount'] } },
+                    totalWatchTime: { $sum: { $ifNull: ['$displayTotalWatchTime', '$totalWatchTime'] } }
+                }
+            }
         ]);
-        const totalViews = viewsAgg[0]?.totalViews || 0;
+        const totalViews = statsAgg[0]?.totalViews || 0;
+        const totalLikes = statsAgg[0]?.totalLikes || 0;
+        const totalWatchTime = statsAgg[0]?.totalWatchTime || 0;
 
         // Channel picture URL
         const channelPictureUrl = user.channelPicture
@@ -164,9 +173,12 @@ export const getChannelPage = async (req, res) => {
                 bestKnownFor: user.bestKnownFor || '',
                 workExperience: user.workExperience || [],
                 totalViews,
+                totalLikes,
+                totalWatchTime,
                 channelPicture: channelPictureUrl || user.channelPicture,
                 profilePicture: profilePictureUrl || user.profilePicture,
                 subscriberCount,
+                displaySubscriberCount: subscriberCount,
                 isSubscribed,
                 contentCounts: counts,
                 createdAt: user.createdAt || (user._id?.getTimestamp ? user._id.getTimestamp() : null),
