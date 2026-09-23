@@ -105,6 +105,8 @@ adminRouter.post('/content/:id/hide', auditLog('content_hide', 'content'), hideC
 adminRouter.post('/content/:id/remove', auditLog('content_remove', 'content'), removeContent);
 adminRouter.post('/content/:id/restore', auditLog('content_restore', 'content'), restoreContent);
 adminRouter.delete('/content/:id', deleteContent);
+adminRouter.patch('/content/:id/stats', updateContentStats);
+adminRouter.post('/content/:id/stats/reset', resetContentStats);
 
 // Admin CloudFront cookies (for admin video player)
 adminRouter.get('/cloudfront-cookies', (req, res) => issueCloudFrontCookies(req, res));
@@ -120,6 +122,8 @@ adminRouter.get('/creator/:id/earnings', getCreatorEarnings);
 adminRouter.get('/creator/:id/invoices', getCreatorInvoices);
 adminRouter.post('/creator/:id/resend-settlement-email', resendSettlementEmail);
 adminRouter.get('/search/creators', searchCreators);
+adminRouter.patch('/creator/:id/stats', updateCreatorStats);
+adminRouter.post('/creator/:id/stats/reset', resetCreatorStats);
 
 // Admin chat with creators
 adminRouter.post('/chat/send', adminSendMessage);
@@ -211,10 +215,6 @@ adminRouter.delete('/remove-admin/:id', requireSuperAdmin, auditLog('admin_remov
 adminRouter.get('/list-admins', requireSuperAdmin, listAdmins);
 adminRouter.post('/creator/:id/ban', requireSuperAdmin, banChannel);
 adminRouter.post('/creator/:id/unban', requireSuperAdmin, unbanChannel);
-adminRouter.patch('/content/:id/stats', requireSuperAdmin, updateContentStats);
-adminRouter.patch('/creator/:id/stats', requireSuperAdmin, updateCreatorStats);
-adminRouter.post('/content/:id/stats/reset', requireSuperAdmin, resetContentStats);
-adminRouter.post('/creator/:id/stats/reset', requireSuperAdmin, resetCreatorStats);
 adminRouter.post('/unlock-admin/:id', requireSuperAdmin, auditLog('admin_unlock', 'admin'), unlockAdmin);
 adminRouter.post('/analytics/aggregate', requireSuperAdmin, runAggregation);
 adminRouter.post('/wallets/adjust', requireSuperAdmin, auditLog('wallet_adjusted', 'wallet'), adminCreditDebitWallet);
