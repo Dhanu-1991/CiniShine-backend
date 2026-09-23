@@ -92,7 +92,7 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
             description: video.description,
             duration: video.duration,
             thumbnailUrl: getCfUrl(video.thumbnailKey),
-            views: video.views,
+            views: video.displayViews ?? video.views ?? 0,
             createdAt: video.createdAt,
             user: video.userId,
             channelName: video.userId?.channelName || video.channelName || video.userId?.userName || 'Unknown Channel',
