@@ -100,6 +100,8 @@ export const findSimilarVideos = async (currentVideo, page = 1, limit = 10) => {
             channelHandle: video.userId?.channelHandle || null,
             tags: video.tags,
             category: video.category,
+            visibility: video.visibility,
+            price: video.price,
             similarityScore: video.similarityScore
         }));
 

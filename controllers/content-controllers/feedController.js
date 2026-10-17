@@ -420,6 +420,9 @@ export const getRecommendationsWithShorts = async (req, res) => {
                     });
                 } else {
                     existing._historyScore = Math.max(existing._historyScore || 0, item._historyScore || 0);
+                    // Backfill PPV fields if similarity source lacked them
+                    if (!existing.visibility && item.visibility) existing.visibility = item.visibility;
+                    if (existing.price === undefined && item.price !== undefined) existing.price = item.price;
                 }
             }
 

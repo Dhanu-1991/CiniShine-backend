@@ -925,6 +925,8 @@ export const unbanChannel = async (req, res) => {
         const removedContentIds = removedContents.map((content) => content._id);
         const moderationArchives = await ContentArchive.find({
             content_id: { $in: removedContentIds },
+            restored_at: null,           // Only active (non-restored) archives
+            permanently_deleted: false,   // Exclude already-deleted archives
         }).select('content_id').lean();
         const moderationArchiveIds = new Set(
             moderationArchives.map((archive) => archive.content_id.toString())

@@ -30,8 +30,17 @@ const payPerViewAccess = async (req, res, next) => {
         }
 
         // ── Block removed/banned content ──
+        // Allow active rental holders, content owners, and admins through
+        // so paid rentals remain accessible during temporary channel suspensions.
         if (content.status === 'removed') {
-            return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = content.userId ? (content.userId._id ? content.userId._id.toString() : content.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            const hasRental = requesterId ? await hasActiveRental(content._id, requesterId) : false;
+            if (!isOwner && !isAdmin && !hasRental) {
+                return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+            }
         }
 
         // ── Check private visibility ──

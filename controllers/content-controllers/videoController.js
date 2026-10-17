@@ -50,8 +50,17 @@ export const getVideo = async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
+        // ── Block removed/banned content ──
+        // Allow active rental holders, owners, and admins through
         if (video.status === 'removed') {
-            return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            const hasRental = requesterId ? await hasActiveRental(video._id, requesterId) : false;
+            if (!isOwner && !isAdmin && !hasRental) {
+                return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+            }
         }
 
         // â”€â”€ Check private visibility â”€â”€
@@ -848,8 +857,16 @@ export const getVideoStatus = async (req, res) => {
         }
 
         // ── Block removed/banned content ──
+        // Allow active rental holders, owners, and admins through
         if (video.status === 'removed') {
-            return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+            const requesterId = req.user?.id || req.admin?._id?.toString() || null;
+            const ownerId = video.userId ? (video.userId._id ? video.userId._id.toString() : video.userId.toString()) : null;
+            const isOwner = requesterId && ownerId && requesterId === ownerId;
+            const isAdmin = req.admin || req.user?.role === 'admin';
+            const hasRental = requesterId ? await hasActiveRental(video._id, requesterId) : false;
+            if (!isOwner && !isAdmin && !hasRental) {
+                return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+            }
         }
 
         // â”€â”€ Check private visibility â”€â”€
