@@ -456,6 +456,8 @@ export const getRecommendationsWithShorts = async (req, res) => {
                     channelHandle: item.channelHandle || null,
                     tags: item.tags,
                     category: item.category,
+                    visibility: item.visibility,
+                    price: item.price,
                 }));
 
             pagination = similar.pagination || { currentPage: page, hasNextPage: false };
@@ -500,6 +502,8 @@ export const getRecommendationsWithShorts = async (req, res) => {
                 channelHandle: video.userId?.channelHandle || null,
                 tags: video.tags,
                 category: video.category,
+                visibility: video.visibility,
+                price: video.price,
             }));
 
             pagination = {
