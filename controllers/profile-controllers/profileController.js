@@ -195,6 +195,8 @@ export const updateContent = async (req, res) => {
         }
 
         const { title, description, visibility, price, trailerContentId, spoilerContentId, spoilerText, commentsEnabled, tags, category, rentalDuration } = req.body;
+        const hasPrice = price !== undefined && price !== null && price !== '';
+        const normalizedPrice = hasPrice ? Number(price) : null;
 
         // Extract 24-char MongoDB ID from a full watchinit URL, string ID, or populated object
         const extractId = (val) => {
@@ -230,11 +232,10 @@ export const updateContent = async (req, res) => {
             update.visibility = visibility;
             // When switching to PPV, price is required
             if (visibility === 'pay_per_view') {
-                const numPrice = Number(price);
-                if (!numPrice || numPrice < 1) {
+                if (!Number.isFinite(normalizedPrice) || normalizedPrice < 1) {
                     return res.status(400).json({ error: 'Price is required and must be at least ₹1 for Pay Per View content' });
                 }
-                update.price = numPrice;
+                update.price = normalizedPrice;
                 if (rentalDuration !== undefined) {
                     if (!VALID_RENTAL_DAYS.includes(Number(rentalDuration))) {
                         return res.status(400).json({ error: 'Invalid rental duration. Allowed viewing windows are 2, 3, 5, 7, 14, or 28 days.' });
@@ -256,12 +257,11 @@ export const updateContent = async (req, res) => {
             }
         } else if (content.visibility === 'pay_per_view') {
             // Allow price update without changing visibility (already PPV)
-            if (price !== undefined) {
-                const numPrice = Number(price);
-                if (!numPrice || numPrice < 1) {
+            if (hasPrice) {
+                if (!Number.isFinite(normalizedPrice) || normalizedPrice < 1) {
                     return res.status(400).json({ error: 'Price must be at least ₹1' });
                 }
-                update.price = numPrice;
+                update.price = normalizedPrice;
             }
             // Allow updating rental duration when staying in PPV mode
             if (rentalDuration !== undefined) {
@@ -280,7 +280,10 @@ export const updateContent = async (req, res) => {
         if (tags !== undefined) update.tags = Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim());
         if (category !== undefined) update.category = category;
 
-        const updated = await Content.findByIdAndUpdate(id, update, { new: true });
+        const updated = await Content.findByIdAndUpdate(id, { $set: update }, {
+            new: true,
+            runValidators: true,
+        });
 
         res.json({
             success: true,

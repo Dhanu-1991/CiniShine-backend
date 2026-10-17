@@ -720,7 +720,7 @@ export const getCreatorStudio = async (req, res) => {
 
         let sortObj = { createdAt: -1 };
         let needsAggregation = false;
-        
+
         if (sort === 'watchTime') sortObj = { totalWatchTime: -1 };
         else if (sort === 'duration') sortObj = { duration: -1 };
         else if (sort === 'views') sortObj = { views: -1 };
@@ -732,7 +732,7 @@ export const getCreatorStudio = async (req, res) => {
         } else if (sort === 'ppvEarnings') needsAggregation = true;
 
         let contents, total;
-        
+
         if (needsAggregation) {
             const pipeline = [{ $match: filter }];
             if (sort === 'engagement') {
@@ -756,9 +756,9 @@ export const getCreatorStudio = async (req, res) => {
                 });
                 pipeline.push({ $sort: { ppvRevenueRaw: -1 } });
             }
-            
+
             pipeline.push({ $skip: skip }, { $limit: parseInt(limit) });
-            
+
             [contents, total] = await Promise.all([
                 Content.aggregate(pipeline),
                 Content.countDocuments(filter)
@@ -852,6 +852,7 @@ export const banChannel = async (req, res) => {
         for (const c of userContents) {
             c.status = 'removed';
             c.previousVisibility = c.visibility;
+            c.previousStatus = 'completed';
             await c.save();
         }
 
@@ -917,14 +918,12 @@ export const unbanChannel = async (req, res) => {
         // Restore content that was hidden by the ban
         const removedContents = await Content.find({ userId: id, status: 'removed' });
         for (const c of removedContents) {
-            c.status = 'completed';
-            if ((c.price && c.price > 0) || (c.ppvPrice && c.ppvPrice > 0) || (c.rentalPrice && c.rentalPrice > 0) || c.isPayPerView) {
-                c.visibility = 'pay_per_view';
-            } else if (c.previousVisibility) {
-                c.visibility = c.previousVisibility;
-            } else {
-                c.visibility = 'public';
-            }
+            c.status = c.previousStatus || 'completed';
+            c.visibility = c.previousVisibility || (
+                c.price && c.price > 0 ? 'pay_per_view' : 'public'
+            );
+            c.previousStatus = null;
+            c.previousVisibility = null;
             await c.save();
         }
 
@@ -1069,7 +1068,7 @@ export const updateContentStats = async (req, res) => {
             }
             updates.displayViews = parsed;
             content.displayViews = parsed;
-            
+
             // Auto-calculate displayTotalWatchTime based on displayViews and averageWatchTime
             const avgWatchTime = content.averageWatchTime || 0;
             const newTotalWatchTime = parsed * avgWatchTime;
@@ -1570,7 +1569,7 @@ export const listAllContent = async (req, res) => {
                 ]
             }).select('_id').lean();
             const matchingUserIds = matchingUsers.map(u => u._id);
-            
+
             filter.$or = [
                 { title: searchRegex },
                 { description: searchRegex },
@@ -1599,7 +1598,7 @@ export const listAllContent = async (req, res) => {
 
         if (needsAggregation) {
             const pipeline = [{ $match: filter }];
-            
+
             if (sort === 'interactions') {
                 pipeline.push({ $addFields: { interactions: { $add: [{ $ifNull: ['$likeCount', 0] }, { $ifNull: ['$shareCount', 0] }] } } });
                 pipeline.push({ $sort: { interactions: -1 } });
@@ -1632,14 +1631,14 @@ export const listAllContent = async (req, res) => {
                 });
                 pipeline.push({ $sort: { ppvRevenueRaw: -1 } });
             }
-            
+
             pipeline.push({ $skip: skip }, { $limit: parseInt(limit) });
 
             [contents, total] = await Promise.all([
                 Content.aggregate(pipeline),
                 Content.countDocuments(filter)
             ]);
-            
+
             // Re-populate creator if not already done in aggregation
             if (sort !== 'creatorFans') {
                 await Content.populate(contents, { path: 'userId', select: 'userName channelName channelHandle channelPicture subscriberCount' });
@@ -1700,7 +1699,7 @@ export const listAllContent = async (req, res) => {
             const mediaKey = c.processedKey || c.originalKey || c.hlsKey || c.mediaKey || c.videoKey || c.s3Key;
             const pInfo = purchaseMap[cId] || { count: 0, revenue: 0 };
             const uInfo = c.userId || {};
-            
+
             let videoUrl = null;
             let audioUrl = null;
             let imageUrls = [];
@@ -1758,7 +1757,7 @@ export const listAllContent = async (req, res) => {
                 }
             }
         ]);
-        
+
         const overallPpvRevAgg = await Content.aggregate([
             { $match: filter },
             {
@@ -1910,7 +1909,7 @@ export const getContentDetailedAnalytics = async (req, res) => {
 
         let ppvEarnings = null;
         let buyers = 0;
-        
+
         if (content.visibility === 'pay_per_view') {
             const pAgg = await Purchase.aggregate([
                 { $match: { contentId: new mongoose.Types.ObjectId(id), status: { $in: ['active', 'expired'] } } },

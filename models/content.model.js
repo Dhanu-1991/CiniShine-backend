@@ -50,6 +50,16 @@ const ContentSchema = new mongoose.Schema({
         enum: ['public', 'unlisted', 'private', 'pay_per_view'],
         default: 'public'
     },
+    // Moderation snapshots used to restore content after a channel ban.
+    previousVisibility: {
+        type: String,
+        enum: ['public', 'unlisted', 'private', 'pay_per_view'],
+        default: null,
+    },
+    previousStatus: {
+        type: String,
+        default: null,
+    },
     price: {
         type: Number,
         default: null,
@@ -195,10 +205,10 @@ const ContentSchema = new mongoose.Schema({
     },
 
     // ── Display/Artificial Fields (admin-editable, shown to public) ──
-    displayViews:               { type: Number, default: 0 },
-    displayLikeCount:           { type: Number, default: 0 },
-    displayFansGained:          { type: Number, default: 0 },
-    displayTotalWatchTime:      { type: Number, default: 0 },
+    displayViews: { type: Number, default: 0 },
+    displayLikeCount: { type: Number, default: 0 },
+    displayFansGained: { type: Number, default: 0 },
+    displayTotalWatchTime: { type: Number, default: 0 },
 
     // ============================================
     // VIDEO/SHORTS ANALYTICS
