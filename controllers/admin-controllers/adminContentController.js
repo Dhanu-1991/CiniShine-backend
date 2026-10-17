@@ -915,9 +915,25 @@ export const unbanChannel = async (req, res) => {
         user.channelBanReason = null;
         await user.save();
 
-        // Restore content that was hidden by the ban
-        const removedContents = await Content.find({ userId: id, status: 'removed' });
+        // Restore content hidden by this channel-ban operation. Older bans may
+        // not have a snapshot, so use the moderation archive to distinguish
+        // legacy channel-ban removals from report/admin removals.
+        const removedContents = await Content.find({
+            userId: id,
+            status: 'removed',
+        });
+        const removedContentIds = removedContents.map((content) => content._id);
+        const moderationArchives = await ContentArchive.find({
+            content_id: { $in: removedContentIds },
+        }).select('content_id').lean();
+        const moderationArchiveIds = new Set(
+            moderationArchives.map((archive) => archive.content_id.toString())
+        );
+
         for (const c of removedContents) {
+            const hasModerationArchive = moderationArchiveIds.has(c._id.toString());
+            if (hasModerationArchive) continue;
+
             c.status = c.previousStatus || 'completed';
             c.visibility = c.previousVisibility || (
                 c.price && c.price > 0 ? 'pay_per_view' : 'public'
