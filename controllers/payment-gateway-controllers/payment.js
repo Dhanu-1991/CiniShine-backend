@@ -6,6 +6,7 @@ import { Cashfree, CFEnvironment } from "cashfree-pg";
 import generateOrderId from "./get.order.id.js";
 import User from "../../models/user.model.js";
 import PaymentDetails from "../../models/payment.details.model.js";
+import Content from "../../models/content.model.js";
 
 // ✅ Correct instantiation for SDK v5.0.8
 const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production' ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX;
@@ -18,6 +19,20 @@ const payment = async (req, res) => {
     
     if (!contentId) {
       return res.status(400).json({ error: "contentId is required" });
+    }
+
+    // ── Validate content availability before initiating payment ──
+    if (contentId !== "recharge") {
+      const content = await Content.findById(contentId).select('price visibility status').lean();
+      if (!content) {
+        return res.status(404).json({ error: 'Content not found' });
+      }
+      if (content.status === 'removed') {
+        return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+      }
+      if (content.visibility !== 'pay_per_view') {
+        return res.status(400).json({ error: 'This content is not available for purchase' });
+      }
     }
 
     const user = await User.findById(req.user.id);

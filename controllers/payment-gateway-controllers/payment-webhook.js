@@ -7,27 +7,14 @@ dotenv.config();
 
 // Webhook handler for Cashfree PG events
 
-// Helper: flatten nested objects for pre-2025-01-01 versions
-const flattenObject = (obj, parentKey = "", result = {}) => {
-  for (const key in obj) {
-    const propName = parentKey ? `${parentKey}.${key}` : key;
-    if (obj[key] !== null && typeof obj[key] === "object") {
-      flattenObject(obj[key], propName, result);
-    } else {
-      result[propName] = obj[key];
-    }
-  }
-  return result;
-};
-
 export const handleCashfreeWebhook = async (req, res) => {
   try {
     const secret = process.env.CASHFREE_WEBHOOK_SECRET || process.env.CF_CLIENT_SECRET;
     const receivedSignature =
       req.headers["x-webhook-signature"] || req.headers["x-cf-signature"];
-    const version = req.headers["x-webhook-version"] || "";
+    const timestamp = req.headers["x-webhook-timestamp"];
 
-    if (!receivedSignature || !secret) {
+    if (!receivedSignature || !timestamp || !secret) {
       console.warn("Webhook missing signature or secret");
       // Cashfree's "Test Endpoint" button does not send a signature.
       // We return 200 so the dashboard test passes, but we do not process the payload.
@@ -37,18 +24,8 @@ export const handleCashfreeWebhook = async (req, res) => {
     // Raw payload buffer → string (exact bytes)
     const rawBodyString = req.rawBody ? req.rawBody.toString("utf8") : JSON.stringify(req.body);
 
-    let dataToSign;
-    if (version === "2025-01-01") {
-      dataToSign = rawBodyString;
-    } else {
-      const payload = JSON.parse(rawBodyString);
-      const flat = flattenObject(payload);
-      const sortedKeys = Object.keys(flat).sort();
-      dataToSign = sortedKeys.reduce((acc, key) => {
-        const v = flat[key];
-        return v != null ? acc + String(v) : acc;
-      }, "");
-    }
+    // Cashfree signs the timestamp followed by the exact raw request body.
+    const dataToSign = `${timestamp}${rawBodyString}`;
 
     const generatedSignature = crypto
       .createHmac("sha256", secret)
@@ -59,27 +36,27 @@ export const handleCashfreeWebhook = async (req, res) => {
       console.error("Signature mismatch", {
         generated: generatedSignature,
         received: receivedSignature,
-        version,
+        timestamp,
       });
       return res.status(400).send("Invalid signature");
     }
 
-    console.log("✅ Webhook verified (v" + version + ")");
+    console.log("✅ Cashfree webhook verified");
 
     const payload = JSON.parse(rawBodyString);
-    
+
     if (payload.type === "PAYMENT_SUCCESS_WEBHOOK") {
       const { order, payment } = payload.data || {};
       const orderId = order?.order_id;
       const paymentId = payment?.cf_payment_id || payment?.payment_id;
       const amount = payment?.payment_amount;
       const currency = payment?.payment_currency || "INR";
-      
+
       console.log(`Processing success for Order: ${orderId}`);
-      
+
       const contentId = order?.order_tags?.contentId || order?.order_meta?.contentId;
       const userId = order?.order_tags?.userId || order?.order_meta?.userId;
-      
+
       const type = order?.order_tags?.type || "ppv_purchase";
       const existingPayment = await PaymentDetails.findOne({ orderId });
       if (!existingPayment || existingPayment.status === "PENDING") {
@@ -112,10 +89,10 @@ export const handleCashfreeWebhook = async (req, res) => {
       const paymentId = payment?.cf_payment_id || payment?.payment_id;
       const amount = payment?.payment_amount;
       const currency = payment?.payment_currency || "INR";
-      
+
       const contentId = order?.order_tags?.contentId || order?.order_meta?.contentId;
       const userId = order?.order_tags?.userId || order?.order_meta?.userId;
-      
+
       const existingPayment = await PaymentDetails.findOne({ orderId });
       if (!existingPayment) {
         await PaymentDetails.create({

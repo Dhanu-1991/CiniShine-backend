@@ -11,14 +11,14 @@ const paymentVerify = async (req, res) => {
   console.log(`OrderID: ${orderId}`);
   try {
     let response = await PaymentDetails.findOne({ orderId });
-    
+
     // Fallback: If not found in DB, or if still PENDING (webhook delayed), check Cashfree directly
     if ((!response || response.status === "PENDING") && orderId) {
       console.log(`[CASHFREE_VERIFY] Order ${orderId} is missing or PENDING in DB. Querying Cashfree API directly...`);
-      const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production' 
-        ? 'https://api.cashfree.com/pg/orders' 
+      const cfEnv = process.env.CASHFREE_MODE?.trim() === 'production'
+        ? 'https://api.cashfree.com/pg/orders'
         : 'https://sandbox.cashfree.com/pg/orders';
-        
+
       try {
         const cfResponse = await axios.get(`${cfEnv}/${orderId}`, {
           headers: {
@@ -27,16 +27,16 @@ const paymentVerify = async (req, res) => {
             'x-api-version': '2023-08-01'
           }
         });
-        
+
         const cfOrder = cfResponse.data;
         if (cfOrder.order_status === "PAID") {
           console.log(`[CASHFREE_VERIFY] Cashfree confirms Order ${orderId} is PAID. Fulfilling locally...`);
-          
+
           const amount = cfOrder.order_amount;
           const currency = cfOrder.order_currency;
           const userId = cfOrder.order_tags?.userId || cfOrder.customer_details?.customer_id;
           const type = cfOrder.order_tags?.type || "ppv_purchase";
-          
+
           if (type === "wallet_recharge" && userId) {
             response = await fulfillWalletRecharge({
               orderId,
@@ -66,9 +66,13 @@ const paymentVerify = async (req, res) => {
         }
       } catch (cfErr) {
         console.error("❌ [CASHFREE_VERIFY_API_ERROR]", cfErr.response?.data || cfErr.message);
+        return res.status(502).json({
+          error: "Unable to verify the payment with Cashfree. Please try again shortly.",
+          details: cfErr.response?.data?.message || cfErr.message,
+        });
       }
     }
-    
+
     console.log(`[CASHFREE_VERIFY_RESULT] Order ${orderId} DB Status: ${response?.status || 'UNKNOWN'}`);
 
     let paymentDetailsObj = response ? (response.toObject ? response.toObject() : { ...response }) : null;

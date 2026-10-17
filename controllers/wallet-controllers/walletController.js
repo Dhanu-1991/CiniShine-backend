@@ -843,6 +843,9 @@ export const purchasePpvWithWallet = async (req, res) => {
         // Fetch content and validate PPV
         const content = await Content.findById(contentId);
         if (!content) return res.status(404).json({ error: 'Content not found' });
+        if (content.status === 'removed') {
+            return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+        }
         if (content.visibility !== 'pay_per_view') {
             return res.status(400).json({ error: 'This content is not Pay Per View' });
         }

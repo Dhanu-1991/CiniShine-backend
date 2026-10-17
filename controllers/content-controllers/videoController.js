@@ -847,6 +847,11 @@ export const getVideoStatus = async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
+        // ── Block removed/banned content ──
+        if (video.status === 'removed') {
+            return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+        }
+
         // â”€â”€ Check private visibility â”€â”€
         if (video.visibility === 'private') {
             const requesterId = req.user?.id || req.admin?._id?.toString() || null;

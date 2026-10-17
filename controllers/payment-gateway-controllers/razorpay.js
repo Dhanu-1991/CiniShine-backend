@@ -5,6 +5,7 @@ import Razorpay from "razorpay";
 import generateOrderId from "./get.order.id.js";
 import User from "../../models/user.model.js";
 import PaymentDetails from "../../models/payment.details.model.js";
+import Content from "../../models/content.model.js";
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID || "default_key_id",
@@ -19,6 +20,20 @@ const payment = async (req, res) => {
     // If we require it, make sure frontend passes it.
     if (!contentId) {
       return res.status(400).json({ error: "contentId is required" });
+    }
+
+    // ── Validate content availability before initiating payment ──
+    if (contentId !== "recharge") {
+      const content = await Content.findById(contentId).select('price visibility status').lean();
+      if (!content) {
+        return res.status(404).json({ error: 'Content not found' });
+      }
+      if (content.status === 'removed') {
+        return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+      }
+      if (content.visibility !== 'pay_per_view') {
+        return res.status(400).json({ error: 'This content is not available for purchase' });
+      }
     }
 
     const user = await User.findById(req.user.id);

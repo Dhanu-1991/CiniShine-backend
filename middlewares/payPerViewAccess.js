@@ -29,6 +29,11 @@ const payPerViewAccess = async (req, res, next) => {
             return res.status(404).json({ error: 'Content not found' });
         }
 
+        // ── Block removed/banned content ──
+        if (content.status === 'removed') {
+            return res.status(410).json({ error: 'This content has been removed and is no longer available' });
+        }
+
         // ── Check private visibility ──
         // Allow active rental holders through even when creator sets content to private.
         // Admin removal (status: 'removed') is checked separately and still blocks access.
